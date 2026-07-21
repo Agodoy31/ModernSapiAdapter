@@ -30,11 +30,12 @@ public static class ProviderAbiConstants
     public const uint ActionSpeak    = 0;
     public const uint ActionSpellOut = 1;
     public const uint ActionPronounce = 2;
+    public const uint ActionBookmark = 3;
 
     /// <summary>
     /// The current ABI contract version. Must match PROVIDER_ABI_VERSION in provider_abi.h.
     /// </summary>
-    public const uint AbiVersion = 1;
+    public const uint AbiVersion = 2;
 }
 
 #endregion
@@ -71,7 +72,7 @@ public struct ProviderSpeechEvent
     /// <summary>Event classification (see <see cref="ProviderAbiConstants"/>).</summary>
     public uint EventType;
 
-    /// <summary>Character index into the TextBuffer.</summary>
+    /// <summary>Character index (Original SAPI ulTextSrcOffset).</summary>
     public uint TextOffset;
 
     /// <summary>Length of the active text span in char16 units.</summary>
@@ -85,8 +86,37 @@ public struct ProviderSpeechEvent
 }
 
 /// <summary>
+/// Represents a single speech segment, bookmark, or synthesis command.
+/// Mirrors <c>ProviderSpeechFragment</c> in provider_abi.h. Size: 32 bytes.
+/// </summary>
+[StructLayout(LayoutKind.Sequential, Pack = 8)]
+public unsafe struct ProviderSpeechFragment
+{
+    /// <summary>Fragment text (or Bookmark name).</summary>
+    public char* Text;
+
+    /// <summary>Length of the text in char16 units.</summary>
+    public uint TextLength;
+
+    /// <summary>The original SAPI ulTextSrcOffset for this fragment.</summary>
+    public uint OriginalOffset;
+
+    /// <summary>Speech mode (see <see cref="ProviderAbiConstants"/>).</summary>
+    public uint Action;
+
+    /// <summary>Absolute volume level (0.0 to 100.0).</summary>
+    public float Volume;
+
+    /// <summary>Rate adjustment.</summary>
+    public float Rate;
+
+    /// <summary>Pitch offset.</summary>
+    public float Pitch;
+}
+
+/// <summary>
 /// Consolidated parameter block passed to ProviderSpeak.
-/// Mirrors <c>ProviderSpeakParams</c> in provider_abi.h. Size: 72 bytes.
+/// Mirrors <c>ProviderSpeakParams</c> in provider_abi.h. Size: 56 bytes.
 /// </summary>
 /// <remarks>
 /// Memory contract: All pointer targets are owned by the C++ wrapper and are
@@ -95,8 +125,8 @@ public struct ProviderSpeechEvent
 [StructLayout(LayoutKind.Sequential, Pack = 8)]
 public unsafe struct ProviderSpeakParams
 {
-    /// <summary>Flattened UTF-16 text string.</summary>
-    public char* TextBuffer;
+    /// <summary>Array of speech fragments.</summary>
+    public ProviderSpeechFragment* Fragments;
 
     /// <summary>Voice identifier string.</summary>
     public char* VoiceModel;
@@ -116,20 +146,8 @@ public unsafe struct ProviderSpeakParams
     /// <summary>ABI struct version (must equal <see cref="ProviderAbiConstants.AbiVersion"/>).</summary>
     public uint ContractVersion;
 
-    /// <summary>TextBuffer length in char16 units.</summary>
-    public uint TextLength;
-
-    /// <summary>Speech mode (see <see cref="ProviderAbiConstants"/>).</summary>
-    public uint ActionType;
-
-    /// <summary>Rate adjustment (-10.0 to +10.0).</summary>
-    public float SpeechRate;
-
-    /// <summary>Volume level (0.0 to 100.0).</summary>
-    public float Volume;
-
-    /// <summary>Pitch offset.</summary>
-    public float Pitch;
+    /// <summary>Number of fragments in array.</summary>
+    public uint FragmentCount;
 }
 
 #endregion

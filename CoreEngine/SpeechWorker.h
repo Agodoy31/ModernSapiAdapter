@@ -5,6 +5,10 @@
 
 #pragma once
 
+#include <vector>
+#include <string>
+#include "provider_abi.h"
+
 class CSapiEngine;
 class ProviderWrapper;
 
@@ -21,7 +25,7 @@ public:
     SpeechWorker(const SpeechWorker&) = delete;
     SpeechWorker& operator=(const SpeechWorker&) = delete;
 
-    void Start(const std::u16string& text);
+    void Start(std::vector<char16_t> backingBuffer, std::vector<ProviderSpeechFragment> fragments);
     void Stop();
 
     /**
@@ -37,7 +41,7 @@ public:
     static void __stdcall MetaCallback(const ProviderSpeechEvent* pEvent, void* ctx);
 
 private:
-    void ThreadProc(std::u16string text);
+    void ThreadProc(std::vector<char16_t> backingBuffer, std::vector<ProviderSpeechFragment> fragments);
 
     CSapiEngine* m_pEngine;
     ProviderWrapper* m_pWrapper;

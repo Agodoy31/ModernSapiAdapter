@@ -11,7 +11,7 @@
 
 ## Architecture & Responsibilities
 1. **COM Registration & Routing:** Exposes SAPI 5 COM engine CLSID and implements SAPI 5 stream/token interfaces.
-2. **Text Flattening:** Traverses SAPI 5 `SPVTEXTFRAG` linked lists into flat UTF-16 wide-character buffers (`char16_t*`).
+2. **Fragment Array ABI:** Traverses SAPI 5 `SPVTEXTFRAG` linked lists and converts them into an array of `ProviderSpeechFragment` structures, preserving SAPI metadata like original offsets and bookmark types.
 3. **Dynamic Provider Loading:** Dynamically loads provider DLLs via `LoadLibraryW` / `GetProcAddress` and communicates via the unmanaged ABI contract defined in `$(SolutionDir)include/provider_abi.h`.
 4. **Low-Latency Polling & Event Dispatch:** Monitors `ISpTTSEngineSite` actions for immediate `SPVES_ABORT` signals (<20ms cutoff) and maps provider tracking metadata into SAPI `SPEVENT` structures.
 5. **Standard COM Exports:** Strictly utilizes `CoreEngine.def` alongside `STDAPI` endpoints (`DllGetClassObject`, `DllRegisterServer`, etc.) to properly expose the COM factory to `regsvr32` and `CoCreateInstance`.
@@ -23,7 +23,7 @@
 ## ABI Design & Implementation Plan
 Based on an architectural deep dive, the `CoreEngine` and `provider_abi.h` are designed with the following principles to balance SAPI 5 compatibility with provider simplicity:
 
-1. **Text Format & SSML Translation:** `CoreEngine` is responsible for parsing legacy SAPI XML and translating it into standard SSML (Speech Synthesis Markup Language) before passing it to the Provider. This ensures providers only need to parse standard SSML and can natively handle bookmarks and prosody.
+1. **Fragment Format & State Extraction:** `CoreEngine` is strictly language-agnostic and does not mutate the text buffer. It passes an array of `ProviderSpeechFragment` structures directly to the Provider and explicitly extracts scalar playback state variables (Volume, Rate, Pitch) from SAPI's `SPVSTATE` struct to pass via the ABI. Providers are responsible for translating text into SSML if required by their respective backend engines, using the precise `OriginalOffset` provided to accurately fire SAPI events.
 2. **Audio/Meta Synchronization:** Providers must fire SAPI tracking events (`PROVIDER_EVENT_WORD_BOUNDARY`, etc.) before or exactly when the corresponding audio chunk is submitted to the CoreEngine.
 3. **Format Negotiation:** The ABI defines `GetProviderAudioFormat` so providers can expose their native PCM format (Sample Rate, Bit Depth, Channels) to the `CoreEngine`, which relays it to SAPI.
 4. **Voice Discovery:** The ABI defines a callback-based `EnumerateVoices` function, allowing an external installer or the CoreEngine to discover voices and write the appropriate SAPI 5 Object Tokens.
@@ -40,7 +40,7 @@ To avoid a monolithic nightmare and ensure safe thread lifecycles when SAPI dest
 
 ### 1. `CSapiEngine` (COM Layer)
 - **Role**: Implements the SAPI 5 COM interfaces (`ISpTTSEngine`, `ISpObjectWithToken`).
-- **Responsibilities**: Handles SAPI registry token parsing, receives the `Speak()` command, and instantiates the `SpeechWorker`.
+- **Responsibilities**: Handles SAPI registry token parsing, receives the `Speak()` command, instantiates the `SpeechWorker`, and encapsulates `m_siteMutex` to guarantee thread-safe marshaling for `ISpTTSEngineSite` (`Write`, `AddEvents`, `GetActions`) when providers invoke callbacks on concurrent threads.
 - **Files**: `SapiEngine.h`, `SapiEngine.cpp`
 
 ### 2. `ProviderWrapper` (ABI Layer)

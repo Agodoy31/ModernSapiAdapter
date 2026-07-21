@@ -13,12 +13,12 @@ SpeechWorker::~SpeechWorker()
     WaitUntilFinished();
 }
 
-void SpeechWorker::Start(const std::u16string& text)
+void SpeechWorker::Start(std::vector<char16_t> backingBuffer, std::vector<ProviderSpeechFragment> fragments)
 {
     WaitUntilFinished(); // Ensure previous is joined
     m_abortFlag = 0;
     m_isRunning = true;
-    m_thread = std::thread(&SpeechWorker::ThreadProc, this, text);
+    m_thread = std::thread(&SpeechWorker::ThreadProc, this, std::move(backingBuffer), std::move(fragments));
 }
 
 void SpeechWorker::Stop()
@@ -34,16 +34,12 @@ void SpeechWorker::WaitUntilFinished()
     }
 }
 
-void SpeechWorker::ThreadProc(std::u16string text)
+void SpeechWorker::ThreadProc(std::vector<char16_t> backingBuffer, std::vector<ProviderSpeechFragment> fragments)
 {
     ProviderSpeakParams params{};
     params.ContractVersion = PROVIDER_ABI_VERSION;
-    params.TextBuffer = text.c_str();
-    params.TextLength = static_cast<uint32_t>(text.length());
-    params.ActionType = PROVIDER_ACTION_SPEAK;
-    params.SpeechRate = 0.0f;
-    params.Volume = 100.0f;
-    params.Pitch = 0.0f;
+    params.Fragments = fragments.data();
+    params.FragmentCount = static_cast<uint32_t>(fragments.size());
     params.pAbortFlag = &m_abortFlag;
     params.UserContext = this;
     params.AudioCallback = &SpeechWorker::AudioCallback;

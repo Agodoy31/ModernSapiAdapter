@@ -165,14 +165,14 @@
     <ClInclude Include="ProviderWrapper.h" />
     <ClInclude Include="SapiEngine.h" />
     <ClInclude Include="SpeechWorker.h" />
-    <ClInclude Include="XmlToSsmlMapper.h" />
+
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="ProviderWrapper.cpp" />
     <ClCompile Include="SapiEngine.cpp" />
     <ClCompile Include="SpeechWorker.cpp" />
-    <ClCompile Include="XmlToSsmlMapper.cpp" />
+
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Create</PrecompiledHeader>

@@ -15,44 +15,19 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-
     <ClInclude Include="pch.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="$(SolutionDir)include\provider_abi.h">
+    <ClInclude Include="SapiSsmlParser.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="ProviderWrapper.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="SapiEngine.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="SpeechWorker.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="dllmain.cpp">
+    <ClCompile Include="SapiSsmlParser.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="ProviderWrapper.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="SapiEngine.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="SpeechWorker.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-
     <ClCompile Include="pch.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="CoreEngine.def" />
-    <None Include="packages.config" />
   </ItemGroup>
 </Project>

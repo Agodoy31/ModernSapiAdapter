@@ -18,8 +18,9 @@
 #define PROVIDER_ACTION_SPEAK             0
 #define PROVIDER_ACTION_SPELL_OUT         1
 #define PROVIDER_ACTION_PRONOUNCE         2
+#define PROVIDER_ACTION_BOOKMARK          3
 
-#define PROVIDER_ABI_VERSION              1
+#define PROVIDER_ABI_VERSION              2
 
 
 
@@ -42,7 +43,7 @@ struct ProviderAudioFormat {
  */
 struct ProviderSpeechEvent {
     uint32_t EventType;        ///< Event classification (PROVIDER_EVENT_*)
-    uint32_t TextOffset;       ///< Character index into ProviderSpeakParams::TextBuffer
+    uint32_t TextOffset;       ///< Character index (Original SAPI ulTextSrcOffset)
     uint32_t TextLength;       ///< Length of the active text span in char16_t units
     uint32_t Reserved;         ///< Explicit alignment padding (must be 0)
     uint64_t AudioByteOffset;  ///< Accumulated PCM byte position linked to this event
@@ -73,28 +74,36 @@ typedef void (__stdcall* PFN_METADATA_CALLBACK)(
     void*                      ctx
 );
 
-
+/**
+ * @brief Represents a single speech segment, bookmark, or synthesis command.
+ * @note Struct size is exactly 32 bytes with zero implicit padding gaps.
+ */
+struct ProviderSpeechFragment {
+    const char16_t* Text;            ///< Fragment text (or Bookmark name)
+    uint32_t        TextLength;      ///< Length of the text in char16_t units
+    uint32_t        OriginalOffset;  ///< The original SAPI ulTextSrcOffset for this fragment
+    uint32_t        Action;          ///< Speech mode (PROVIDER_ACTION_*)
+    float           Volume;          ///< Absolute volume level (0.0 to 100.0)
+    float           Rate;            ///< Rate adjustment
+    float           Pitch;           ///< Pitch offset
+};
 
 /**
  * @brief Consolidated parameter block passed to ProviderSpeak.
  * @note Memory contract: All pointer targets are owned by the C++ wrapper and are
  *       guaranteed valid only for the synchronous duration of the ProviderSpeak call.
- *       Struct size is exactly 72 bytes (48 bytes pointer block + 24 bytes scalar block).
+ *       Struct size is exactly 56 bytes.
  */
 struct ProviderSpeakParams {
-    const char16_t*          TextBuffer;     ///< Flattened UTF-16 text string
-    const char16_t*          VoiceModel;     ///< Voice identifier string
-    const volatile uint32_t* pAbortFlag;     ///< Non-zero signals immediate termination
-    void*                    UserContext;    ///< Opaque handle forwarded into callbacks
-    PFN_AUDIO_CALLBACK       AudioCallback;  ///< PCM audio output handler
-    PFN_METADATA_CALLBACK    MetaCallback;   ///< Speech event output handler
+    const ProviderSpeechFragment* Fragments;      ///< Array of speech fragments
+    const char16_t*               VoiceModel;     ///< Voice identifier string
+    const volatile uint32_t*      pAbortFlag;     ///< Non-zero signals immediate termination
+    void*                         UserContext;    ///< Opaque handle forwarded into callbacks
+    PFN_AUDIO_CALLBACK            AudioCallback;  ///< PCM audio output handler
+    PFN_METADATA_CALLBACK         MetaCallback;   ///< Speech event output handler
 
-    uint32_t ContractVersion;                ///< ABI struct version (PROVIDER_ABI_VERSION)
-    uint32_t TextLength;                     ///< TextBuffer length in char16_t units
-    uint32_t ActionType;                     ///< Speech mode (PROVIDER_ACTION_*)
-    float    SpeechRate;                     ///< Rate adjustment (-10.0 to +10.0)
-    float    Volume;                         ///< Volume level (0.0 to 100.0)
-    float    Pitch;                          ///< Pitch offset
+    uint32_t ContractVersion;                     ///< ABI struct version (PROVIDER_ABI_VERSION)
+    uint32_t FragmentCount;                       ///< Number of fragments in array
 };
 
 #pragma pack(pop)

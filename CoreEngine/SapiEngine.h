@@ -38,6 +38,7 @@ public:
 private:
     winrt::com_ptr<ISpObjectToken> m_cpToken;
     winrt::com_ptr<ISpTTSEngineSite> m_cpSite;
+    std::mutex m_siteMutex;
 
     std::unique_ptr<ProviderWrapper> m_pWrapper;
     std::unique_ptr<SpeechWorker> m_pWorker;

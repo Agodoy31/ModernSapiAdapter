@@ -34,7 +34,7 @@ The solution strictly separates COM plumbing, provider synthesis engines, and re
 1. **`CoreEngine` (`CoreEngine.dll`)**
    - Written in ISO C++20.
    - Implements mandatory SAPI 5 COM interfaces (`ISpTTSEngine`, `ISpObjectWithToken`).
-   - Flattens SAPI `SPVTEXTFRAG` text chains into clean UTF-16 wide-character buffers.
+   - Maps SAPI `SPVTEXTFRAG` text chains into clean UTF-16 fragment arrays (`ProviderSpeechFragment`).
    - Manages low-latency cancellation polling (`SPVES_ABORT` cutoffs in <20ms).
    - Routes PCM audio bytes and speech metadata events (`SPEVENT`) back to SAPI 5.
 
@@ -114,7 +114,7 @@ Lives alongside `<ProviderName>_voices.json` inside the provider's subfolder. St
 - **Operating System:** Windows 11 exclusively (64-bit).
 - **Architectures:** `x64`, `ARM64` (32-bit `Win32` targets are unsupported).
 - **Standards:** ISO C++20 for native components; .NET 8+ for managed/Native AOT components.
-- **Build Output:** Centralized under `bin/$(Platform)/$(Configuration)/` and `build/$(MSBuildProjectName)/`.
+- **Build Output:** Centralized per-project under `bin/$(MSBuildProjectName)/$(Platform)/$(Configuration)/` and `build/$(MSBuildProjectName)/$(Platform)/$(Configuration)/`.
 
 ---
 

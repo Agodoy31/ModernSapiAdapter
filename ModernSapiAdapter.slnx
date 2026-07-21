@@ -15,4 +15,12 @@
     <BuildType Solution="Release|ARM64" Project="Release" Build="false" />
   </Project>
   <Project Path="SapiManager/SapiManager.csproj" />
+  <Project Path="SapiSsmlParser.Cpp/SapiSsmlParser.Cpp.vcxproj" Id="74a51726-222d-48a4-aeee-e94207526105">
+    <Platform Project="x64" />
+  </Project>
+  <Project Path="SapiSsmlParser.Cpp.Tests/SapiSsmlParser.Cpp.Tests.vcxproj" Id="d8622b2d-b5f3-40c9-a9c6-2e4b0501f048">
+    <Platform Project="x64" />
+    <BuildType Solution="Release|x64" Project="Release" Build="false" />
+    <BuildType Solution="Release|ARM64" Project="Release" Build="false" />
+  </Project>
 </Solution>

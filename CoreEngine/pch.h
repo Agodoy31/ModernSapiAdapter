@@ -35,6 +35,7 @@
 #include <string>
 #include <memory>
 #include <thread>
+#include <mutex>
 #include <atomic>
 #include <stdexcept>
 #include <vector>

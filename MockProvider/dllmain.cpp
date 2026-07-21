@@ -37,15 +37,32 @@ extern "C" {
         if (!params) return false;
 
         // Mock synthesis loop
-        // We will push 5 blocks of fake audio data
+        // We will push a fake audio block per fragment
         uint8_t fakeAudio[1024] = { 0 };
 
-        for (int i = 0; i < 5; ++i)
+        for (uint32_t i = 0; i < params->FragmentCount; ++i)
         {
+            const ProviderSpeechFragment& frag = params->Fragments[i];
+
             // Check cancellation flag
             if (params->pAbortFlag && *params->pAbortFlag)
             {
                 return false;
+            }
+
+            if (frag.Action == PROVIDER_ACTION_BOOKMARK)
+            {
+                // Push a fake metadata event for bookmark
+                if (params->MetaCallback)
+                {
+                    ProviderSpeechEvent ev = {};
+                    ev.EventType = PROVIDER_EVENT_BOOKMARK;
+                    ev.TextOffset = frag.OriginalOffset;
+                    ev.TextLength = frag.TextLength;
+                    ev.AudioByteOffset = i * sizeof(fakeAudio);
+                    params->MetaCallback(&ev, params->UserContext);
+                }
+                continue;
             }
 
             // Push fake audio via callback
@@ -55,14 +72,14 @@ extern "C" {
                 if (!continueSynth) return false;
             }
 
-            // Push a fake metadata event
+            // Push a fake metadata event for speech
             if (params->MetaCallback)
             {
                 ProviderSpeechEvent ev = {};
                 ev.EventType = PROVIDER_EVENT_WORD_BOUNDARY;
-                ev.TextOffset = 0;
-                ev.TextLength = 5;
-                ev.AudioByteOffset = i * sizeof(fakeAudio);
+                ev.TextOffset = frag.OriginalOffset;
+                ev.TextLength = frag.TextLength;
+                ev.AudioByteOffset = (i + 1) * sizeof(fakeAudio); // After this audio block
                 params->MetaCallback(&ev, params->UserContext);
             }
 
