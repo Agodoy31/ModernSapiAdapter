@@ -1,0 +1,19 @@
+# Build Output & Intermediate Directories
+bin/
+obj/
+build/
+artifacts/
+
+# Visual Studio / IDE Files & Caches
+.vs/
+*.user
+*.suo
+*.userosv
+*.tmp
+*.bak
+ipch/
+*.VC.db
+*.opendb
+
+# NuGet Packages
+packages/
