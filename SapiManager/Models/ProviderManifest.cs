@@ -28,6 +28,15 @@ public class ProviderManifest
 
     [JsonIgnore]
     public string ConfigFilePath { get; set; } = string.Empty;
+
+    [JsonIgnore]
+    public string DllFilePath { get; set; } = string.Empty;
+
+    [JsonIgnore]
+    public bool IsManifestMissing { get; set; }
+
+    [JsonIgnore]
+    public bool IsManifestInvalid { get; set; }
 }
 
 public class ConfigSchemaItem

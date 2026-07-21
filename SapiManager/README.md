@@ -41,6 +41,12 @@ A modern C# WPF application targeting **.NET 8** that serves as the central admi
    - All controls, list items, tabs, and dynamic schema inputs specify explicit `AutomationProperties.Name` and `AutomationProperties.HelpText`.
    - Initial focus management in dialogs ensures screen readers immediately speak window context upon launch.
 
+8. **SAPI 5 Voice Tester Workspace (`MainWindow.xaml` & `System.Speech.Synthesis`)**
+   - Enables real-time testing of any SAPI 5 voice registered in Windows or belonging to the selected provider.
+   - Provides interactive Speech Rate, Volume, and Pitch sliders.
+   - Supports plain text and W3C/SAPI SSML XML synthesis mode with sample text presets.
+   - Captures and displays real-time event telemetry (`SpeakStarted`, `SpeakProgress`, `BookmarkReached`, `SpeakCompleted`) with character offset tracking and bookmark logging.
+
 ---
 
 ## Build & Development Guidelines
@@ -57,7 +63,7 @@ To compile `SapiManager` independently via the command line or MSBuild:
 dotnet build SapiManager/SapiManager.csproj -p:Platform=x64 -c Release
 ```
 
-Output binaries are centrally generated under `bin/x64/Release/` as configured by `Directory.Build.props`.
+Output binaries are centrally generated under `bin/SapiManager/x64/Release/` as configured by `Directory.Build.props`.
 
 ---
 

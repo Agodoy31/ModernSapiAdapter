@@ -81,4 +81,36 @@ public static class ComRegistrar
             FreeLibrary(hModule);
         }
     }
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]
+    private delegate bool ProviderGenerateManifestDelegate([MarshalAs(UnmanagedType.LPWStr)] string outputDir);
+
+    /// <summary>
+    /// Invokes ProviderGenerateManifest on the specified provider DLL.
+    /// </summary>
+    public static bool GenerateProviderManifest(string dllPath, string outputDir)
+    {
+        IntPtr hModule = LoadLibraryEx(dllPath, IntPtr.Zero, LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (hModule == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            IntPtr pFunc = GetProcAddress(hModule, "ProviderGenerateManifest");
+            if (pFunc == IntPtr.Zero) return false;
+
+            var generateFunc = Marshal.GetDelegateForFunctionPointer<ProviderGenerateManifestDelegate>(pFunc);
+            return generateFunc(outputDir);
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            FreeLibrary(hModule);
+        }
+    }
 }

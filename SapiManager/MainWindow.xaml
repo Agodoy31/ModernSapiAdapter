@@ -20,11 +20,19 @@
 
                 <Button x:Name="BtnRefresh" DockPanel.Dock="Bottom" Content="Refresh Providers" Height="36" Background="#334155" Foreground="White" FontWeight="SemiBold" Click="BtnRefresh_Click" AutomationProperties.Name="Refresh Providers" AutomationProperties.HelpText="Scans for added or updated speech providers."/>
 
-                <ListBox x:Name="LstProviders" Background="Transparent" BorderThickness="0" Foreground="White" SelectionChanged="LstProviders_SelectionChanged" Margin="0,0,0,12" AutomationProperties.Name="Providers List" AutomationProperties.HelpText="Select a speech provider to configure its voices and parameters.">
+                <ListBox x:Name="LstProviders" Background="Transparent" BorderThickness="0" Foreground="White" SelectionChanged="LstProviders_SelectionChanged" Margin="0,0,0,12" AutomationProperties.Name="Providers List" AutomationProperties.HelpText="Select a speech provider to configure its voices and parameters. Press Shift+F10 for context actions.">
+                    <ListBox.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="Generate / Refresh Voice Manifest" Click="MenuItem_GenerateManifest_Click"/>
+                            <MenuItem Header="Open Provider Folder" Click="MenuItem_OpenFolder_Click"/>
+                        </ContextMenu>
+                    </ListBox.ContextMenu>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <StackPanel Margin="8,6" AutomationProperties.Name="{Binding ProviderName}">
-                                <TextBlock Text="{Binding ProviderName}" FontSize="15" FontWeight="Bold" Foreground="White"/>
+                                <DockPanel>
+                                    <TextBlock Text="{Binding ProviderName}" FontSize="15" FontWeight="Bold" Foreground="White"/>
+                                </DockPanel>
                                 <TextBlock Text="{Binding Version, StringFormat='Version: {0}'}" FontSize="11" Foreground="#94A3B8"/>
                             </StackPanel>
                         </DataTemplate>
@@ -46,6 +54,17 @@
                 <TextBlock x:Name="TxtSelectedProvider" Text="Select a Provider" FontSize="22" FontWeight="Bold" Foreground="#0F172A"/>
                 <TextBlock x:Name="TxtProviderDetails" Text="Scan or select a provider from the sidebar to manage voices and settings." FontSize="13" Foreground="#64748B" Margin="0,2,0,0"/>
             </StackPanel>
+
+            <!-- Unmanifested Provider Banner -->
+            <Border x:Name="PnlUnmanifestedBanner" Grid.Row="1" Background="#FEF2F2" BorderBrush="#FCA5A5" BorderThickness="1" CornerRadius="6" Padding="16" VerticalAlignment="Top" Visibility="Collapsed" Panel.ZIndex="10">
+                <DockPanel>
+                    <Button x:Name="BtnGenerateManifest" DockPanel.Dock="Right" Content="Generate Voice Manifest" Height="36" Padding="12,0" Background="#DC2626" Foreground="White" FontWeight="Bold" Click="BtnGenerateManifest_Click" AutomationProperties.Name="Generate Voice Manifest" AutomationProperties.HelpText="Invokes provider DLL to scan for voices and generate the JSON manifest."/>
+                    <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                        <TextBlock x:Name="TxtBannerTitle" Text="Voice Manifest Missing" FontSize="16" FontWeight="Bold" Foreground="#991B1B"/>
+                        <TextBlock x:Name="TxtBannerDesc" Text="This provider DLL is installed but missing its voice manifest JSON. Click Generate Voice Manifest to build its voice catalog." FontSize="12" Foreground="#B91C1C" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
 
             <!-- Workspace Tabs -->
             <TabControl x:Name="TabWorkspace" Grid.Row="1" Background="White" BorderBrush="#E2E8F0" BorderThickness="1" AutomationProperties.Name="Workspace">
@@ -74,6 +93,90 @@
                             
                             <!-- Dynamic UI container -->
                             <StackPanel x:Name="PnlDynamicSettings" Margin="0,4"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- Tab 3: SAPI 5 Voice Tester -->
+                <TabItem Header="SAPI 5 Tester" AutomationProperties.Name="SAPI 5 Tester">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16">
+                        <StackPanel>
+                            <TextBlock Text="SAPI 5 Speech Tester" FontSize="16" FontWeight="SemiBold" Foreground="#1E293B"/>
+                            <TextBlock Text="Query and test installed SAPI 5 voices with custom text, speech parameters, and event telemetry." FontSize="12" Foreground="#64748B" Margin="0,2,0,16"/>
+
+                            <!-- Voice Selection Section -->
+                            <Grid Margin="0,0,0,16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="Select SAPI 5 Voice" FontWeight="SemiBold" FontSize="13" Foreground="#334155" Margin="0,0,0,4"/>
+                                    <ComboBox x:Name="CmbTestVoice" Height="32" VerticalContentAlignment="Center" SelectionChanged="CmbTestVoice_SelectionChanged" AutomationProperties.Name="Select SAPI 5 Voice" AutomationProperties.HelpText="Selects the target SAPI 5 voice for speech synthesis."/>
+                                </StackPanel>
+                                <CheckBox x:Name="ChkFilterProviderVoices" Grid.Column="1" Content="Filter Selected Provider Only" VerticalAlignment="Bottom" Margin="16,0,0,6" IsChecked="False" Click="ChkFilterProviderVoices_Click" AutomationProperties.Name="Filter Selected Provider Voices Only" AutomationProperties.HelpText="When checked, filters the dropdown to show only voices belonging to the selected provider."/>
+                            </Grid>
+
+                            <!-- Speech Parameters Sliders -->
+                            <Grid Margin="0,0,0,16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="16"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="16"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                
+                                <!-- Rate Slider -->
+                                <StackPanel Grid.Column="0">
+                                    <DockPanel>
+                                        <TextBlock Text="Rate:" FontWeight="SemiBold" FontSize="12" Foreground="#334155"/>
+                                        <TextBlock x:Name="TxtRateVal" Text="0" HorizontalAlignment="Right" FontWeight="Bold" FontSize="12" Foreground="#2563EB"/>
+                                    </DockPanel>
+                                    <Slider x:Name="SldRate" Minimum="-10" Maximum="10" Value="0" TickFrequency="1" IsSnapToTickEnabled="True" Margin="0,4,0,0" ValueChanged="SldRate_ValueChanged" AutomationProperties.Name="Speech Rate" AutomationProperties.HelpText="Adjusts speech synthesis rate from minus 10 to plus 10."/>
+                                </StackPanel>
+
+                                <!-- Volume Slider -->
+                                <StackPanel Grid.Column="2">
+                                    <DockPanel>
+                                        <TextBlock Text="Volume:" FontWeight="SemiBold" FontSize="12" Foreground="#334155"/>
+                                        <TextBlock x:Name="TxtVolumeVal" Text="100" HorizontalAlignment="Right" FontWeight="Bold" FontSize="12" Foreground="#2563EB"/>
+                                    </DockPanel>
+                                    <Slider x:Name="SldVolume" Minimum="0" Maximum="100" Value="100" TickFrequency="5" IsSnapToTickEnabled="True" Margin="0,4,0,0" ValueChanged="SldVolume_ValueChanged" AutomationProperties.Name="Speech Volume" AutomationProperties.HelpText="Adjusts speech volume from 0 to 100."/>
+                                </StackPanel>
+
+                                <!-- Pitch Slider -->
+                                <StackPanel Grid.Column="4">
+                                    <DockPanel>
+                                        <TextBlock Text="Pitch:" FontWeight="SemiBold" FontSize="12" Foreground="#334155"/>
+                                        <TextBlock x:Name="TxtPitchVal" Text="0" HorizontalAlignment="Right" FontWeight="Bold" FontSize="12" Foreground="#2563EB"/>
+                                    </DockPanel>
+                                    <Slider x:Name="SldPitch" Minimum="-10" Maximum="10" Value="0" TickFrequency="1" IsSnapToTickEnabled="True" Margin="0,4,0,0" ValueChanged="SldPitch_ValueChanged" AutomationProperties.Name="Speech Pitch" AutomationProperties.HelpText="Adjusts speech pitch from minus 10 to plus 10."/>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- Input Text & Preset Controls -->
+                            <DockPanel Margin="0,0,0,6">
+                                <TextBlock Text="Test Text Input" FontWeight="SemiBold" FontSize="13" Foreground="#334155" VerticalAlignment="Center"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <CheckBox x:Name="ChkIsSsml" Content="Interpret SSML/XML" VerticalAlignment="Center" Margin="0,0,16,0" AutomationProperties.Name="Interpret SSML XML" AutomationProperties.HelpText="Toggles between plain text and SSML XML synthesis mode."/>
+                                    <TextBlock Text="Preset:" VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12" Foreground="#64748B"/>
+                                    <ComboBox x:Name="CmbSampleText" Width="170" Height="28" VerticalContentAlignment="Center" SelectionChanged="CmbSampleText_SelectionChanged" AutomationProperties.Name="Sample Text Presets" AutomationProperties.HelpText="Selects sample text presets."/>
+                                </StackPanel>
+                            </DockPanel>
+
+                            <TextBox x:Name="TxtTestInput" Height="90" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Padding="8" Text="Hello! This is a SAPI 5 voice synthesis test using ModernSapiAdapter." Margin="0,0,0,16" AutomationProperties.Name="Test Text Input" AutomationProperties.HelpText="Type or paste text to synthesize using the selected SAPI 5 voice."/>
+
+                            <!-- Playback Action Buttons -->
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                                <Button x:Name="BtnTestPlay" Content="Speak" Width="100" Height="36" Background="#2563EB" Foreground="White" FontWeight="Bold" Margin="0,0,8,0" Click="BtnTestPlay_Click" AutomationProperties.Name="Speak" AutomationProperties.HelpText="Starts or resumes speech synthesis."/>
+                                <Button x:Name="BtnTestPause" Content="Pause" Width="90" Height="36" Background="#475569" Foreground="White" FontWeight="SemiBold" Margin="0,0,8,0" Click="BtnTestPause_Click" AutomationProperties.Name="Pause" AutomationProperties.HelpText="Pauses active speech synthesis."/>
+                                <Button x:Name="BtnTestStop" Content="Stop" Width="90" Height="36" Background="#DC2626" Foreground="White" FontWeight="SemiBold" Click="BtnTestStop_Click" AutomationProperties.Name="Stop" AutomationProperties.HelpText="Stops active speech synthesis and clears playback queue."/>
+                            </StackPanel>
+
+                            <!-- Live Telemetry / Event Log -->
+                            <TextBlock Text="Event Telemetry Log" FontWeight="SemiBold" FontSize="13" Foreground="#334155" Margin="0,0,0,4"/>
+                            <TextBox x:Name="TxtTestLog" Height="110" TextWrapping="Wrap" IsReadOnly="True" VerticalScrollBarVisibility="Auto" Background="#F1F5F9" Foreground="#1E293B" FontFamily="Consolas" FontSize="11" Padding="8" AutomationProperties.Name="Event Telemetry Log" AutomationProperties.HelpText="Displays real-time SAPI 5 synthesis events, word progress, and bookmark callbacks."/>
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>
