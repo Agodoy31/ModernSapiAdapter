@@ -1,10 +1,8 @@
 # Build Output & Intermediate Directories
 bin/
-obj/
 build/
-artifacts/
+obj/
 SapiManager/Properties
-# Visual Studio / IDE Files & Caches
 .vs/
 *.user
 *.suo
@@ -15,3 +13,4 @@ ipch/
 *.VC.db
 *.opendb
 packages/
+.github/
