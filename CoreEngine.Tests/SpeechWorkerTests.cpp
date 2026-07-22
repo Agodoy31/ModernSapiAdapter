@@ -27,7 +27,7 @@ TEST_F(SpeechWorkerTests, StartAndWaitUntilFinished) {
     EXPECT_TRUE(worker.IsFinished());
 
     // Because there's no provider loaded, if we start, it should just exit immediately
-    worker.Start(u"Hello world", 0.0f, 0.0f, 100.0f);
+    worker.Start({ u'H', u'e', u'l', u'l', u'o' }, {});
     worker.WaitUntilFinished();
     EXPECT_TRUE(worker.IsFinished());
 }
@@ -37,7 +37,7 @@ TEST_F(SpeechWorkerTests, StopSignalsAbort) {
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &wrapper);
 
-    worker.Start(u"Test", 0.0f, 0.0f, 100.0f);
+    worker.Start({ u'T', u'e', u's', u't' }, {});
     worker.Stop();
     
     // Stop() sets the abort flag. 

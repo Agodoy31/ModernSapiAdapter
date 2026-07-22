@@ -88,8 +88,32 @@
                 <TabItem Header="Provider Configuration" AutomationProperties.Name="Provider Configuration">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16">
                         <StackPanel>
-                            <TextBlock Text="Provider Settings" FontSize="16" FontWeight="SemiBold" Foreground="#1E293B"/>
-                            <TextBlock Text="Configure provider credentials and operational parameters." FontSize="12" Foreground="#64748B" Margin="0,0,0,16"/>
+                            <DockPanel Margin="0,0,0,16">
+                                <StackPanel DockPanel.Dock="Left">
+                                    <TextBlock Text="Provider Settings" FontSize="16" FontWeight="SemiBold" Foreground="#1E293B"/>
+                                    <TextBlock Text="Configure provider credentials and operational parameters." FontSize="12" Foreground="#64748B"/>
+                                </StackPanel>
+                            </DockPanel>
+
+                            <!-- Config Scope Selector Bar -->
+                            <Border Background="#F8FAFC" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,16">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                        <TextBlock Text="Target Config Scope:" FontWeight="SemiBold" FontSize="12" Foreground="#334155"/>
+                                        <TextBlock x:Name="TxtActiveConfigPath" Text="C:\Program Files\..." FontSize="10" Foreground="#64748B" TextTrimming="CharacterEllipsis" MaxWidth="350"/>
+                                    </StackPanel>
+
+                                    <ComboBox x:Name="CmbConfigScope" Grid.Column="1" Height="32" VerticalContentAlignment="Center" SelectionChanged="CmbConfigScope_SelectionChanged" AutomationProperties.Name="Target Config Scope" AutomationProperties.HelpText="Switch between editing Machine-Wide baseline config and User-Wide override config."/>
+
+                                    <Button x:Name="BtnCreateUserConfig" Grid.Column="2" Content="Create User Override" Height="32" Padding="10,0" Margin="12,0,0,0" Background="#0EA5E9" Foreground="White" FontWeight="Bold" Click="BtnCreateUserConfig_Click" Visibility="Collapsed" AutomationProperties.Name="Create User Configuration Override" AutomationProperties.HelpText="Initializes a User-Wide configuration override file in LocalAppData."/>
+                                </Grid>
+                            </Border>
                             
                             <!-- Dynamic UI container -->
                             <StackPanel x:Name="PnlDynamicSettings" Margin="0,4"/>
@@ -170,8 +194,8 @@
                             <!-- Playback Action Buttons -->
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
                                 <Button x:Name="BtnTestPlay" Content="Speak" Width="100" Height="36" Background="#2563EB" Foreground="White" FontWeight="Bold" Margin="0,0,8,0" Click="BtnTestPlay_Click" AutomationProperties.Name="Speak" AutomationProperties.HelpText="Starts or resumes speech synthesis."/>
-                                <Button x:Name="BtnTestPause" Content="Pause" Width="90" Height="36" Background="#475569" Foreground="White" FontWeight="SemiBold" Margin="0,0,8,0" Click="BtnTestPause_Click" AutomationProperties.Name="Pause" AutomationProperties.HelpText="Pauses active speech synthesis."/>
-                                <Button x:Name="BtnTestStop" Content="Stop" Width="90" Height="36" Background="#DC2626" Foreground="White" FontWeight="SemiBold" Click="BtnTestStop_Click" AutomationProperties.Name="Stop" AutomationProperties.HelpText="Stops active speech synthesis and clears playback queue."/>
+                                <Button x:Name="BtnTestPause" Visibility="Collapsed" Content="Pause" Width="90" Height="36" Background="#475569" Foreground="White" FontWeight="SemiBold" Margin="0,0,8,0" Click="BtnTestPause_Click" AutomationProperties.Name="Pause" AutomationProperties.HelpText="Pauses active speech synthesis."/>
+                                <Button x:Name="BtnTestStop" Visibility="Collapsed" Content="Stop" Width="90" Height="36" Background="#DC2626" Foreground="White" FontWeight="SemiBold" Click="BtnTestStop_Click" AutomationProperties.Name="Stop" AutomationProperties.HelpText="Stops active speech synthesis and clears playback queue."/>
                             </StackPanel>
 
                             <!-- Live Telemetry / Event Log -->

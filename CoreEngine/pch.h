@@ -43,5 +43,9 @@
 #include <functional>
 #include <regex>
 #include <cwctype>
+#include <fstream>
+#include <ShlObj.h>
+
+void CoreLog(const wchar_t* fmt, ...);
 
 #endif // PCH_H

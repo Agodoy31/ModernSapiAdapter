@@ -143,3 +143,52 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsAndDispatchesToSite) {
     EXPECT_EQ(mockSite->receivedEvents[0].lParam, 5);
     EXPECT_EQ(mockSite->receivedEvents[0].wParam, 0);
 }
+
+TEST_F(SapiEngineTests, OnSpeechEventMapsBookmarkStringEventToSite) {
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+
+    engine->m_cpSite.copy_from(mockSite.get());
+
+    const char16_t* bookmarkStr = u"12345";
+    ProviderSpeechEvent providerEvent = {};
+    providerEvent.EventType = PROVIDER_EVENT_BOOKMARK;
+    providerEvent.AudioByteOffset = 2048;
+    providerEvent.TextLength = 5;
+    providerEvent.TextOffset = 0;
+    providerEvent.StringData = bookmarkStr;
+
+    engine->OnSpeechEvent(&providerEvent);
+
+    ASSERT_EQ(mockSite->receivedEvents.size(), 1);
+    EXPECT_EQ(mockSite->receivedEvents[0].eEventId, SPEI_TTS_BOOKMARK);
+    EXPECT_EQ(mockSite->receivedEvents[0].elParamType, SPET_LPARAM_IS_STRING);
+    EXPECT_EQ(mockSite->receivedEvents[0].ullAudioStreamOffset, 2048);
+    EXPECT_EQ(wcscmp(reinterpret_cast<const wchar_t*>(mockSite->receivedEvents[0].lParam), L"12345"), 0);
+    EXPECT_EQ(mockSite->receivedEvents[0].wParam, 12345);
+}
+
+TEST_F(SapiEngineTests, SpeakDispatchesBookmarkStringEventToSite) {
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockToken = winrt::make_self<MockSpObjectToken>();
+    ASSERT_TRUE(engine->SetObjectToken(mockToken.get()) == S_OK);
+
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+
+    const char16_t* bookmarkText = u"999";
+    SPVTEXTFRAG textFrag = {};
+    textFrag.pTextStart = (LPCWSTR)bookmarkText;
+    textFrag.ulTextLen = 3;
+    textFrag.State.eAction = SPVA_Bookmark;
+
+    WAVEFORMATEX wf = {};
+    HRESULT hr = engine->Speak(0, SPDFID_WaveFormatEx, &wf, &textFrag, mockSite.get());
+    EXPECT_TRUE(hr == S_OK);
+
+    ASSERT_EQ(mockSite->receivedEvents.size(), 1);
+    EXPECT_EQ(mockSite->receivedEvents[0].eEventId, SPEI_TTS_BOOKMARK);
+    EXPECT_EQ(mockSite->receivedEvents[0].elParamType, SPET_LPARAM_IS_STRING);
+    EXPECT_EQ(wcscmp(reinterpret_cast<const wchar_t*>(mockSite->receivedEvents[0].lParam), L"999"), 0);
+    EXPECT_EQ(mockSite->receivedEvents[0].wParam, 999);
+}
+

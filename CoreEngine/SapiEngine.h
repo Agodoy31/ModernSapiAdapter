@@ -14,6 +14,7 @@
 class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjectWithToken>
 {
     friend class SapiEngineTests_OnSpeechEventMapsAndDispatchesToSite_Test;
+    friend class SapiEngineTests_OnSpeechEventMapsBookmarkStringEventToSite_Test;
 public:
     CSapiEngine();
     ~CSapiEngine();
@@ -42,6 +43,7 @@ private:
 
     std::unique_ptr<ProviderWrapper> m_pWrapper;
     std::unique_ptr<SpeechWorker> m_pWorker;
+    std::wstring m_voiceId;
 
     HRESULT LoadProviderFromToken(ISpObjectToken* pToken);
 };

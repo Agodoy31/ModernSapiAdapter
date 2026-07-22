@@ -20,6 +20,17 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, FrameworkElement> _dynamicControlMap = new();
     private readonly Dictionary<string, (CheckBox CheckEnabled, TextBox TxtAlias)> _voiceControlMap = new();
 
+    private enum ConfigScope
+    {
+        MachineWide,
+        UserWide
+    }
+
+    private ConfigScope _activeConfigScope = ConfigScope.MachineWide;
+    private string _machineConfigPath = string.Empty;
+    private string _userConfigPath = string.Empty;
+    private bool _isUpdatingConfigScopeUi = false;
+
     private SpeechSynthesizer? _synthesizer;
     private readonly List<InstalledVoice> _installedVoices = new();
 
@@ -108,7 +119,7 @@ public partial class MainWindow : Window
                         var manifest = JsonSerializer.Deserialize<ProviderManifest>(json);
 
                         // Verify deserialized object has expected schema shape
-                        if (manifest != null && manifest.Voices != null && manifest.Voices.Count > 0 && !string.IsNullOrEmpty(manifest.ProviderName))
+                        if (manifest != null && manifest.Voices != null && !string.IsNullOrEmpty(manifest.ProviderName))
                         {
                             manifest.FolderPath = subDir;
                             manifest.ManifestFilePath = manifestPath;
@@ -238,12 +249,56 @@ public partial class MainWindow : Window
         PnlUnmanifestedBanner.Visibility = Visibility.Collapsed;
         TxtProviderDetails.Text = $"Version: {manifest.Version} | Folder: {manifest.FolderPath}";
 
-        // Load or create _config.json
-        if (File.Exists(manifest.ConfigFilePath))
+        UpdateConfigScopeUi();
+        LoadActiveScopeConfig();
+    }
+
+    private void UpdateConfigScopeUi()
+    {
+        if (_currentManifest == null) return;
+
+        _isUpdatingConfigScopeUi = true;
+        try
+        {
+            _machineConfigPath = Path.Combine(_currentManifest.FolderPath, $"{_currentManifest.ProviderName}_config.json");
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            _userConfigPath = Path.Combine(localAppData, "ModernSapiAdapter", "Config", $"{_currentManifest.ProviderName}_config.json");
+
+            bool userConfigExists = File.Exists(_userConfigPath);
+
+            CmbConfigScope.Items.Clear();
+            CmbConfigScope.Items.Add("Machine-Wide Baseline (Program Files)");
+            CmbConfigScope.Items.Add(userConfigExists
+                ? "User-Wide Override (LocalAppData)"
+                : "User-Wide Override (LocalAppData) [Not Created]");
+
+            BtnCreateUserConfig.Visibility = userConfigExists ? Visibility.Collapsed : Visibility.Visible;
+
+            if (_activeConfigScope == ConfigScope.UserWide && !userConfigExists)
+            {
+                _activeConfigScope = ConfigScope.MachineWide;
+            }
+
+            CmbConfigScope.SelectedIndex = _activeConfigScope == ConfigScope.MachineWide ? 0 : 1;
+            TxtActiveConfigPath.Text = _activeConfigScope == ConfigScope.MachineWide ? _machineConfigPath : _userConfigPath;
+        }
+        finally
+        {
+            _isUpdatingConfigScopeUi = false;
+        }
+    }
+
+    private void LoadActiveScopeConfig()
+    {
+        if (_currentManifest == null) return;
+
+        string targetPath = _activeConfigScope == ConfigScope.MachineWide ? _machineConfigPath : _userConfigPath;
+
+        if (File.Exists(targetPath))
         {
             try
             {
-                string json = File.ReadAllText(manifest.ConfigFilePath);
+                string json = File.ReadAllText(targetPath);
                 _currentConfig = JsonSerializer.Deserialize<ProviderUserConfig>(json) ?? new ProviderUserConfig();
             }
             catch
@@ -256,12 +311,71 @@ public partial class MainWindow : Window
             _currentConfig = new ProviderUserConfig();
         }
 
-        RenderVoiceList(manifest);
-        RenderDynamicSettings(manifest);
+        RenderVoiceList(_currentManifest);
+        RenderDynamicSettings(_currentManifest);
 
         if (ChkFilterProviderVoices != null && ChkFilterProviderVoices.IsChecked == true)
         {
             PopulateTestVoices();
+        }
+    }
+
+    private void CmbConfigScope_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isUpdatingConfigScopeUi || _currentManifest == null) return;
+
+        if (CmbConfigScope.SelectedIndex == 1)
+        {
+            if (!File.Exists(_userConfigPath))
+            {
+                MessageBox.Show("User-wide configuration override file does not exist yet. Click 'Create User Override' to create it.", "Notice", MessageBoxButton.OK, MessageBoxImage.Information);
+                _isUpdatingConfigScopeUi = true;
+                CmbConfigScope.SelectedIndex = 0;
+                _isUpdatingConfigScopeUi = false;
+                return;
+            }
+            _activeConfigScope = ConfigScope.UserWide;
+        }
+        else
+        {
+            _activeConfigScope = ConfigScope.MachineWide;
+        }
+
+        TxtActiveConfigPath.Text = _activeConfigScope == ConfigScope.MachineWide ? _machineConfigPath : _userConfigPath;
+        LoadActiveScopeConfig();
+    }
+
+    private void BtnCreateUserConfig_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentManifest == null) return;
+
+        try
+        {
+            string configDir = Path.GetDirectoryName(_userConfigPath)!;
+            if (!Directory.Exists(configDir))
+            {
+                Directory.CreateDirectory(configDir);
+            }
+
+            if (File.Exists(_machineConfigPath))
+            {
+                File.Copy(_machineConfigPath, _userConfigPath, overwrite: true);
+            }
+            else
+            {
+                string emptyJson = JsonSerializer.Serialize(new ProviderUserConfig(), new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(_userConfigPath, emptyJson);
+            }
+
+            _activeConfigScope = ConfigScope.UserWide;
+            UpdateConfigScopeUi();
+            LoadActiveScopeConfig();
+
+            MessageBox.Show($"Created user configuration override file at:\n{_userConfigPath}", "User Override Created", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to create user configuration override:\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -484,11 +598,22 @@ public partial class MainWindow : Window
                 }
             }
 
-            // Write _config.json to disk
-            string configJson = JsonSerializer.Serialize(_currentConfig, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(_currentManifest.ConfigFilePath, configJson);
+            // Write to target active scope config file
+            string targetPath = _activeConfigScope == ConfigScope.MachineWide ? _machineConfigPath : _userConfigPath;
+            string targetDir = Path.GetDirectoryName(targetPath)!;
+            if (!Directory.Exists(targetDir))
+            {
+                Directory.CreateDirectory(targetDir);
+            }
 
-            MessageBox.Show($"Configuration saved and SAPI 5 tokens updated for {_currentManifest.ProviderName}!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+            string configJson = JsonSerializer.Serialize(_currentConfig, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(targetPath, configJson);
+
+            string scopeName = _activeConfigScope == ConfigScope.MachineWide ? "Machine-Wide Baseline" : "User-Wide Override";
+            MessageBox.Show($"Configuration saved to {scopeName} file and SAPI 5 tokens updated for {_currentManifest.ProviderName}!\n\nTarget File:\n{targetPath}", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+
+            // Update UI after saving
+            UpdateConfigScopeUi();
         }
         catch (Exception ex)
         {
@@ -512,7 +637,7 @@ public partial class MainWindow : Window
             // Populate Sample Presets
             CmbSampleText.Items.Clear();
             CmbSampleText.Items.Add("Plain Text Hello");
-            CmbSampleText.Items.Add("SAPI SSML Bookmarks");
+            CmbSampleText.Items.Add("W3C SSML Bookmarks");
             CmbSampleText.Items.Add("Prosody Test");
             CmbSampleText.Items.Add("CJK Asian Text");
             CmbSampleText.SelectedIndex = 0;
@@ -629,7 +754,7 @@ public partial class MainWindow : Window
                 if (ChkIsSsml != null) ChkIsSsml.IsChecked = false;
                 break;
             case 1:
-                TxtTestInput.Text = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>First sentence.<bookmark mark='mark1'/> Second sentence.<bookmark mark='mark2'/> Finished.</speak>";
+                TxtTestInput.Text = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>First sentence.<mark name='mark1'/> Second sentence.<mark name='mark2'/> Finished.</speak>";
                 if (ChkIsSsml != null) ChkIsSsml.IsChecked = true;
                 break;
             case 2:
@@ -756,9 +881,28 @@ public partial class MainWindow : Window
     {
         Dispatcher.Invoke(() =>
         {
-            if (BtnTestPlay != null)
+            if (BtnTestPlay == null || BtnTestPause == null || BtnTestStop == null) return;
+
+            if (e.State == SynthesizerState.Ready)
             {
-                BtnTestPlay.Content = e.State == SynthesizerState.Paused ? "Resume" : "Speak";
+                BtnTestPlay.Visibility = Visibility.Visible;
+                BtnTestPlay.Content = "Speak";
+                BtnTestPause.Visibility = Visibility.Collapsed;
+                BtnTestStop.Visibility = Visibility.Collapsed;
+            }
+            else if (e.State == SynthesizerState.Speaking)
+            {
+                BtnTestPlay.Visibility = Visibility.Collapsed;
+                BtnTestPause.Visibility = Visibility.Visible;
+                BtnTestPause.Content = "Pause";
+                BtnTestStop.Visibility = Visibility.Visible;
+            }
+            else if (e.State == SynthesizerState.Paused)
+            {
+                BtnTestPlay.Visibility = Visibility.Visible;
+                BtnTestPlay.Content = "Resume";
+                BtnTestPause.Visibility = Visibility.Collapsed;
+                BtnTestStop.Visibility = Visibility.Visible;
             }
         });
     }

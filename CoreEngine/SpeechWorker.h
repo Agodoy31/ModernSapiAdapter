@@ -25,7 +25,7 @@ public:
     SpeechWorker(const SpeechWorker&) = delete;
     SpeechWorker& operator=(const SpeechWorker&) = delete;
 
-    void Start(std::vector<char16_t> backingBuffer, std::vector<ProviderSpeechFragment> fragments);
+    void Start(std::vector<char16_t> backingBuffer, std::vector<ProviderSpeechFragment> fragments, std::wstring voiceId = L"");
     void Stop();
 
     /**
@@ -41,7 +41,7 @@ public:
     static void __stdcall MetaCallback(const ProviderSpeechEvent* pEvent, void* ctx);
 
 private:
-    void ThreadProc(std::vector<char16_t> backingBuffer, std::vector<ProviderSpeechFragment> fragments);
+    void ThreadProc(std::vector<char16_t> backingBuffer, std::vector<ProviderSpeechFragment> fragments, std::wstring voiceId);
 
     CSapiEngine* m_pEngine;
     ProviderWrapper* m_pWrapper;

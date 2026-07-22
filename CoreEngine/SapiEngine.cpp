@@ -24,12 +24,14 @@ CSapiEngine::~CSapiEngine()
 
 IFACEMETHODIMP CSapiEngine::SetObjectToken(ISpObjectToken* pToken) noexcept try
 {
+    CoreLog(L"[CoreEngine] SetObjectToken called.");
     if (!pToken) return E_POINTER;
     m_cpToken.copy_from(pToken);
 
     return LoadProviderFromToken(pToken);
 }
-catch (...) { return winrt::to_hresult(); }
+catch (const std::exception& e) { CoreLog(L"[CoreEngine] SetObjectToken exception: %hs", e.what()); return winrt::to_hresult(); }
+catch (...) { CoreLog(L"[CoreEngine] SetObjectToken unknown exception."); return winrt::to_hresult(); }
 
 IFACEMETHODIMP CSapiEngine::GetObjectToken(ISpObjectToken** ppToken) noexcept
 {
@@ -43,14 +45,17 @@ IFACEMETHODIMP CSapiEngine::GetOutputFormat(const GUID* pTargetFmtId,
                                             GUID* pOutputFormatId,
                                             WAVEFORMATEX** ppCoMemOutputWaveFormatEx) noexcept
 {
+    CoreLog(L"[CoreEngine] GetOutputFormat called.");
     if (!m_pWrapper || !m_pWrapper->IsLoaded())
     {
+        CoreLog(L"[CoreEngine] GetOutputFormat failed: Wrapper not initialized.");
         return SPERR_UNINITIALIZED;
     }
 
     ProviderAudioFormat format{};
     if (!m_pWrapper->GetAudioFormat(&format))
     {
+        CoreLog(L"[CoreEngine] GetOutputFormat failed: Provider GetAudioFormat failed.");
         return E_FAIL;
     }
 
@@ -58,25 +63,16 @@ IFACEMETHODIMP CSapiEngine::GetOutputFormat(const GUID* pTargetFmtId,
     
     if (ppCoMemOutputWaveFormatEx)
     {
-        if (pTargetWaveFormatEx)
-        {
-            *ppCoMemOutputWaveFormatEx = (WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX) + pTargetWaveFormatEx->cbSize);
-            if (!*ppCoMemOutputWaveFormatEx) return E_OUTOFMEMORY;
-            memcpy(*ppCoMemOutputWaveFormatEx, pTargetWaveFormatEx, sizeof(WAVEFORMATEX) + pTargetWaveFormatEx->cbSize);
-        }
-        else
-        {
-            *ppCoMemOutputWaveFormatEx = (WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
-            if (!*ppCoMemOutputWaveFormatEx) return E_OUTOFMEMORY;
-            WAVEFORMATEX* pwf = *ppCoMemOutputWaveFormatEx;
-            pwf->wFormatTag = WAVE_FORMAT_PCM;
-            pwf->nChannels = format.Channels;
-            pwf->nSamplesPerSec = format.SampleRate;
-            pwf->wBitsPerSample = format.BitsPerSample;
-            pwf->nBlockAlign = (pwf->nChannels * pwf->wBitsPerSample) / 8;
-            pwf->nAvgBytesPerSec = pwf->nSamplesPerSec * pwf->nBlockAlign;
-            pwf->cbSize = 0;
-        }
+        *ppCoMemOutputWaveFormatEx = (WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
+        if (!*ppCoMemOutputWaveFormatEx) return E_OUTOFMEMORY;
+        WAVEFORMATEX* pwf = *ppCoMemOutputWaveFormatEx;
+        pwf->wFormatTag = WAVE_FORMAT_PCM;
+        pwf->nChannels = format.Channels;
+        pwf->nSamplesPerSec = format.SampleRate;
+        pwf->wBitsPerSample = format.BitsPerSample;
+        pwf->nBlockAlign = (pwf->nChannels * pwf->wBitsPerSample) / 8;
+        pwf->nAvgBytesPerSec = pwf->nSamplesPerSec * pwf->nBlockAlign;
+        pwf->cbSize = 0;
     }
     return S_OK;
 }
@@ -87,6 +83,7 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
                                   const SPVTEXTFRAG* pTextFragList,
                                   ISpTTSEngineSite* pOutputSite) noexcept try
 {
+    CoreLog(L"[CoreEngine] Speak called.");
     if (!pOutputSite || !pTextFragList) return E_INVALIDARG;
 
     {
@@ -114,6 +111,7 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
         {
             backingBuffer.insert(backingBuffer.end(), (const char16_t*)pFrag->pTextStart, (const char16_t*)pFrag->pTextStart + pFrag->ulTextLen);
         }
+        backingBuffer.push_back(u'\0');
         
         ProviderSpeechFragment fragment{};
         fragment.TextLength = pFrag->ulTextLen;
@@ -141,7 +139,8 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
         fragments[i].Text = backingBuffer.data() + fragmentOffsets[i];
     }
 
-    m_pWorker->Start(std::move(backingBuffer), std::move(fragments));
+    CoreLog(L"[CoreEngine] Starting worker thread. Fragments: %zu, VoiceId: %ls", fragments.size(), m_voiceId.c_str());
+    m_pWorker->Start(std::move(backingBuffer), std::move(fragments), m_voiceId);
 
     while (!m_pWorker->IsFinished())
     {
@@ -155,8 +154,14 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
         }
         if (actions & SPVES_ABORT)
         {
+            CoreLog(L"[CoreEngine] Speak abort requested by SAPI site.");
             m_pWorker->Stop();
-            break;
+            {
+                std::lock_guard<std::mutex> lock(m_siteMutex);
+                m_cpSite = nullptr;
+            }
+            CoreLog(L"[CoreEngine] Speak aborted immediately.");
+            return S_OK;
         }
         
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -167,24 +172,51 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
         std::lock_guard<std::mutex> lock(m_siteMutex);
         m_cpSite = nullptr;
     }
+    CoreLog(L"[CoreEngine] Speak completed.");
     return S_OK;
 }
-catch (...) { return winrt::to_hresult(); }
+catch (const std::exception& e) { CoreLog(L"[CoreEngine] Speak exception: %hs", e.what()); return winrt::to_hresult(); }
+catch (...) { CoreLog(L"[CoreEngine] Speak unknown exception."); return winrt::to_hresult(); }
 
 HRESULT CSapiEngine::LoadProviderFromToken(ISpObjectToken* pToken)
 {
     wil::com_ptr<ISpDataKey> cpDataKey;
     HRESULT hr = pToken->QueryInterface(IID_PPV_ARGS(&cpDataKey));
-    if (FAILED(hr)) return hr;
+    if (FAILED(hr))
+    {
+        CoreLog(L"[CoreEngine] LoadProviderFromToken: QueryInterface(ISpDataKey) failed (0x%08X)", hr);
+        return hr;
+    }
+
+    wil::unique_cotaskmem_string pVoiceId;
+    if (SUCCEEDED(cpDataKey->GetStringValue(L"VoiceId", &pVoiceId)) && pVoiceId)
+    {
+        m_voiceId = pVoiceId.get();
+    }
+    else
+    {
+        CoreLog(L"[CoreEngine] LoadProviderFromToken: VoiceId not found in token");
+    }
 
     wil::unique_cotaskmem_string pDllPath;
     hr = cpDataKey->GetStringValue(L"ProviderDLL", &pDllPath);
     if (FAILED(hr))
     {
+        CoreLog(L"[CoreEngine] LoadProviderFromToken: ProviderDLL not found in token (0x%08X)", hr);
         return E_INVALIDARG;
     }
 
-    return m_pWrapper->Load(pDllPath.get());
+    CoreLog(L"[CoreEngine] Loading ProviderDLL: %ls (VoiceId: %ls)", pDllPath.get(), m_voiceId.c_str());
+    HRESULT loadHr = m_pWrapper->Load(pDllPath.get());
+    if (FAILED(loadHr))
+    {
+        CoreLog(L"[CoreEngine] ProviderWrapper::Load failed with hr=0x%08X for path %ls", loadHr, pDllPath.get());
+    }
+    else
+    {
+        CoreLog(L"[CoreEngine] ProviderWrapper::Load succeeded for %ls", pDllPath.get());
+    }
+    return loadHr;
 }
 
 bool CSapiEngine::OnAudioData(const uint8_t* pAudioBytes, uint32_t byteCount)
@@ -211,18 +243,33 @@ void CSapiEngine::OnSpeechEvent(const ProviderSpeechEvent* pEvent)
     {
     case PROVIDER_EVENT_WORD_BOUNDARY:
         sapiEvent.eEventId = SPEI_WORD_BOUNDARY;
-        sapiEvent.lParam = pEvent->TextLength;
-        sapiEvent.wParam = pEvent->TextOffset;
+        sapiEvent.lParam = pEvent->TextOffset;
+        sapiEvent.wParam = pEvent->TextLength;
         break;
     case PROVIDER_EVENT_SENTENCE_BOUNDARY:
         sapiEvent.eEventId = SPEI_SENTENCE_BOUNDARY;
-        sapiEvent.lParam = pEvent->TextLength;
-        sapiEvent.wParam = pEvent->TextOffset;
+        sapiEvent.lParam = pEvent->TextOffset;
+        sapiEvent.wParam = pEvent->TextLength;
         break;
     case PROVIDER_EVENT_BOOKMARK:
         sapiEvent.eEventId = SPEI_TTS_BOOKMARK;
-        sapiEvent.lParam = pEvent->TextLength;
-        sapiEvent.wParam = pEvent->TextOffset;
+        if (pEvent->StringData != nullptr && pEvent->StringData[0] != u'\0') {
+            sapiEvent.elParamType = SPET_LPARAM_IS_STRING;
+            const wchar_t* pStr = reinterpret_cast<const wchar_t*>(pEvent->StringData);
+            size_t len = wcslen(pStr);
+            // SAPI takes ownership of this allocation when elParamType is SPET_LPARAM_IS_STRING.
+            wchar_t* pCopy = static_cast<wchar_t*>(CoTaskMemAlloc((len + 1) * sizeof(wchar_t)));
+            if (pCopy)
+            {
+                wcscpy_s(pCopy, len + 1, pStr);
+            }
+            sapiEvent.lParam = reinterpret_cast<LPARAM>(pCopy);
+            sapiEvent.wParam = static_cast<WPARAM>(_wtol(pStr));
+        } else {
+            sapiEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
+            sapiEvent.lParam = pEvent->TextLength;
+            sapiEvent.wParam = pEvent->TextOffset;
+        }
         break;
     default:
         // Unsupported event

@@ -19,7 +19,7 @@ A modern C# WPF application targeting **.NET 8** that serves as the central admi
 2. **SAPI 5 Voice Token Management (`Services/RegistryManager.cs`)**
    - Writes voice tokens to the 64-bit registry hive: `HKLM\SOFTWARE\Microsoft\Speech\Voices\Tokens`.
    - Automatically converts BCP-47 language tags (e.g. `en-US`) to SAPI 5 hex LCIDs (e.g. `409`).
-   - Links voice tokens directly to `CoreEngine.dll` CLSID `{9021A4B0-4A3C-4D2A-98C0-84E34F1A5600}` and the provider DLL path.
+   - Links voice tokens directly to `CoreEngine.dll` CLSID `{B7E2E0A6-A067-4286-9A38-9FE7FA25C98D}` and the provider DLL path.
 
 3. **CoreEngine COM Registration (`Services/ComRegistrar.cs`)**
    - Dynamically loads `CoreEngine.dll` in-process using P/Invoke (`LoadLibraryEx`) and invokes `DllRegisterServer` / `DllUnregisterServer` entry points.
@@ -32,7 +32,11 @@ A modern C# WPF application targeting **.NET 8** that serves as the central admi
    - Reads `<ProviderName>_voices.json` manifests to discover available voices and dynamic configuration schemas (`configSchema`).
    - Dynamically instantiates WPF controls (`TextBox`, `CheckBox`) in code-behind based on schema definitions without requiring hardcoded UI components for individual providers.
 
-6. **Dual-Tier Credential Security (`Services/CredentialManager.cs`)**
+6. **Dual-Tier Configuration & Credential Security (`Services/CredentialManager.cs`)**
+   - **Configuration Hierarchy Model:**
+     - **Level 1 — Machine-Wide Baseline:** `<ModuleDir>\<ProviderName>_config.json` inside the provider folder.
+     - **Level 2 — User-Wide Override (Highest Priority):** `%LOCALAPPDATA%\ModernSapiAdapter\Config\<ProviderName>_config.json`.
+     - Scalar settings (e.g. `DecryptionKey`) in User-Wide config override Machine-Wide settings; path arrays (e.g. `ExtraVoicePaths`) are merged/deduplicated.
    - **Primary Tier (User-Specific):** Securely stores API keys in Windows Credential Manager via P/Invoke (`CredReadW` / `CredWriteW`).
    - **Fallback Tier (Machine-Wide):** Encrypts credentials using Windows DPAPI (`DataProtectionScope.LocalMachine`) and writes encrypted Base64 blobs to `<ProviderName>_config.json` for system-level/logon screen access.
 

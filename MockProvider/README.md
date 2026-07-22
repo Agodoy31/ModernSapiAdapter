@@ -10,7 +10,7 @@
 - **Toolset:** MSVC v145 (Visual Studio 2026 / latest)
 
 ## Architecture & Responsibilities
-1. **ABI Compliance:** Implements all mandatory functions exported from the DLL (`ProviderSpeak`, `GetProviderAudioFormat`, `EnumerateVoices`, `InitProvider`, `CleanupProvider`).
+1. **ABI Compliance:** Implements all mandatory functions exported from the DLL (`GetProviderAbiVersion`, `GetProviderAudioFormat`, `ProviderSpeak`).
 2. **Audio Format Simulation:** Hardcodes a 24kHz 16-bit Mono audio format to test the `CoreEngine`'s ability to negotiate output formats dynamically with SAPI.
 3. **Execution Delay:** Simulates a long-running synthesis task via a simple thread sleep, checking the `pAbortFlag` at each iteration to validate the `<20ms` abort polling threshold.
 

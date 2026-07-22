@@ -35,7 +35,7 @@ public static class ProviderAbiConstants
     /// <summary>
     /// The current ABI contract version. Must match PROVIDER_ABI_VERSION in provider_abi.h.
     /// </summary>
-    public const uint AbiVersion = 2;
+    public const uint AbiVersion = 3;
 }
 
 #endregion
@@ -64,10 +64,10 @@ public struct ProviderAudioFormat
 
 /// <summary>
 /// Speech tracking event pushed to the C++ wrapper via MetaCallback.
-/// Mirrors <c>ProviderSpeechEvent</c> in provider_abi.h. Size: 24 bytes.
+/// Mirrors <c>ProviderSpeechEvent</c> in provider_abi.h. Size: 32 bytes.
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 8)]
-public struct ProviderSpeechEvent
+public unsafe struct ProviderSpeechEvent
 {
     /// <summary>Event classification (see <see cref="ProviderAbiConstants"/>).</summary>
     public uint EventType;
@@ -83,6 +83,9 @@ public struct ProviderSpeechEvent
 
     /// <summary>Accumulated PCM byte position linked to this event.</summary>
     public ulong AudioByteOffset;
+
+    /// <summary>Optional string data pointer (e.g. Bookmark name).</summary>
+    public char* StringData;
 }
 
 /// <summary>

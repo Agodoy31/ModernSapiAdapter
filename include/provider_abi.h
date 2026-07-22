@@ -20,7 +20,7 @@
 #define PROVIDER_ACTION_PRONOUNCE         2
 #define PROVIDER_ACTION_BOOKMARK          3
 
-#define PROVIDER_ABI_VERSION              2
+#define PROVIDER_ABI_VERSION              3
 
 
 
@@ -39,7 +39,7 @@ struct ProviderAudioFormat {
 
 /**
  * @brief Speech tracking event pushed to the C++ wrapper via MetaCallback.
- * @note Struct size is exactly 24 bytes with zero implicit padding gaps.
+ * @note Struct size is exactly 32 bytes with zero implicit padding gaps.
  */
 struct ProviderSpeechEvent {
     uint32_t EventType;        ///< Event classification (PROVIDER_EVENT_*)
@@ -47,6 +47,7 @@ struct ProviderSpeechEvent {
     uint32_t TextLength;       ///< Length of the active text span in char16_t units
     uint32_t Reserved;         ///< Explicit alignment padding (must be 0)
     uint64_t AudioByteOffset;  ///< Accumulated PCM byte position linked to this event
+    const char16_t* StringData; ///< Optional string data (e.g. Bookmark name)
 };
 
 

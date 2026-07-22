@@ -8,7 +8,10 @@
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
-// {B7E2E0A6-A067-4286-9A38-9FE7FA25C98D}
+// IMPORTANT: This CLSID is strictly coupled with SapiManager. 
+// If this GUID is ever changed, you MUST also update the 'CoreEngineClsid' 
+// constant in SapiManager/Services/RegistryManager.cs, otherwise SAPI 5 
+// will fail to instantiate the engine for voice tokens.
 const CLSID CLSID_SapiEngine = { 0xb7e2e0a6, 0xa067, 0x4286, { 0x9a, 0x38, 0x9f, 0xe7, 0xfa, 0x25, 0xc9, 0x8d } };
 const wchar_t* SapiEngineClsidString = L"{B7E2E0A6-A067-4286-9A38-9FE7FA25C98D}";
 
@@ -21,14 +24,21 @@ class SapiEngineClassFactory : public winrt::implements<SapiEngineClassFactory, 
 public:
     IFACEMETHODIMP CreateInstance(IUnknown* pUnkOuter, REFIID riid, void** ppvObject) noexcept override
     {
+        CoreLog(L"[CoreEngine] CreateInstance called.");
         if (pUnkOuter != nullptr) return CLASS_E_NOAGGREGATION;
         try
         {
             auto instance = winrt::make_self<CSapiEngine>();
             return instance.as(riid, ppvObject);
         }
+        catch (const std::exception& e)
+        {
+            CoreLog(L"[CoreEngine] CreateInstance exception: %hs", e.what());
+            return winrt::to_hresult();
+        }
         catch (...)
         {
+            CoreLog(L"[CoreEngine] CreateInstance unknown exception.");
             return winrt::to_hresult();
         }
     }
@@ -44,12 +54,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID /*lpRese
     if (ul_reason_for_call == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls(hModule);
+        CoreLog(L"[CoreEngine] DLL_PROCESS_ATTACH");
     }
     return TRUE;
 }
 
 STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
 {
+    CoreLog(L"[CoreEngine] DllGetClassObject called.");
     if (rclsid == CLSID_SapiEngine)
     {
         try
@@ -59,6 +71,7 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
         }
         catch (...) { return winrt::to_hresult(); }
     }
+    CoreLog(L"[CoreEngine] DllGetClassObject: CLSID mismatch!");
     return CLASS_E_CLASSNOTAVAILABLE;
 }
 

@@ -7,7 +7,9 @@ namespace SapiManager.Services;
 
 public static class RegistryManager
 {
-    public const string CoreEngineClsid = "{9021A4B0-4A3C-4D2A-98C0-84E34F1A5600}"; // Standard CoreEngine COM CLSID
+    // IMPORTANT: This CLSID is strictly coupled with the CoreEngine unmanaged COM DLL.
+    // If you change this, you MUST also update CLSID_SapiEngine in CoreEngine/dllmain.cpp
+    public const string CoreEngineClsid = "{B7E2E0A6-A067-4286-9A38-9FE7FA25C98D}"; // Standard CoreEngine COM CLSID
     private const string SapiVoicesKeyPath = @"SOFTWARE\Microsoft\Speech\Voices\Tokens";
     private const string UninstallKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\ModernSapiAdapter";
 

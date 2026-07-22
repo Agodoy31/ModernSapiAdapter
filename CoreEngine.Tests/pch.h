@@ -21,8 +21,13 @@
 #include <wil/com.h>
 #include <wil/resource.h>
 
+#include <provider_abi.h>
+
 #include <string>
 #include <thread>
+#include <mutex>
+#include <vector>
+#include <memory>
 #include <atomic>
 #include <chrono>
 

@@ -3,7 +3,7 @@ bin/
 obj/
 build/
 artifacts/
-
+SapiManager/Properties
 # Visual Studio / IDE Files & Caches
 .vs/
 *.user
@@ -14,6 +14,4 @@ artifacts/
 ipch/
 *.VC.db
 *.opendb
-
-# NuGet Packages
 packages/

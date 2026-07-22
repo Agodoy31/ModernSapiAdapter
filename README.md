@@ -90,13 +90,24 @@ To eliminate complex memory marshaling during voice registration and avoid the f
 }
 ```
 
-#### 2. `<ProviderName>_config.json` (Provider-Specific User Config - Read/Write)
-Lives alongside `<ProviderName>_voices.json` inside the provider's subfolder. Stores user voice toggles, custom aliases, and DPAPI-encrypted API keys. Storing settings per-provider eliminates the need for a global central `config.json` file.
+#### 2. `<ProviderName>_config.json` (Provider-Specific Config - Read/Write)
+Stores user voice toggles, custom aliases, decryption keys, and custom voice directories. Storing settings per-provider eliminates the need for a global central `config.json` file.
+
+##### Dual-Tier Configuration Precedence Model
+Providers implement a strict multi-tier configuration hierarchy:
+1. **Level 1 — Machine-Wide Baseline:** Located alongside the provider DLL module in the installation directory (`<ModuleDir>\<ProviderName>_config.json`). Provides system-level default settings and machine-wide voice path registrations.
+2. **Level 2 — User-Wide Override (Highest Priority):** Located in `%LOCALAPPDATA%\ModernSapiAdapter\Config\<ProviderName>_config.json`. Allows per-user customization without requiring elevated administrator privileges.
+
+##### Config Merging & Overriding Rules
+- **Scalar Settings (`DecryptionKey`, `Region`, `EncryptedApiKey`):** User-Wide setting overrides Machine-Wide setting if defined.
+- **Array Settings (`ExtraVoicePaths`):** Machine-Wide and User-Wide paths are merged and deduplicated, allowing system-wide and user-specific voice directories to be active simultaneously.
+- **Voice Toggles (`voicesConfig`):** Per-voice user settings (`Enabled`, `CustomAlias`) override machine defaults per voice ID.
+
 ```json
 {
   "providerWideConfig": {
-    "Region": "eastus",
-    "EncryptedApiKey": "<base64_dpapi_blob_here>"
+    "DecryptionKey": "<optional_key_here>",
+    "ExtraVoicePaths": "C:\\CustomVoices,D:\\UnpackedVoices"
   },
   "voicesConfig": {
     "en-US-JennyNeural": {
@@ -126,10 +137,14 @@ ModernSapiAdapter/
 ├── ModernSapiAdapter.slnx   # Visual Studio Solution File (x64 / ARM64)
 ├── AGENTS.md                # Solution Constitution & Engineering Guidelines
 ├── include/
-│   └── provider_abi.h       # Shared C-ABI Header (Doxygen documented)
+│   ├── provider_abi.h       # Shared C-ABI Header (Doxygen documented)
+│   └── ProviderAbi.cs       # Shared C# P/Invoke ABI mirror
 ├── CoreEngine/              # SAPI 5 COM Router DLL project
-├── CoreEngine.Tests/        # Google Test suite
-└── MockProvider/            # Reference C-ABI Provider DLL
+├── CoreEngine.Tests/        # CoreEngine Google Test suite
+├── MockProvider/            # Reference C-ABI Provider DLL
+├── SapiManager/             # WPF Management & Voice Registration Suite (.NET 8)
+├── SapiSsmlParser.Cpp/      # W3C SSML Parser C++20 Static Library
+└── SapiSsmlParser.Cpp.Tests/ # SapiSsmlParser.Cpp Google Test suite
 ```
 
 ---

@@ -167,9 +167,12 @@
     </ClCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <Target Name="Build" Condition="'$(Configuration)' == 'Release'">
+  <Target Name="SkipReleaseBuild" BeforeTargets="BeforeBuild" Condition="'$(Configuration)' == 'Release'">
     <Message Importance="High" Text="Skipping $(MSBuildProjectName) (excluded from Release builds)." />
   </Target>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <BuildDependsOn />
+  </PropertyGroup>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>

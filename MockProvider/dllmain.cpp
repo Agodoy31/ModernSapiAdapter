@@ -60,16 +60,21 @@ extern "C" {
                     ev.TextOffset = frag.OriginalOffset;
                     ev.TextLength = frag.TextLength;
                     ev.AudioByteOffset = i * sizeof(fakeAudio);
+                    ev.StringData = frag.Text;
+                    ev.Reserved = 0;
                     params->MetaCallback(&ev, params->UserContext);
                 }
                 continue;
             }
 
-            // Push fake audio via callback
-            if (params->AudioCallback)
+            // Push fake audio via callback (5 blocks of 1024 bytes)
+            for (int b = 0; b < 5; ++b)
             {
-                bool continueSynth = params->AudioCallback(fakeAudio, sizeof(fakeAudio), params->UserContext);
-                if (!continueSynth) return false;
+                if (params->AudioCallback)
+                {
+                    bool continueSynth = params->AudioCallback(fakeAudio, sizeof(fakeAudio), params->UserContext);
+                    if (!continueSynth) return false;
+                }
             }
 
             // Push a fake metadata event for speech

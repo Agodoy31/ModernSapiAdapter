@@ -3,10 +3,12 @@
 
 HRESULT ProviderWrapper::Load(const std::wstring& dllPath)
 {
-    m_module.reset(LoadLibraryW(dllPath.c_str()));
+    m_module.reset(LoadLibraryExW(dllPath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH));
     if (!m_module)
     {
-        return HRESULT_FROM_WIN32(GetLastError());
+        HRESULT hr = HRESULT_FROM_WIN32(GetLastError());
+        CoreLog(L"[ProviderWrapper] LoadLibraryExW failed with hr=0x%08X for path %ls", hr, dllPath.c_str());
+        return hr;
     }
 
     m_pfnGetVersion = (PFN_GET_PROVIDER_ABI_VERSION)GetProcAddress(m_module.get(), "GetProviderAbiVersion");

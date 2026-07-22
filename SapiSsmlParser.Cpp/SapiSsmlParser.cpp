@@ -4,30 +4,33 @@
 #include <string>
 
 // Helper to determine if a space is needed between two characters
-static bool NeedAddingSpace(char16_t lastChar, char16_t nextChar) {
-    if (lastChar == u' ' || nextChar == u' ' || lastChar == 0 || nextChar == 0) {
+static bool NeedAddingSpace(const std::u16string& left, const std::u16string& right) {
+    if (left.empty() || right.empty() || left[0] == u' ' || right[0] == u' ' || left[0] == 0 || right[0] == 0) {
         return false;
     }
 
     // Check if either character is CJK (Ideograph, Katakana, Hiragana)
-    WORD type1 = 0, type2 = 0;
-    GetStringTypeW(CT_CTYPE3, reinterpret_cast<LPCWSTR>(&lastChar), 1, &type1);
-    GetStringTypeW(CT_CTYPE3, reinterpret_cast<LPCWSTR>(&nextChar), 1, &type2);
+    WORD typesLeft[2] = {0, 0};
+    WORD typesRight[2] = {0, 0};
+    
+    GetStringTypeW(CT_CTYPE3, reinterpret_cast<LPCWSTR>(left.data()), (int)left.length(), typesLeft);
+    GetStringTypeW(CT_CTYPE3, reinterpret_cast<LPCWSTR>(right.data()), (int)right.length(), typesRight);
 
-    if ((type1 & (C3_IDEOGRAPH | C3_KATAKANA | C3_HIRAGANA)) ||
-        (type2 & (C3_IDEOGRAPH | C3_KATAKANA | C3_HIRAGANA))) {
-        return false;
+    for (size_t i = 0; i < left.length(); i++) {
+        if (typesLeft[i] & (C3_IDEOGRAPH | C3_KATAKANA | C3_HIRAGANA)) return false;
+    }
+    for (size_t i = 0; i < right.length(); i++) {
+        if (typesRight[i] & (C3_IDEOGRAPH | C3_KATAKANA | C3_HIRAGANA)) return false;
     }
 
     return true;
 }
 
 // Helper to escape XML characters
-static std::u16string EscapeXml(const char16_t* text, uint32_t length) {
-    std::u16string result;
-    result.reserve(length + length / 4); // basic heuristic
+static void AppendEscapedXml(std::u16string& result, const char16_t* text, uint32_t length) {
     for (uint32_t i = 0; i < length; ++i) {
         char16_t c = text[i];
+        if (c == 0) continue; // Ignore embedded nulls to prevent SSML truncation
         switch (c) {
             case u'<': result += u"&lt;"; break;
             case u'>': result += u"&gt;"; break;
@@ -37,7 +40,6 @@ static std::u16string EscapeXml(const char16_t* text, uint32_t length) {
             default: result += c; break;
         }
     }
-    return result;
 }
 
 // Helper to format float into relative percentage e.g. "+50%", "-10%"
@@ -67,25 +69,39 @@ SsmlParseResult SapiSsmlParser::Parse(const ProviderSpeechFragment* fragments, u
     result.SsmlString += u16Locale;
     result.SsmlString += u"'>";
 
-    char16_t lastChar = 0;
+    std::u16string lastGrapheme;
 
     for (uint32_t i = 0; i < count; ++i) {
         const auto& frag = fragments[i];
 
         if (frag.Action == PROVIDER_ACTION_BOOKMARK) {
-            result.SsmlString += u"<bookmark mark='";
-            // Map the offset to the start of the bookmark
+            result.SsmlString += u"<bookmark mark='OFFSET_";
+            
+            std::string offsetStr = std::to_string(frag.OriginalOffset);
+            std::u16string u16Offset(offsetStr.begin(), offsetStr.end());
+            result.SsmlString += u16Offset;
+            result.SsmlString += u"_";
+
+            // Still map the offset in OffsetMap just in case, though it's no longer strictly needed for bookmarks
             result.OffsetMap.push_back({ static_cast<uint32_t>(result.SsmlString.length()), frag.OriginalOffset });
-            result.SsmlString += EscapeXml(frag.Text, frag.TextLength);
+            
+            AppendEscapedXml(result.SsmlString, frag.Text, frag.TextLength);
             result.SsmlString += u"'/>";
         } else if (frag.Action == PROVIDER_ACTION_SPEAK || 
                    frag.Action == PROVIDER_ACTION_SPELL_OUT || 
                    frag.Action == PROVIDER_ACTION_PRONOUNCE) {
             
+            // Extract the first grapheme of the incoming fragment
+            std::u16string nextGrapheme;
+            if (frag.TextLength >= 2 && frag.Text[0] >= 0xD800 && frag.Text[0] <= 0xDBFF && frag.Text[1] >= 0xDC00 && frag.Text[1] <= 0xDFFF) {
+                nextGrapheme.assign(frag.Text, 2);
+            } else if (frag.TextLength >= 1) {
+                nextGrapheme.assign(frag.Text, 1);
+            }
+
             // Check if we need adding a space
-            if (frag.TextLength > 0 && lastChar != 0) {
-                char16_t nextChar = frag.Text[0];
-                if (NeedAddingSpace(lastChar, nextChar)) {
+            if (frag.TextLength > 0 && !lastGrapheme.empty()) {
+                if (NeedAddingSpace(lastGrapheme, nextGrapheme)) {
                     result.SsmlString += u' ';
                 }
             }
@@ -121,16 +137,19 @@ SsmlParseResult SapiSsmlParser::Parse(const ProviderSpeechFragment* fragments, u
             // We map the beginning of the text
             result.OffsetMap.push_back({ static_cast<uint32_t>(result.SsmlString.length()), frag.OriginalOffset });
             
-            std::u16string escapedText = EscapeXml(frag.Text, frag.TextLength);
-            result.SsmlString += escapedText;
+            AppendEscapedXml(result.SsmlString, frag.Text, frag.TextLength);
 
             if (hasProsody) {
                 result.SsmlString += u"</prosody>";
             }
 
-            // Update lastChar
+            // Update lastGrapheme
             if (frag.TextLength > 0) {
-                lastChar = frag.Text[frag.TextLength - 1];
+                if (frag.TextLength >= 2 && frag.Text[frag.TextLength - 2] >= 0xD800 && frag.Text[frag.TextLength - 2] <= 0xDBFF && frag.Text[frag.TextLength - 1] >= 0xDC00 && frag.Text[frag.TextLength - 1] <= 0xDFFF) {
+                    lastGrapheme.assign(frag.Text + frag.TextLength - 2, 2);
+                } else {
+                    lastGrapheme.assign(frag.Text + frag.TextLength - 1, 1);
+                }
             }
         }
     }
