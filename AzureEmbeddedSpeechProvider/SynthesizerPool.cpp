@@ -152,10 +152,13 @@ std::shared_ptr<EmbeddedSpeechConfig> SynthesizerPool::CreateConfig() {
 
     auto config = EmbeddedSpeechConfig::FromPaths(paths);
     config->SetSpeechSynthesisOutputFormat(SpeechSynthesisOutputFormat::Raw24Khz16BitMonoPcm);
-    config->SetProperty(PropertyId::SpeechServiceResponse_RequestSentenceBoundary, "true");
+    config->SetProperty(PropertyId::SpeechServiceResponse_SynthesisEventsSyncToAudio, "false");
+    config->SetProperty(PropertyId::SpeechServiceResponse_RequestSentenceBoundary, "false");
     config->SetProperty(PropertyId::SpeechServiceResponse_RequestPunctuationBoundary, "false");
     
+#ifdef _DEBUG
     config->SetProperty(PropertyId::Speech_LogFilename, "C:\\Users\\AndresGodoy\\AppData\\Local\\ModernSapiAdapter\\Logs\\AzureSpeechSDK_debug.log");
+#endif
     
     if (!decryptionKey.empty()) {
         config->SetProperty("EmbeddedSpeech_DecryptionKey", decryptionKey);

@@ -6,6 +6,7 @@ static std::wofstream g_coreLogFile;
 
 void CoreLog(const wchar_t* fmt, ...)
 {
+#ifdef _DEBUG
     std::lock_guard<std::mutex> lock(g_coreLogMutex);
     if (!g_coreLogFile.is_open())
     {
@@ -32,4 +33,7 @@ void CoreLog(const wchar_t* fmt, ...)
         g_coreLogFile << buffer << L"\n";
         g_coreLogFile.flush();
     }
+#else
+    (void)fmt;
+#endif
 }
