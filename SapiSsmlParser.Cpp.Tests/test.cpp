@@ -45,12 +45,12 @@ TEST(SapiSsmlParserTests, Bookmarks) {
     };
     
     auto result = SapiSsmlParser::Parse(fragments, 3, L"en-US");
-    EXPECT_EQ(ToUtf8(result.SsmlString), ToUtf8(u"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='http://www.w3.org/2001/mstts' xml:lang='en-US'>Test<bookmark mark='bmk1'/> Word</speak>"));
+    EXPECT_EQ(ToUtf8(result.SsmlString), ToUtf8(u"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='http://www.w3.org/2001/mstts' xml:lang='en-US'>Test<bookmark mark='OFFSET_4_bmk1'/> Word</speak>"));
     
-    ASSERT_EQ(result.OffsetMap.size(), 3);
-    EXPECT_EQ(result.OffsetMap[0].second, 0);
-    EXPECT_EQ(result.OffsetMap[1].second, 4);
-    EXPECT_EQ(result.OffsetMap[2].second, 5);
+    ASSERT_EQ(result.OffsetMap.size(), static_cast<size_t>(3));
+    EXPECT_EQ(result.OffsetMap[0].second, 0u);
+    EXPECT_EQ(result.OffsetMap[1].second, 4u);
+    EXPECT_EQ(result.OffsetMap[2].second, 5u);
 }
 
 TEST(SapiSsmlParserTests, ProsodyAdjustments) {
@@ -96,4 +96,16 @@ TEST(SapiSsmlParserTests, XmlEscaping) {
     
     auto result = SapiSsmlParser::Parse(fragments, 1, L"en-US");
     EXPECT_EQ(ToUtf8(result.SsmlString), ToUtf8(u"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='http://www.w3.org/2001/mstts' xml:lang='en-US'>&lt;Hello&gt; &amp; &quot;World&apos;</speak>"));
+}
+
+TEST(SapiSsmlParserTests, PunctuationSpaceHandling) {
+    ProviderSpeechFragment fragments[] = {
+        CreateFragment(u"Hello"),
+        CreateFragment(u","),
+        CreateFragment(u"world"),
+        CreateFragment(u"!")
+    };
+    
+    auto result = SapiSsmlParser::Parse(fragments, 4, L"en-US");
+    EXPECT_EQ(ToUtf8(result.SsmlString), ToUtf8(u"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='http://www.w3.org/2001/mstts' xml:lang='en-US'>Hello, world!</speak>"));
 }

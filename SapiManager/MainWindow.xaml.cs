@@ -457,6 +457,8 @@ public partial class MainWindow : Window
 
         if (manifest.ConfigSchema == null || manifest.ConfigSchema.Count == 0)
         {
+            PnlRawJsonEditor.Visibility = Visibility.Collapsed;
+            PnlDynamicSettings.Visibility = Visibility.Visible;
             PnlDynamicSettings.Children.Add(new TextBlock
             {
                 Text = "This provider does not require any additional configuration parameters.",
@@ -465,6 +467,26 @@ public partial class MainWindow : Window
             });
             return;
         }
+
+        if (manifest.ConfigSchema.Any(c => string.Equals(c.Type, "json_block", StringComparison.OrdinalIgnoreCase)))
+        {
+            PnlDynamicSettings.Visibility = Visibility.Collapsed;
+            PnlRawJsonEditor.Visibility = Visibility.Visible;
+            
+            string targetPath = _activeConfigScope == ConfigScope.MachineWide ? _machineConfigPath : _userConfigPath;
+            if (File.Exists(targetPath))
+            {
+                TxtRawJsonConfig.Text = File.ReadAllText(targetPath);
+            }
+            else
+            {
+                TxtRawJsonConfig.Text = "{\n  // Advanced JSON Configuration\n}";
+            }
+            return;
+        }
+
+        PnlRawJsonEditor.Visibility = Visibility.Collapsed;
+        PnlDynamicSettings.Visibility = Visibility.Visible;
 
         foreach (var item in manifest.ConfigSchema)
         {
@@ -606,8 +628,15 @@ public partial class MainWindow : Window
                 Directory.CreateDirectory(targetDir);
             }
 
-            string configJson = JsonSerializer.Serialize(_currentConfig, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(targetPath, configJson);
+            if (_currentManifest.ConfigSchema.Any(c => string.Equals(c.Type, "json_block", StringComparison.OrdinalIgnoreCase)))
+            {
+                File.WriteAllText(targetPath, TxtRawJsonConfig.Text);
+            }
+            else
+            {
+                string configJson = JsonSerializer.Serialize(_currentConfig, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(targetPath, configJson);
+            }
 
             string scopeName = _activeConfigScope == ConfigScope.MachineWide ? "Machine-Wide Baseline" : "User-Wide Override";
             MessageBox.Show($"Configuration saved to {scopeName} file and SAPI 5 tokens updated for {_currentManifest.ProviderName}!\n\nTarget File:\n{targetPath}", "Success", MessageBoxButton.OK, MessageBoxImage.Information);

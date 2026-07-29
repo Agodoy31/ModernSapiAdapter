@@ -5,11 +5,42 @@
 
 // Helper to determine if a space is needed between two characters
 static bool NeedAddingSpace(const std::u16string& left, const std::u16string& right) {
-    if (left.empty() || right.empty() || left[0] == u' ' || right[0] == u' ' || left[0] == 0 || right[0] == 0) {
+    if (left.empty() || right.empty()) {
         return false;
     }
 
-    // Check if either character is CJK (Ideograph, Katakana, Hiragana)
+    wchar_t l = static_cast<wchar_t>(left[0]);
+    wchar_t r = static_cast<wchar_t>(right[0]);
+
+    if (l == 0 || r == 0) {
+        return false;
+    }
+
+    // 1. Whitespace and control characters
+    if (iswspace(l) || iswspace(r) || iswcntrl(l) || iswcntrl(r)) {
+        return false;
+    }
+
+    // 2. Trailing punctuation (no space before these characters)
+    if (r == L'.' || r == L',' || r == L'!' || r == L'?' || r == L':' || r == L';' ||
+        r == L')' || r == L']' || r == L'}' || r == L'%' || r == L'"' || r == L'\'' ||
+        r == L'\u201D' || r == L'\u2019' || r == L'\u00BB') {
+        return false;
+    }
+
+    // 3. Opening punctuation (no space after these characters)
+    if (l == L'(' || l == L'[' || l == L'{' || l == L'<' || l == L'"' || l == L'\'' ||
+        l == L'\u201C' || l == L'\u2018' || l == L'\u00AB') {
+        return false;
+    }
+
+    // 4. Connecting punctuation / symbols (hyphens, dashes, slashes)
+    if (l == L'-' || l == L'/' || l == L'\\' || l == L'@' || l == L'\u2013' || l == L'\u2014' ||
+        r == L'-' || r == L'/' || r == L'\\' || r == L'@' || r == L'\u2013' || r == L'\u2014') {
+        return false;
+    }
+
+    // 5. Check if either character is CJK (Ideograph, Katakana, Hiragana)
     WORD typesLeft[2] = {0, 0};
     WORD typesRight[2] = {0, 0};
     
@@ -71,6 +102,11 @@ SsmlParseResult SapiSsmlParser::Parse(const ProviderSpeechFragment* fragments, u
 
     std::u16string lastGrapheme;
 
+    bool isProsodyOpen = false;
+    float currentPitch = 0.0f;
+    float currentVolume = 100.0f;
+    float currentRate = 0.0f;
+
     for (uint32_t i = 0; i < count; ++i) {
         const auto& frag = fragments[i];
 
@@ -99,6 +135,15 @@ SsmlParseResult SapiSsmlParser::Parse(const ProviderSpeechFragment* fragments, u
                 nextGrapheme.assign(frag.Text, 1);
             }
 
+            bool hasProsody = (frag.Pitch != 0.0f) || (frag.Volume != 100.0f) || (frag.Rate != 0.0f);
+            
+            if (isProsodyOpen) {
+                if (!hasProsody || frag.Pitch != currentPitch || frag.Volume != currentVolume || frag.Rate != currentRate) {
+                    result.SsmlString += u"</prosody>";
+                    isProsodyOpen = false;
+                }
+            }
+
             // Check if we need adding a space
             if (frag.TextLength > 0 && !lastGrapheme.empty()) {
                 if (NeedAddingSpace(lastGrapheme, nextGrapheme)) {
@@ -106,9 +151,7 @@ SsmlParseResult SapiSsmlParser::Parse(const ProviderSpeechFragment* fragments, u
                 }
             }
 
-            bool hasProsody = (frag.Pitch != 0.0f) || (frag.Volume != 100.0f) || (frag.Rate != 0.0f);
-            
-            if (hasProsody) {
+            if (hasProsody && !isProsodyOpen) {
                 result.SsmlString += u"<prosody";
                 
                 if (frag.Pitch != 0.0f) {
@@ -131,6 +174,11 @@ SsmlParseResult SapiSsmlParser::Parse(const ProviderSpeechFragment* fragments, u
                 }
                 
                 result.SsmlString += u">";
+
+                isProsodyOpen = true;
+                currentPitch = frag.Pitch;
+                currentVolume = frag.Volume;
+                currentRate = frag.Rate;
             }
 
             // The text itself
@@ -138,10 +186,6 @@ SsmlParseResult SapiSsmlParser::Parse(const ProviderSpeechFragment* fragments, u
             result.OffsetMap.push_back({ static_cast<uint32_t>(result.SsmlString.length()), frag.OriginalOffset });
             
             AppendEscapedXml(result.SsmlString, frag.Text, frag.TextLength);
-
-            if (hasProsody) {
-                result.SsmlString += u"</prosody>";
-            }
 
             // Update lastGrapheme
             if (frag.TextLength > 0) {
@@ -152,6 +196,10 @@ SsmlParseResult SapiSsmlParser::Parse(const ProviderSpeechFragment* fragments, u
                 }
             }
         }
+    }
+
+    if (isProsodyOpen) {
+        result.SsmlString += u"</prosody>";
     }
 
     result.SsmlString += u"</speak>";

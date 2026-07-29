@@ -14,3 +14,5 @@ ipch/
 *.opendb
 packages/
 .github/
+EdgeTtsProvider/
+SapiSsmlParser.Cs/

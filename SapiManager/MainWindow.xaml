@@ -117,6 +117,13 @@
                             
                             <!-- Dynamic UI container -->
                             <StackPanel x:Name="PnlDynamicSettings" Margin="0,4"/>
+
+                            <!-- Raw JSON Editor (Hidden by default) -->
+                            <StackPanel x:Name="PnlRawJsonEditor" Visibility="Collapsed" Margin="0,4">
+                                <TextBlock Text="Raw JSON Configuration Editor" FontWeight="SemiBold" FontSize="13" Foreground="#334155" Margin="0,0,0,4"/>
+                                <TextBlock Text="This provider uses an advanced JSON schema. Edit the raw configuration below." FontSize="11" Foreground="#64748B" Margin="0,0,0,8"/>
+                                <TextBox x:Name="TxtRawJsonConfig" Height="300" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" Background="#1E293B" Foreground="#E2E8F0" Padding="8" AutomationProperties.Name="Raw JSON Configuration Editor"/>
+                            </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>

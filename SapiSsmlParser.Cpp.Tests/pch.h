@@ -5,4 +5,8 @@
 
 #pragma once
 
+#include <windows.h>
+#include <string>
+#include <vector>
+#include <provider_abi.h>
 #include "gtest/gtest.h"

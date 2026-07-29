@@ -59,6 +59,7 @@
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -120,7 +121,7 @@
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <Target Name="Build" Condition="'$(Configuration)' == 'Release'">
+  <Target Name="SkipReleaseBuild" BeforeTargets="BeforeBuild" Condition="'$(Configuration)' == 'Release'">
     <Message Importance="High" Text="Skipping $(MSBuildProjectName) (excluded from Release builds)." />
   </Target>
   <ImportGroup Label="ExtensionTargets">
