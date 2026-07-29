@@ -19,6 +19,25 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
     LogInfo("AzureEmbeddedSynthesizer::Speak requested for voice: %ls", voiceName.c_str());
     auto parseResult = SapiSsmlParser::Parse(params->Fragments, params->FragmentCount, L"en-US");
 
+    if (!parseResult.HasSpeakableText) {
+        LogInfo("AzureEmbeddedSynthesizer::Speak bypassing synthesis: no speakable text found (bookmark-only fragments).");
+        if (params->MetaCallback) {
+            for (uint32_t i = 0; i < params->FragmentCount; ++i) {
+                const auto& frag = params->Fragments[i];
+                if (frag.Action == PROVIDER_ACTION_BOOKMARK) {
+                    ProviderSpeechEvent ev = {};
+                    ev.EventType = PROVIDER_EVENT_BOOKMARK;
+                    ev.TextOffset = frag.OriginalOffset;
+                    ev.TextLength = 0;
+                    ev.AudioByteOffset = 0; 
+                    ev.StringData = frag.Text; // Forward the SAPI bookmark name directly!
+                    params->MetaCallback(&ev, params->UserContext);
+                }
+            }
+        }
+        return true;
+    }
+
     std::string ssmlUtf8;
     int size = WideCharToMultiByte(CP_UTF8, 0, reinterpret_cast<LPCWSTR>(parseResult.SsmlString.c_str()), 
                                    (int)parseResult.SsmlString.length(), nullptr, 0, nullptr, nullptr);

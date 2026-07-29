@@ -1,12 +1,20 @@
 #include "pch.h"
 #include "Logger.h"
 #include <stdarg.h>
+#include "ConfigParser.h"
+
+static bool g_loggingEnabled = false;
+
 
 static std::mutex g_logMutex;
 static std::ofstream g_logFile;
 
 void LogInit() {
-#ifdef _DEBUG
+    auto config = ConfigParser::LoadMergedConfig();
+    g_loggingEnabled = config.EnableDebugLogging;
+    
+    if (!g_loggingEnabled) return;
+
     std::lock_guard<std::mutex> lock(g_logMutex);
     
     PWSTR path = nullptr;
@@ -23,20 +31,20 @@ void LogInit() {
         dir /= L"AzureEmbeddedSpeechProvider.log";
         g_logFile.open(dir, std::ios::app);
     }
-#endif
 }
 
 void LogShutdown() {
-#ifdef _DEBUG
+    if (!g_loggingEnabled) return;
+    
     std::lock_guard<std::mutex> lock(g_logMutex);
     if (g_logFile.is_open()) {
         g_logFile.close();
     }
-#endif
 }
 
 static void LogInternal(const char* level, const char* fmt, va_list args) {
-#ifdef _DEBUG
+    if (!g_loggingEnabled) return;
+
     std::lock_guard<std::mutex> lock(g_logMutex);
     if (!g_logFile.is_open()) return;
 
@@ -53,9 +61,6 @@ static void LogInternal(const char* level, const char* fmt, va_list args) {
         tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec,
         level, buffer);
     g_logFile.flush();
-#else
-    (void)level; (void)fmt; (void)args;
-#endif
 }
 
 void LogInfo(const char* fmt, ...) {

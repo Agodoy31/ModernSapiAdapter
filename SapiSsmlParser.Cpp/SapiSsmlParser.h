@@ -13,6 +13,7 @@
 struct SsmlParseResult {
     std::u16string SsmlString;
     std::vector<std::pair<uint32_t, uint32_t>> OffsetMap; // Pair of <SSML Char Index, Original Offset>
+    bool HasSpeakableText = false;
 };
 
 /**

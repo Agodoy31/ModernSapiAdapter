@@ -118,6 +118,22 @@ ProviderConfig ConfigParser::LoadMergedConfig(const std::wstring& optionalOutput
         if (pwc.contains("DecryptionKey") && pwc["DecryptionKey"].is_string()) {
             config.DecryptionKey = pwc["DecryptionKey"];
         }
+
+#ifdef _DEBUG
+        config.EnableDebugLogging = true;
+#else
+        config.EnableDebugLogging = false;
+#endif
+
+        if (pwc.contains("EnableDebugLogging") && pwc["EnableDebugLogging"].is_boolean()) {
+            config.EnableDebugLogging = pwc["EnableDebugLogging"];
+        }
+    } else {
+#ifdef _DEBUG
+        config.EnableDebugLogging = true;
+#else
+        config.EnableDebugLogging = false;
+#endif
     }
 
     return config;

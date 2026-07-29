@@ -127,6 +127,10 @@ SsmlParseResult SapiSsmlParser::Parse(const ProviderSpeechFragment* fragments, u
                    frag.Action == PROVIDER_ACTION_SPELL_OUT || 
                    frag.Action == PROVIDER_ACTION_PRONOUNCE) {
             
+            if (frag.TextLength > 0) {
+                result.HasSpeakableText = true;
+            }
+
             // Extract the first grapheme of the incoming fragment
             std::u16string nextGrapheme;
             if (frag.TextLength >= 2 && frag.Text[0] >= 0xD800 && frag.Text[0] <= 0xDBFF && frag.Text[1] >= 0xDC00 && frag.Text[1] <= 0xDFFF) {
