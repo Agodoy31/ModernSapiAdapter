@@ -125,8 +125,14 @@ ProviderConfig ConfigParser::LoadMergedConfig(const std::wstring& optionalOutput
         config.EnableDebugLogging = false;
 #endif
 
-        if (pwc.contains("EnableDebugLogging") && pwc["EnableDebugLogging"].is_boolean()) {
-            config.EnableDebugLogging = pwc["EnableDebugLogging"];
+        if (pwc.contains("EnableDebugLogging")) {
+            if (pwc["EnableDebugLogging"].is_boolean()) {
+                config.EnableDebugLogging = pwc["EnableDebugLogging"];
+            } else if (pwc["EnableDebugLogging"].is_string()) {
+                std::string val = pwc["EnableDebugLogging"];
+                std::transform(val.begin(), val.end(), val.begin(), ::tolower);
+                config.EnableDebugLogging = (val == "true" || val == "1");
+            }
         }
     } else {
 #ifdef _DEBUG

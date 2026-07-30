@@ -10,23 +10,31 @@
 #include <memory>
 #include <mutex>
 #include "provider_abi.h"
+#include "PcmCache.h"
 
 class AudioStreamHandler : public Microsoft::CognitiveServices::Speech::Audio::PushAudioOutputStreamCallback {
 public:
-    AudioStreamHandler(const ProviderSpeakParams* params, std::vector<std::pair<uint32_t, uint32_t>> offsetMap);
+    AudioStreamHandler();
 
     int Write(uint8_t* dataBuffer, uint32_t size) override;
     void OnWordBoundary(const Microsoft::CognitiveServices::Speech::SpeechSynthesisWordBoundaryEventArgs& e);
     void OnBookmarkReached(const Microsoft::CognitiveServices::Speech::SpeechSynthesisBookmarkEventArgs& e);
     void Close() override {}
 
-    void DetachContext();
+    void AttachContext(const ProviderSpeakParams* params, std::vector<std::pair<uint32_t, uint32_t>> offsetMap, bool enableCaching, const CacheKey& cacheKey);
+    void DetachContext(bool wasCancelled, bool allowShadowCache = false);
+    void FinalizeShadowCache();
 
 private:
     std::mutex m_contextMutex;
-    const ProviderSpeakParams* m_params;
+    const ProviderSpeakParams* m_params{nullptr};
     std::vector<std::pair<uint32_t, uint32_t>> m_offsetMap;
     bool m_hasEncounteredAudio{false};
+    bool m_isShadowCaching{false};
+
+    bool m_isCaching{false};
+    CacheKey m_cacheKey;
+    CachePayload m_cachePayload;
 };
 
 class SynthesizerPool {

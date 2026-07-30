@@ -4,6 +4,7 @@
 #include "AzureEmbeddedSynthesizer.h"
 #include "Logger.h"
 #include "VoiceManager.h"
+#include "PcmCache.h"
 
 #define PROVIDER_EXPORTS
 
@@ -13,12 +14,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
     {
     case DLL_PROCESS_ATTACH:
         LogInit();
+        PcmCache::LoadFromDisk();
         break;
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
         break;
     case DLL_PROCESS_DETACH:
         SynthesizerPool::Shutdown();
+        PcmCache::SaveToDisk();
         LogShutdown();
         break;
     }

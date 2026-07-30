@@ -21,6 +21,9 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <list>
+#include <unordered_map>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <fstream>

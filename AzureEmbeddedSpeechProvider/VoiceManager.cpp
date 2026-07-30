@@ -49,6 +49,13 @@ bool VoiceManager::GenerateVoiceManifest(const std::wstring& outputDir) {
         extraPathsItem["description"] = "Comma-separated list of additional directories to scan for offline voice packages.";
         configSchema.push_back(extraPathsItem);
 
+        json enableLoggingItem;
+        enableLoggingItem["key"] = "EnableDebugLogging";
+        enableLoggingItem["type"] = "boolean";
+        enableLoggingItem["displayName"] = "Enable Debug Logging";
+        enableLoggingItem["description"] = "If enabled, writes diagnostic traces to the local AppData directory.";
+        configSchema.push_back(enableLoggingItem);
+
         root["configSchema"] = configSchema;
 
         std::vector<std::string> paths;

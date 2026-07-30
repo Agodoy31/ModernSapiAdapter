@@ -31,19 +31,51 @@ static uint32_t ReverseMapOffset(uint32_t ssmlOffset, const std::vector<std::pai
     return 0;
 }
 
-AudioStreamHandler::AudioStreamHandler(const ProviderSpeakParams* params, std::vector<std::pair<uint32_t, uint32_t>> offsetMap)
-    : m_params(params), m_offsetMap(std::move(offsetMap)) {
+AudioStreamHandler::AudioStreamHandler() {
 }
 
-void AudioStreamHandler::DetachContext() {
+void AudioStreamHandler::AttachContext(const ProviderSpeakParams* params, std::vector<std::pair<uint32_t, uint32_t>> offsetMap, bool enableCaching, const CacheKey& cacheKey) {
+    std::lock_guard<std::mutex> lock(m_contextMutex);
+    m_params = params;
+    m_offsetMap = std::move(offsetMap);
+    m_isCaching = enableCaching;
+    m_cacheKey = cacheKey;
+    m_hasEncounteredAudio = false;
+    m_isShadowCaching = false;
+    
+    m_cachePayload.AudioData.clear();
+    m_cachePayload.Events.clear();
+    m_cachePayload.StringStore.clear();
+}
+
+void AudioStreamHandler::DetachContext(bool wasCancelled, bool allowShadowCache) {
     std::lock_guard<std::mutex> lock(m_contextMutex);
     m_params = nullptr;
     m_offsetMap.clear();
+
+    if (wasCancelled && allowShadowCache && m_isCaching) {
+        m_isShadowCaching = true;
+        LogInfo("AudioStreamHandler: Entering Shadow Caching mode. Silently recording background audio.");
+        return; // Don't put in cache yet! Wait for FinalizeShadowCache
+    }
+
+    if (m_isCaching && m_hasEncounteredAudio && !wasCancelled) {
+        PcmCache::Put(m_cacheKey, std::move(m_cachePayload));
+    }
+}
+
+void AudioStreamHandler::FinalizeShadowCache() {
+    std::lock_guard<std::mutex> lock(m_contextMutex);
+    if (m_isShadowCaching && m_hasEncounteredAudio) {
+        LogInfo("AudioStreamHandler: Shadow Caching complete! Payload successfully persisted.");
+        PcmCache::Put(m_cacheKey, std::move(m_cachePayload));
+        m_isShadowCaching = false;
+    }
 }
 
 int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
     std::lock_guard<std::mutex> lock(m_contextMutex);
-    if (!m_params) return 0;
+    if (!m_params && !m_isShadowCaching) return 0;
 
     static bool firstAudioChunk = true;
     if (firstAudioChunk) {
@@ -51,8 +83,8 @@ int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
         firstAudioChunk = false;
     }
 
-    if (m_params->pAbortFlag && *m_params->pAbortFlag) {
-        return 0;
+    if (m_params && m_params->pAbortFlag && *m_params->pAbortFlag) {
+        return 0; // if we're not detached yet but flagged
     }
 
     size_t leadingOffset = 0;
@@ -67,13 +99,15 @@ int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
     size_t activeSize = size - leadingOffset;
 
     if (activeSize > 0) {
-        activeSize = PcmTrimmer::TrimTrailingSilence(activeData, activeSize, 5);
-    }
+        if (m_isCaching) {
+            m_cachePayload.AudioData.insert(m_cachePayload.AudioData.end(), activeData, activeData + activeSize);
+        }
 
-    if (activeSize > 0 && m_params->AudioCallback) {
-        bool cont = m_params->AudioCallback(activeData, static_cast<uint32_t>(activeSize), m_params->UserContext);
-        if (!cont) {
-            return 0;
+        if (m_params && m_params->AudioCallback) {
+            bool cont = m_params->AudioCallback(activeData, static_cast<uint32_t>(activeSize), m_params->UserContext);
+            if (!cont) {
+                return 0;
+            }
         }
     }
     return size;
@@ -81,19 +115,30 @@ int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
 
 void AudioStreamHandler::OnWordBoundary(const SpeechSynthesisWordBoundaryEventArgs& e) {
     std::lock_guard<std::mutex> lock(m_contextMutex);
-    if (!m_params || !m_params->MetaCallback) return;
+    if (!m_params && !m_isShadowCaching) return;
+
+    bool skipCallback = (!m_params || !m_params->MetaCallback);
 
     ProviderSpeechEvent ev = {};
     ev.EventType = PROVIDER_EVENT_WORD_BOUNDARY;
     ev.TextOffset = ReverseMapOffset(e.TextOffset, m_offsetMap);
     ev.TextLength = e.WordLength;
     ev.AudioByteOffset = (e.AudioOffset * 48) / 10000;
-    m_params->MetaCallback(&ev, m_params->UserContext);
+    
+    if (m_isCaching) {
+        m_cachePayload.Events.push_back(ev);
+    }
+    
+    if (!skipCallback) {
+        m_params->MetaCallback(&ev, m_params->UserContext);
+    }
 }
 
 void AudioStreamHandler::OnBookmarkReached(const SpeechSynthesisBookmarkEventArgs& e) {
     std::lock_guard<std::mutex> lock(m_contextMutex);
-    if (!m_params || !m_params->MetaCallback) return;
+    if (!m_params && !m_isShadowCaching) return;
+
+    bool skipCallback = (!m_params || !m_params->MetaCallback);
 
     ProviderSpeechEvent ev = {};
     ev.EventType = PROVIDER_EVENT_BOOKMARK;
@@ -121,8 +166,25 @@ void AudioStreamHandler::OnBookmarkReached(const SpeechSynthesisBookmarkEventArg
     ev.TextLength = 0;
     ev.AudioByteOffset = (e.AudioOffset * 48) / 10000;
     ev.Reserved = 0;
-    ev.StringData = bookmarkName.empty() ? nullptr : reinterpret_cast<const char16_t*>(bookmarkName.c_str());
-    m_params->MetaCallback(&ev, m_params->UserContext);
+    
+    if (!bookmarkName.empty()) {
+        if (m_isCaching) {
+            m_cachePayload.StringStore.push_back(std::u16string(reinterpret_cast<const char16_t*>(bookmarkName.c_str())));
+            ev.StringData = m_cachePayload.StringStore.back().c_str();
+        } else {
+            ev.StringData = reinterpret_cast<const char16_t*>(bookmarkName.c_str());
+        }
+    } else {
+        ev.StringData = nullptr;
+    }
+    
+    if (m_isCaching) {
+        m_cachePayload.Events.push_back(ev);
+    }
+
+    if (!skipCallback) {
+        m_params->MetaCallback(&ev, m_params->UserContext);
+    }
 }
 
 std::shared_ptr<EmbeddedSpeechConfig> SynthesizerPool::CreateConfig() {

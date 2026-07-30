@@ -3,6 +3,7 @@
 #include "SynthesizerPool.h"
 #include "Logger.h"
 #include "../SapiSsmlParser.Cpp/SapiSsmlParser.h"
+#include "PcmCache.h"
 #include <algorithm>
 #include <future>
 #include <atomic>
@@ -47,7 +48,83 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
 
     LogInfo("Generated SSML: %s", ssmlUtf8.c_str());
 
-    auto streamHandler = std::make_shared<AudioStreamHandler>(params, std::move(parseResult.OffsetMap));
+    uint32_t totalRawChars = 0;
+    for (uint32_t i = 0; i < params->FragmentCount; ++i) {
+        totalRawChars += params->Fragments[i].TextLength;
+    }
+    
+    bool isCachingCandidate = (totalRawChars > 0 && totalRawChars <= 48);
+    CacheKey cacheKey = {};
+    if (isCachingCandidate && params->FragmentCount > 0) {
+        cacheKey.VoiceName = voiceName;
+        cacheKey.Rate = (int)params->Fragments[0].Rate;
+        cacheKey.Pitch = (int)params->Fragments[0].Pitch;
+        cacheKey.Volume = (int)params->Fragments[0].Volume;
+        cacheKey.Text = parseResult.SsmlString;
+
+        CachePayload payload;
+        if (PcmCache::TryGet(cacheKey, payload)) {
+            LogInfo("AzureEmbeddedSynthesizer::Speak Cache HIT for '%s'. Bypassing Azure SDK.", ssmlUtf8.c_str());
+            
+            size_t audioChunks = payload.AudioData.size() / 4096;
+            size_t remainder = payload.AudioData.size() % 4096;
+            size_t offset = 0;
+
+            auto dispatchEvents = [&](uint32_t currentByteOffset) {
+                if (params->MetaCallback) {
+                    for (const auto& ev : payload.Events) {
+                        if (ev.AudioByteOffset <= currentByteOffset) {
+                            // In a real robust implementation we'd flag which events have fired, 
+                            // but for simplicity we fire exact offset matches or just fire them all immediately 
+                            // if they fall in this chunk.
+                            // To be absolutely precise:
+                        }
+                    }
+                }
+            };
+            
+            // Replay events safely: we'll fire events BEFORE the audio chunk that crosses their timestamp
+            if (params->MetaCallback) {
+                uint32_t currentAudioOffset = 0;
+                size_t currentEventIdx = 0;
+                
+                while (offset < payload.AudioData.size()) {
+                    if (params->pAbortFlag && *params->pAbortFlag) return true;
+
+                    uint32_t chunkSize = (uint32_t)std::min<size_t>(4096, payload.AudioData.size() - offset);
+                    
+                    while (currentEventIdx < payload.Events.size() && 
+                           payload.Events[currentEventIdx].AudioByteOffset <= currentAudioOffset + chunkSize) {
+                        params->MetaCallback(&payload.Events[currentEventIdx], params->UserContext);
+                        currentEventIdx++;
+                    }
+
+                    if (params->AudioCallback) {
+                        if (!params->AudioCallback(payload.AudioData.data() + offset, chunkSize, params->UserContext)) {
+                            return true; // Aborted by SAPI
+                        }
+                    }
+                    offset += chunkSize;
+                    currentAudioOffset += chunkSize;
+                }
+                
+                // Fire any remaining trailing events
+                while (currentEventIdx < payload.Events.size()) {
+                    params->MetaCallback(&payload.Events[currentEventIdx], params->UserContext);
+                    currentEventIdx++;
+                }
+            } else if (params->AudioCallback && !payload.AudioData.empty()) {
+                params->AudioCallback(payload.AudioData.data(), (uint32_t)payload.AudioData.size(), params->UserContext);
+            }
+
+            return true;
+        }
+        
+        LogInfo("AzureEmbeddedSynthesizer::Speak Cache MISS for '%s'. Proceeding to synthesis.", ssmlUtf8.c_str());
+    }
+
+    auto streamHandler = std::make_shared<AudioStreamHandler>();
+    streamHandler->AttachContext(params, std::move(parseResult.OffsetMap), isCachingCandidate, cacheKey);
     std::shared_ptr<SpeechSynthesizer> synth;
 
     try {
@@ -76,26 +153,44 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
         auto future = synth->SpeakSsmlAsync(ssmlUtf8);
         while (future.wait_for(std::chrono::milliseconds(10)) == std::future_status::timeout) {
             if (params->pAbortFlag && *params->pAbortFlag) {
-                LogInfo("AzureEmbeddedSynthesizer::Speak abort flag detected, performing fire-and-forget cancellation.");
-                streamHandler->DetachContext();
-                std::thread([synth, synthesisStarted, f = std::move(future)]() mutable {
+                if (isCachingCandidate) {
+                    LogInfo("AzureEmbeddedSynthesizer::Speak abort flag detected. Initiating Shadow Caching in background.");
+                } else {
+                    LogInfo("AzureEmbeddedSynthesizer::Speak abort flag detected, performing fire-and-forget cancellation.");
+                }
+                
+                streamHandler->DetachContext(true, isCachingCandidate);
+                
+                std::thread([synth, synthesisStarted, f = std::move(future), streamHandler, isCachingCandidate]() mutable {
                     while (synthesisStarted && !synthesisStarted->load(std::memory_order_relaxed)) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                     }
-                    try {
-                        synth->StopSpeakingAsync().wait();
-                    } catch (...) {}
-                    try {
-                        f.wait();
-                    } catch (...) {}
+                    
+                    if (isCachingCandidate) {
+                        try {
+                            auto result = f.get();
+                            if (result && result->Reason == ResultReason::SynthesizingAudioCompleted) {
+                                streamHandler->FinalizeShadowCache();
+                            }
+                        } catch (...) {}
+                    } else {
+                        try {
+                            synth->StopSpeakingAsync().wait();
+                        } catch (...) {}
+                        try {
+                            f.wait();
+                        } catch (...) {}
+                    }
                 }).detach();
                 return true;
             }
         }
 
         auto result = future.get();
-        streamHandler->DetachContext();
-        if (result && result->Reason == ResultReason::Canceled) {
+        bool isCancelled = (result && result->Reason == ResultReason::Canceled);
+        streamHandler->DetachContext(isCancelled);
+        
+        if (isCancelled) {
             auto cancellation = SpeechSynthesisCancellationDetails::FromResult(result);
             LogError("Synthesis Canceled: %s", cancellation->ErrorDetails.c_str());
             return false;
