@@ -31,8 +31,11 @@ private:
     std::vector<std::pair<uint32_t, uint32_t>> m_offsetMap;
     bool m_hasEncounteredAudio{false};
     bool m_isShadowCaching{false};
+    size_t m_leadingOffsetBytes{0};
 
     bool m_isCaching{false};
+
+    void CorrectCacheOffsets();
     CacheKey m_cacheKey;
     CachePayload m_cachePayload;
 };

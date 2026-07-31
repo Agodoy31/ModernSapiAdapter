@@ -112,7 +112,7 @@ void PcmCache::LoadFromDisk() {
 
     uint32_t version = 0;
     ifs.read(reinterpret_cast<char*>(&version), sizeof(version));
-    if (version != 2) {
+    if (version != 3) {
         LogInfo("PcmCache::LoadFromDisk - Old cache version %u detected. Purging cache.", version);
         return;
     }
@@ -194,7 +194,7 @@ void PcmCache::SaveToDisk() {
 
     uint32_t magic = 0xCAFEBABE;
     ofs.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
-    uint32_t version = 2;
+    uint32_t version = 3;
     ofs.write(reinterpret_cast<const char*>(&version), sizeof(version));
 
     std::lock_guard<std::mutex> lock(s_mutex);

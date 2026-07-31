@@ -42,6 +42,7 @@ void AudioStreamHandler::AttachContext(const ProviderSpeakParams* params, std::v
     m_cacheKey = cacheKey;
     m_hasEncounteredAudio = false;
     m_isShadowCaching = false;
+    m_leadingOffsetBytes = 0;
     
     m_cachePayload.AudioData.clear();
     m_cachePayload.Events.clear();
@@ -60,6 +61,7 @@ void AudioStreamHandler::DetachContext(bool wasCancelled, bool allowShadowCache)
     }
 
     if (m_isCaching && m_hasEncounteredAudio && !wasCancelled) {
+        CorrectCacheOffsets();
         PcmCache::Put(m_cacheKey, std::move(m_cachePayload));
     }
 }
@@ -68,6 +70,7 @@ void AudioStreamHandler::FinalizeShadowCache() {
     std::lock_guard<std::mutex> lock(m_contextMutex);
     if (m_isShadowCaching && m_hasEncounteredAudio) {
         LogInfo("AudioStreamHandler: Shadow Caching complete! Payload successfully persisted.");
+        CorrectCacheOffsets();
         PcmCache::Put(m_cacheKey, std::move(m_cachePayload));
         m_isShadowCaching = false;
     }
@@ -83,15 +86,12 @@ int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
         firstAudioChunk = false;
     }
 
-    if (m_params && m_params->pAbortFlag && *m_params->pAbortFlag) {
-        return 0; // if we're not detached yet but flagged
-    }
-
     size_t leadingOffset = 0;
     if (!m_hasEncounteredAudio) {
         leadingOffset = PcmTrimmer::FindLeadingAudioOffset(dataBuffer, size, 5);
         if (leadingOffset < size) {
             m_hasEncounteredAudio = true;
+            m_leadingOffsetBytes = leadingOffset;
         }
     }
 
@@ -111,6 +111,21 @@ int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
         }
     }
     return size;
+}
+
+void AudioStreamHandler::CorrectCacheOffsets() {
+    for (auto& ev : m_cachePayload.Events) {
+        if (ev.AudioByteOffset >= m_leadingOffsetBytes) {
+            ev.AudioByteOffset -= m_leadingOffsetBytes;
+        } else {
+            ev.AudioByteOffset = 0;
+        }
+    }
+
+    std::sort(m_cachePayload.Events.begin(), m_cachePayload.Events.end(),
+        [](const ProviderSpeechEvent& a, const ProviderSpeechEvent& b) {
+            return a.AudioByteOffset < b.AudioByteOffset;
+        });
 }
 
 void AudioStreamHandler::OnWordBoundary(const SpeechSynthesisWordBoundaryEventArgs& e) {
