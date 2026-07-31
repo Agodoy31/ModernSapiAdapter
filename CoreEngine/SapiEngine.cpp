@@ -95,13 +95,15 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
     std::vector<ProviderSpeechFragment> fragments;
     std::vector<uint32_t> fragmentOffsets;
     
-    // Pass 1: Count total chars to pre-allocate
+    // Pass 1: Count total chars and fragment count to pre-allocate
     uint32_t totalChars = 0;
+    uint32_t fragmentCount = 0;
     for (const SPVTEXTFRAG* p = pTextFragList; p; p = p->pNext)
     {
         totalChars += p->ulTextLen;
+        fragmentCount++;
     }
-    backingBuffer.reserve(totalChars);
+    backingBuffer.reserve(totalChars + fragmentCount);
 
     const SPVTEXTFRAG* pFrag = pTextFragList;
     while (pFrag)
@@ -277,6 +279,13 @@ void CSapiEngine::OnSpeechEvent(const ProviderSpeechEvent* pEvent)
     }
 
     std::lock_guard<std::mutex> lock(m_siteMutex);
-    if (!m_cpSite) return;
+    if (!m_cpSite)
+    {
+        if (sapiEvent.elParamType == SPET_LPARAM_IS_STRING && sapiEvent.lParam)
+        {
+            CoTaskMemFree(reinterpret_cast<void*>(sapiEvent.lParam));
+        }
+        return;
+    }
     m_cpSite->AddEvents(&sapiEvent, 1);
 }
