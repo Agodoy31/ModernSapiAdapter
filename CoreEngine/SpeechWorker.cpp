@@ -36,6 +36,8 @@ void SpeechWorker::WaitUntilFinished()
 
 void SpeechWorker::ThreadProc(std::vector<char16_t> backingBuffer, std::vector<ProviderSpeechFragment> fragments, std::wstring voiceId)
 {
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    
     ProviderSpeakParams params{};
     params.ContractVersion = PROVIDER_ABI_VERSION;
     params.Fragments = fragments.data();
@@ -47,7 +49,9 @@ void SpeechWorker::ThreadProc(std::vector<char16_t> backingBuffer, std::vector<P
     params.MetaCallback = &SpeechWorker::MetaCallback;
 
     m_pWrapper->Speak(&params);
+    
     m_isRunning = false;
+    CoUninitialize();
 }
 
 bool __stdcall SpeechWorker::AudioCallback(const uint8_t* pAudioBytes, uint32_t byteCount, void* ctx)

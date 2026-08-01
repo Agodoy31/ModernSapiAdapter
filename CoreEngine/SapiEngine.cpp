@@ -158,11 +158,15 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
         {
             CoreLog(L"[CoreEngine] Speak abort requested by SAPI site.");
             m_pWorker->Stop();
+            
+            // WAIT FOR WORKER BEFORE RETURNING TO SAPI!
+            m_pWorker->WaitUntilFinished();
+            
             {
                 std::lock_guard<std::mutex> lock(m_siteMutex);
                 m_cpSite = nullptr;
             }
-            CoreLog(L"[CoreEngine] Speak aborted immediately.");
+            CoreLog(L"[CoreEngine] Speak aborted safely.");
             return S_OK;
         }
         
@@ -223,14 +227,18 @@ HRESULT CSapiEngine::LoadProviderFromToken(ISpObjectToken* pToken)
 
 bool CSapiEngine::OnAudioData(const uint8_t* pAudioBytes, uint32_t byteCount)
 {
-    std::lock_guard<std::mutex> lock(m_siteMutex);
-    if (!m_cpSite) return false;
+    winrt::com_ptr<ISpTTSEngineSite> cpSite;
+    {
+        std::lock_guard<std::mutex> lock(m_siteMutex);
+        if (!m_cpSite) return false;
+        cpSite = m_cpSite;
+    }
 
-    DWORD actions = m_cpSite->GetActions();
+    DWORD actions = cpSite->GetActions();
     if (actions & SPVES_ABORT) return false;
     
     ULONG cbWritten = 0;
-    HRESULT hr = m_cpSite->Write((const void*)pAudioBytes, byteCount, &cbWritten);
+    HRESULT hr = cpSite->Write((const void*)pAudioBytes, byteCount, &cbWritten);
     return SUCCEEDED(hr);
 }
 
@@ -278,14 +286,18 @@ void CSapiEngine::OnSpeechEvent(const ProviderSpeechEvent* pEvent)
         return;
     }
 
-    std::lock_guard<std::mutex> lock(m_siteMutex);
-    if (!m_cpSite)
+    winrt::com_ptr<ISpTTSEngineSite> cpSite;
     {
-        if (sapiEvent.elParamType == SPET_LPARAM_IS_STRING && sapiEvent.lParam)
+        std::lock_guard<std::mutex> lock(m_siteMutex);
+        if (!m_cpSite)
         {
-            CoTaskMemFree(reinterpret_cast<void*>(sapiEvent.lParam));
+            if (sapiEvent.elParamType == SPET_LPARAM_IS_STRING && sapiEvent.lParam)
+            {
+                CoTaskMemFree(reinterpret_cast<void*>(sapiEvent.lParam));
+            }
+            return;
         }
-        return;
+        cpSite = m_cpSite;
     }
-    m_cpSite->AddEvents(&sapiEvent, 1);
+    cpSite->AddEvents(&sapiEvent, 1);
 }
