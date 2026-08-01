@@ -40,8 +40,8 @@ struct CachePayload {
 
 class PcmCache {
 public:
-    static bool TryGet(const CacheKey& key, CachePayload& outPayload);
-    static void Put(const CacheKey& key, CachePayload&& payload);
+    static bool TryGet(const CacheKey& key, std::shared_ptr<const CachePayload>& outPayload);
+    static void Put(const CacheKey& key, std::shared_ptr<const CachePayload> payload);
     static void LoadFromDisk();
     static void SaveToDisk();
 
@@ -50,5 +50,5 @@ private:
     
     static std::mutex s_mutex;
     static std::list<CacheKey> s_lruList;
-    static std::unordered_map<CacheKey, std::pair<CachePayload, std::list<CacheKey>::iterator>> s_cacheMap;
+    static std::unordered_map<CacheKey, std::pair<std::shared_ptr<const CachePayload>, std::list<CacheKey>::iterator>> s_cacheMap;
 };

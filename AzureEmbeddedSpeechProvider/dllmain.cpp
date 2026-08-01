@@ -8,21 +8,30 @@
 
 #define PROVIDER_EXPORTS
 
+void GlobalLazyInit() {
+    static std::once_flag s_initFlag;
+    std::call_once(s_initFlag, []() {
+        LogInit();
+        PcmCache::LoadFromDisk();
+    });
+}
+
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
 {
     switch (ul_reason_for_call)
     {
     case DLL_PROCESS_ATTACH:
-        LogInit();
-        PcmCache::LoadFromDisk();
+        DisableThreadLibraryCalls(hModule);
         break;
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
         break;
     case DLL_PROCESS_DETACH:
-        SynthesizerPool::Shutdown();
-        PcmCache::SaveToDisk();
-        LogShutdown();
+        if (lpReserved == nullptr) {
+            SynthesizerPool::Shutdown();
+            PcmCache::SaveToDisk();
+            LogShutdown();
+        }
         break;
     }
     return TRUE;

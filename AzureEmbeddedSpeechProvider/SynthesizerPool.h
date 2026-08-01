@@ -48,10 +48,13 @@ public:
         const std::wstring& voiceName,
         std::shared_ptr<AudioStreamHandler> streamHandler);
 
+    static bool IsCacheEnabled() { return s_enablePcmCache; }
+
 private:
     static void Initialize();
     static std::shared_ptr<Microsoft::CognitiveServices::Speech::EmbeddedSpeechConfig> CreateConfig();
 
     static std::mutex s_mutex;
     static std::shared_ptr<Microsoft::CognitiveServices::Speech::EmbeddedSpeechConfig> s_config;
+    static bool s_enablePcmCache;
 };

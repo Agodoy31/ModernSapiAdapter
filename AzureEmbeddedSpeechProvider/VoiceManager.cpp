@@ -10,13 +10,7 @@ using namespace Windows::Management::Deployment;
 using namespace Microsoft::CognitiveServices::Speech;
 using json = nlohmann::json;
 
-static std::string WStringToUTF8(const std::wstring& wstr) {
-    if (wstr.empty()) return {};
-    int size = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), nullptr, 0, nullptr, nullptr);
-    std::string result(size, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), result.data(), size, nullptr, nullptr);
-    return result;
-}
+
 
 static std::string GetVoiceAge(const std::string& shortName) {
     std::string lower = shortName;
@@ -28,6 +22,7 @@ static std::string GetVoiceAge(const std::string& shortName) {
 }
 
 bool VoiceManager::GenerateVoiceManifest(const std::wstring& outputDir) {
+    GlobalLazyInit();
     try {
         json root;
         root["providerName"] = "AzureEmbeddedSpeechProvider";
@@ -55,6 +50,13 @@ bool VoiceManager::GenerateVoiceManifest(const std::wstring& outputDir) {
         enableLoggingItem["displayName"] = "Enable Debug Logging";
         enableLoggingItem["description"] = "If enabled, writes diagnostic traces to the local AppData directory.";
         configSchema.push_back(enableLoggingItem);
+
+        json enablePcmCacheItem;
+        enablePcmCacheItem["key"] = "EnablePcmCache";
+        enablePcmCacheItem["type"] = "boolean";
+        enablePcmCacheItem["displayName"] = "Enable PCM Cache";
+        enablePcmCacheItem["description"] = "If enabled, heavily boosts synthesis speeds by bypassing neural generation for repetitive navigation commands.";
+        configSchema.push_back(enablePcmCacheItem);
 
         root["configSchema"] = configSchema;
 

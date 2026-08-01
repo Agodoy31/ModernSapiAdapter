@@ -4,9 +4,9 @@
 
 std::mutex PcmCache::s_mutex;
 std::list<CacheKey> PcmCache::s_lruList;
-std::unordered_map<CacheKey, std::pair<CachePayload, std::list<CacheKey>::iterator>> PcmCache::s_cacheMap;
+std::unordered_map<CacheKey, std::pair<std::shared_ptr<const CachePayload>, std::list<CacheKey>::iterator>> PcmCache::s_cacheMap;
 
-bool PcmCache::TryGet(const CacheKey& key, CachePayload& outPayload) {
+bool PcmCache::TryGet(const CacheKey& key, std::shared_ptr<const CachePayload>& outPayload) {
     std::lock_guard<std::mutex> lock(s_mutex);
     
     auto it = s_cacheMap.find(key);
@@ -17,69 +17,40 @@ bool PcmCache::TryGet(const CacheKey& key, CachePayload& outPayload) {
     // Move to front of LRU list
     s_lruList.splice(s_lruList.begin(), s_lruList, it->second.second);
     
-    // Deep copy the payload to the caller
+    // Return the shared pointer
     outPayload = it->second.first;
-    
-    // Re-wire the ProviderSpeechEvent pointers to point to the newly copied StringStore
-    // because outPayload has its own copy of the StringStore vectors now.
-    for (size_t i = 0; i < outPayload.Events.size(); ++i) {
-        if (outPayload.Events[i].StringData != nullptr) {
-            // Find which string it was pointing to in the original
-            const auto& originalEvent = it->second.first.Events[i];
-            
-            bool rewired = false;
-            // Re-point to the matching string in our new StringStore
-            for (const auto& str : it->second.first.StringStore) {
-                if (originalEvent.StringData == str.c_str()) {
-                    // Find the matching string in outPayload's StringStore
-                    // They are guaranteed to be in the same order
-                    auto outIt = outPayload.StringStore.begin();
-                    for (const auto& originalStr : it->second.first.StringStore) {
-                        if (&originalStr == &str) {
-                            outPayload.Events[i].StringData = outIt->c_str();
-                            rewired = true;
-                            break;
-                        }
-                        ++outIt;
-                    }
-                    break;
-                }
-            }
-            if (!rewired) {
-                LogError("PcmCache: CRITICAL ERROR! Failed to rewire StringData pointer for event %zu!", i);
-                // Safety fallback to prevent crash:
-                outPayload.Events[i].StringData = nullptr;
-            }
-        }
-    }
     
     return true;
 }
 
-void PcmCache::Put(const CacheKey& key, CachePayload&& payload) {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    
-    auto it = s_cacheMap.find(key);
-    if (it != s_cacheMap.end()) {
-        LogInfo("PcmCache: Updating existing entry.");
-        s_lruList.splice(s_lruList.begin(), s_lruList, it->second.second);
-        it->second.first = std::move(payload);
-        return;
+void PcmCache::Put(const CacheKey& key, std::shared_ptr<const CachePayload> payload) {
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        
+        auto it = s_cacheMap.find(key);
+        if (it != s_cacheMap.end()) {
+            LogInfo("PcmCache: Updating existing entry.");
+            s_lruList.splice(s_lruList.begin(), s_lruList, it->second.second);
+            it->second.first = payload;
+        } else {
+            // If cache is full, evict the least recently used item (at the back)
+            if (s_cacheMap.size() >= MAX_CACHE_ENTRIES) {
+                auto last = s_lruList.back();
+                LogInfo("PcmCache: Capacity reached (%d). Evicting least recently used entry.", MAX_CACHE_ENTRIES);
+                s_cacheMap.erase(last);
+                s_lruList.pop_back();
+            }
+            
+            // Insert new item at the front of the LRU list
+            s_lruList.push_front(key);
+            s_cacheMap.emplace(key, std::make_pair(payload, s_lruList.begin()));
+            
+            LogInfo("PcmCache: Inserted new entry. Current size: %zu", s_cacheMap.size());
+        }
     }
     
-    // If cache is full, evict the least recently used item (at the back)
-    if (s_cacheMap.size() >= MAX_CACHE_ENTRIES) {
-        auto last = s_lruList.back();
-        LogInfo("PcmCache: Capacity reached (%d). Evicting least recently used entry.", MAX_CACHE_ENTRIES);
-        s_cacheMap.erase(last);
-        s_lruList.pop_back();
-    }
-    
-    // Insert new item at the front of the LRU list
-    s_lruList.push_front(key);
-    s_cacheMap.emplace(key, std::make_pair(std::move(payload), s_lruList.begin()));
-    
-    LogInfo("PcmCache: Inserted new entry. Current size: %zu", s_cacheMap.size());
+    // Write-through cache: save immediately outside the lock
+    SaveToDisk();
 }
 
 static std::filesystem::path GetCacheFilePath() {
@@ -176,7 +147,7 @@ void PcmCache::LoadFromDisk() {
         }
 
         s_lruList.push_back(key);
-        s_cacheMap.emplace(key, std::make_pair(std::move(payload), --s_lruList.end()));
+        s_cacheMap.emplace(key, std::make_pair(std::make_shared<const CachePayload>(std::move(payload)), --s_lruList.end()));
     }
 
     LogInfo("PcmCache: Loaded %zu entries from disk.", s_cacheMap.size());
@@ -197,13 +168,23 @@ void PcmCache::SaveToDisk() {
     uint32_t version = 3;
     ofs.write(reinterpret_cast<const char*>(&version), sizeof(version));
 
-    std::lock_guard<std::mutex> lock(s_mutex);
-    uint32_t count = static_cast<uint32_t>(s_cacheMap.size());
+    std::vector<std::pair<CacheKey, std::shared_ptr<const CachePayload>>> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        snapshot.reserve(s_lruList.size());
+        for (const auto& key : s_lruList) {
+            auto it = s_cacheMap.find(key);
+            if (it != s_cacheMap.end()) {
+                snapshot.emplace_back(key, it->second.first);
+            }
+        }
+    }
+
+    uint32_t count = static_cast<uint32_t>(snapshot.size());
     ofs.write(reinterpret_cast<const char*>(&count), sizeof(count));
 
-    for (const auto& key : s_lruList) {
-        auto it = s_cacheMap.find(key);
-        if (it == s_cacheMap.end()) continue;
+    for (const auto& item : snapshot) {
+        const auto& key = item.first;
 
         uint32_t vnLen = static_cast<uint32_t>(key.VoiceName.length());
         ofs.write(reinterpret_cast<const char*>(&vnLen), sizeof(vnLen));
@@ -221,7 +202,7 @@ void PcmCache::SaveToDisk() {
             ofs.write(reinterpret_cast<const char*>(key.Text.data()), txtLen * sizeof(char16_t));
         }
 
-        const auto& payload = it->second.first;
+        const auto& payload = *item.second;
         uint32_t audioSize = static_cast<uint32_t>(payload.AudioData.size());
         ofs.write(reinterpret_cast<const char*>(&audioSize), sizeof(audioSize));
         if (audioSize > 0) {

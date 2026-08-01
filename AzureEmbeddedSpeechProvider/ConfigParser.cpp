@@ -45,6 +45,7 @@ static void ParsePathsString(const std::string& input, std::vector<std::string>&
 
 ProviderConfig ConfigParser::LoadMergedConfig(const std::wstring& optionalOutputDir) {
     ProviderConfig config;
+    config.EnablePcmCache = true;
     std::set<std::string> seenPaths;
     json mergedJson = json::object();
 
@@ -132,6 +133,16 @@ ProviderConfig ConfigParser::LoadMergedConfig(const std::wstring& optionalOutput
                 std::string val = pwc["EnableDebugLogging"];
                 std::transform(val.begin(), val.end(), val.begin(), ::tolower);
                 config.EnableDebugLogging = (val == "true" || val == "1");
+            }
+        }
+
+        if (pwc.contains("EnablePcmCache")) {
+            if (pwc["EnablePcmCache"].is_boolean()) {
+                config.EnablePcmCache = pwc["EnablePcmCache"];
+            } else if (pwc["EnablePcmCache"].is_string()) {
+                std::string val = pwc["EnablePcmCache"];
+                std::transform(val.begin(), val.end(), val.begin(), ::tolower);
+                config.EnablePcmCache = (val == "true" || val == "1");
             }
         }
     } else {

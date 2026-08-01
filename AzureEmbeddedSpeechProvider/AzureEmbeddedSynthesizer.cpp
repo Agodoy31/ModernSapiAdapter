@@ -11,6 +11,7 @@
 using namespace Microsoft::CognitiveServices::Speech;
 
 bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
+    GlobalLazyInit();
     if (!params || !params->VoiceModel) {
         LogError("AzureEmbeddedSynthesizer::Speak failed: params or VoiceModel is null.");
         return false;
@@ -53,7 +54,7 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
         totalRawChars += params->Fragments[i].TextLength;
     }
     
-    bool isCachingCandidate = (totalRawChars > 0 && totalRawChars <= 48);
+    bool isCachingCandidate = SynthesizerPool::IsCacheEnabled() && (totalRawChars > 0 && totalRawChars <= 48);
     CacheKey cacheKey = {};
     if (isCachingCandidate && params->FragmentCount > 0) {
         cacheKey.VoiceName = voiceName;
@@ -62,45 +63,33 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
         cacheKey.Volume = (int)params->Fragments[0].Volume;
         cacheKey.Text = parseResult.SsmlString;
 
-        CachePayload payload;
+        std::shared_ptr<const CachePayload> payload;
         if (PcmCache::TryGet(cacheKey, payload)) {
             LogInfo("AzureEmbeddedSynthesizer::Speak Cache HIT for '%s'. Bypassing Azure SDK.", ssmlUtf8.c_str());
             
-            size_t audioChunks = payload.AudioData.size() / 4096;
-            size_t remainder = payload.AudioData.size() % 4096;
+            size_t audioChunks = payload->AudioData.size() / 4096;
+            size_t remainder = payload->AudioData.size() % 4096;
             size_t offset = 0;
 
-            auto dispatchEvents = [&](uint32_t currentByteOffset) {
-                if (params->MetaCallback) {
-                    for (const auto& ev : payload.Events) {
-                        if (ev.AudioByteOffset <= currentByteOffset) {
-                            // In a real robust implementation we'd flag which events have fired, 
-                            // but for simplicity we fire exact offset matches or just fire them all immediately 
-                            // if they fall in this chunk.
-                            // To be absolutely precise:
-                        }
-                    }
-                }
-            };
-            
+
             // Replay events safely: we'll fire events BEFORE the audio chunk that crosses their timestamp
             if (params->MetaCallback) {
                 uint32_t currentAudioOffset = 0;
                 size_t currentEventIdx = 0;
                 
-                while (offset < payload.AudioData.size()) {
+                while (offset < payload->AudioData.size()) {
                     if (params->pAbortFlag && *params->pAbortFlag) return true;
 
-                    uint32_t chunkSize = (uint32_t)std::min<size_t>(4096, payload.AudioData.size() - offset);
+                    uint32_t chunkSize = (uint32_t)std::min<size_t>(4096, payload->AudioData.size() - offset);
                     
-                    while (currentEventIdx < payload.Events.size() && 
-                           payload.Events[currentEventIdx].AudioByteOffset <= currentAudioOffset + chunkSize) {
-                        params->MetaCallback(&payload.Events[currentEventIdx], params->UserContext);
+                    while (currentEventIdx < payload->Events.size() && 
+                           payload->Events[currentEventIdx].AudioByteOffset <= currentAudioOffset + chunkSize) {
+                        params->MetaCallback(&payload->Events[currentEventIdx], params->UserContext);
                         currentEventIdx++;
                     }
 
                     if (params->AudioCallback) {
-                        if (!params->AudioCallback(payload.AudioData.data() + offset, chunkSize, params->UserContext)) {
+                        if (!params->AudioCallback(payload->AudioData.data() + offset, chunkSize, params->UserContext)) {
                             return true; // Aborted by SAPI
                         }
                     }
@@ -109,12 +98,20 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
                 }
                 
                 // Fire any remaining trailing events
-                while (currentEventIdx < payload.Events.size()) {
-                    params->MetaCallback(&payload.Events[currentEventIdx], params->UserContext);
+                while (currentEventIdx < payload->Events.size()) {
+                    params->MetaCallback(&payload->Events[currentEventIdx], params->UserContext);
                     currentEventIdx++;
                 }
-            } else if (params->AudioCallback && !payload.AudioData.empty()) {
-                params->AudioCallback(payload.AudioData.data(), (uint32_t)payload.AudioData.size(), params->UserContext);
+            } else if (params->AudioCallback && !payload->AudioData.empty()) {
+                size_t noMetaOffset = 0;
+                while (noMetaOffset < payload->AudioData.size()) {
+                    if (params->pAbortFlag && *params->pAbortFlag) return true;
+                    uint32_t chunkSize = (uint32_t)std::min<size_t>(4096, payload->AudioData.size() - noMetaOffset);
+                    if (!params->AudioCallback(payload->AudioData.data() + noMetaOffset, chunkSize, params->UserContext)) {
+                        return true;
+                    }
+                    noMetaOffset += chunkSize;
+                }
             }
 
             return true;

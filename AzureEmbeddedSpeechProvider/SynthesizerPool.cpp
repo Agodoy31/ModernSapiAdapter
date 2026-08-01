@@ -8,15 +8,10 @@ using namespace Microsoft::CognitiveServices::Speech;
 using namespace winrt::Windows::Management::Deployment;
 
 std::mutex SynthesizerPool::s_mutex;
-std::shared_ptr<EmbeddedSpeechConfig> SynthesizerPool::s_config;
+std::shared_ptr<EmbeddedSpeechConfig> SynthesizerPool::s_config = nullptr;
+bool SynthesizerPool::s_enablePcmCache = true;
 
-static std::string WStringToUTF8(const std::wstring& wstr) {
-    if (wstr.empty()) return {};
-    int size = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), nullptr, 0, nullptr, nullptr);
-    std::string result(size, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), result.data(), size, nullptr, nullptr);
-    return result;
-}
+
 
 static uint32_t ReverseMapOffset(uint32_t ssmlOffset, const std::vector<std::pair<uint32_t, uint32_t>>& offsetMap) {
     if (offsetMap.empty()) return 0;
@@ -62,7 +57,7 @@ void AudioStreamHandler::DetachContext(bool wasCancelled, bool allowShadowCache)
 
     if (m_isCaching && m_hasEncounteredAudio && !wasCancelled) {
         CorrectCacheOffsets();
-        PcmCache::Put(m_cacheKey, std::move(m_cachePayload));
+        PcmCache::Put(m_cacheKey, std::make_shared<const CachePayload>(std::move(m_cachePayload)));
     }
 }
 
@@ -71,7 +66,7 @@ void AudioStreamHandler::FinalizeShadowCache() {
     if (m_isShadowCaching && m_hasEncounteredAudio) {
         LogInfo("AudioStreamHandler: Shadow Caching complete! Payload successfully persisted.");
         CorrectCacheOffsets();
-        PcmCache::Put(m_cacheKey, std::move(m_cachePayload));
+        PcmCache::Put(m_cacheKey, std::make_shared<const CachePayload>(std::move(m_cachePayload)));
         m_isShadowCaching = false;
     }
 }
@@ -80,11 +75,7 @@ int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
     std::lock_guard<std::mutex> lock(m_contextMutex);
     if (!m_params && !m_isShadowCaching) return 0;
 
-    static bool firstAudioChunk = true;
-    if (firstAudioChunk) {
-        LogInfo("AudioStreamHandler: Received first chunk of %u bytes from Azure SDK.", size);
-        firstAudioChunk = false;
-    }
+
 
     size_t leadingOffset = 0;
     if (!m_hasEncounteredAudio) {
@@ -226,6 +217,7 @@ std::shared_ptr<EmbeddedSpeechConfig> SynthesizerPool::CreateConfig() {
         paths.push_back(p);
     }
     decryptionKey = providerConfig.DecryptionKey;
+    s_enablePcmCache = providerConfig.EnablePcmCache;
 
     auto config = EmbeddedSpeechConfig::FromPaths(paths);
     config->SetSpeechSynthesisOutputFormat(SpeechSynthesisOutputFormat::Raw24Khz16BitMonoPcm);

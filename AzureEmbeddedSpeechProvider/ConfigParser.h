@@ -5,6 +5,7 @@ struct ProviderConfig {
     std::vector<std::string> ExtraVoicePaths;
     std::string DecryptionKey;
     bool EnableDebugLogging;
+    bool EnablePcmCache;
     nlohmann::json FullJson;
 };
 
