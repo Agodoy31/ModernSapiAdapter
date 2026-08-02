@@ -49,15 +49,7 @@ public:
     }
 };
 
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID /*lpReserved*/)
-{
-    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
-    {
-        DisableThreadLibraryCalls(hModule);
-        CoreLog(L"[CoreEngine] DLL_PROCESS_ATTACH");
-    }
-    return TRUE;
-}
+
 
 STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
 {
