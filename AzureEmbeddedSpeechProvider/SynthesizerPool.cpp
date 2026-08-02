@@ -9,7 +9,6 @@ using namespace winrt::Windows::Management::Deployment;
 
 std::mutex SynthesizerPool::s_mutex;
 std::shared_ptr<EmbeddedSpeechConfig> SynthesizerPool::s_config = nullptr;
-bool SynthesizerPool::s_enablePcmCache = true;
 
 
 
@@ -29,29 +28,18 @@ static uint32_t ReverseMapOffset(uint32_t ssmlOffset, const std::vector<std::pai
 AudioStreamHandler::AudioStreamHandler() {
 }
 
-void AudioStreamHandler::AttachContext(const ProviderSpeakParams* params, std::vector<std::pair<uint32_t, uint32_t>> offsetMap, bool enableCaching, const CacheKey& cacheKey) {
+void AudioStreamHandler::AttachContext(const ProviderSpeakParams* params, std::vector<std::pair<uint32_t, uint32_t>> offsetMap) {
     std::lock_guard<std::mutex> lock(m_contextMutex);
     m_params = params;
     m_offsetMap = std::move(offsetMap);
-    m_isCaching = enableCaching;
-    m_cacheKey = cacheKey;
     m_hasEncounteredAudio = false;
     m_leadingOffsetBytes = 0;
-    
-    m_cachePayload.AudioData.clear();
-    m_cachePayload.Events.clear();
-    m_cachePayload.StringStore.clear();
 }
 
 void AudioStreamHandler::DetachContext(bool wasCancelled) {
     std::lock_guard<std::mutex> lock(m_contextMutex);
     m_params = nullptr;
     m_offsetMap.clear();
-
-    if (m_isCaching && m_hasEncounteredAudio && !wasCancelled) {
-        CorrectCacheOffsets();
-        PcmCache::Put(m_cacheKey, std::make_shared<const CachePayload>(std::move(m_cachePayload)));
-    }
 }
 
 int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
@@ -71,10 +59,6 @@ int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
     size_t activeSize = size - leadingOffset;
 
     if (activeSize > 0) {
-        if (m_isCaching) {
-            m_cachePayload.AudioData.insert(m_cachePayload.AudioData.end(), activeData, activeData + activeSize);
-        }
-
         if (m_params && m_params->AudioCallback) {
             bool cont = m_params->AudioCallback(activeData, static_cast<uint32_t>(activeSize), m_params->UserContext);
             if (!cont) {
@@ -83,21 +67,6 @@ int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
         }
     }
     return size;
-}
-
-void AudioStreamHandler::CorrectCacheOffsets() {
-    for (auto& ev : m_cachePayload.Events) {
-        if (ev.AudioByteOffset >= m_leadingOffsetBytes) {
-            ev.AudioByteOffset -= m_leadingOffsetBytes;
-        } else {
-            ev.AudioByteOffset = 0;
-        }
-    }
-
-    std::sort(m_cachePayload.Events.begin(), m_cachePayload.Events.end(),
-        [](const ProviderSpeechEvent& a, const ProviderSpeechEvent& b) {
-            return a.AudioByteOffset < b.AudioByteOffset;
-        });
 }
 
 void AudioStreamHandler::OnWordBoundary(const SpeechSynthesisWordBoundaryEventArgs& e) {
@@ -112,9 +81,7 @@ void AudioStreamHandler::OnWordBoundary(const SpeechSynthesisWordBoundaryEventAr
     ev.TextLength = e.WordLength;
     ev.AudioByteOffset = (e.AudioOffset * 48) / 10000;
     
-    if (m_isCaching) {
-        m_cachePayload.Events.push_back(ev);
-    }
+    ev.AudioByteOffset = (e.AudioOffset * 48) / 10000;
     
     if (!skipCallback) {
         m_params->MetaCallback(&ev, m_params->UserContext);
@@ -155,18 +122,9 @@ void AudioStreamHandler::OnBookmarkReached(const SpeechSynthesisBookmarkEventArg
     ev.Reserved = 0;
     
     if (!bookmarkName.empty()) {
-        if (m_isCaching) {
-            m_cachePayload.StringStore.push_back(std::u16string(reinterpret_cast<const char16_t*>(bookmarkName.c_str())));
-            ev.StringData = m_cachePayload.StringStore.back().c_str();
-        } else {
-            ev.StringData = reinterpret_cast<const char16_t*>(bookmarkName.c_str());
-        }
+        ev.StringData = reinterpret_cast<const char16_t*>(bookmarkName.c_str());
     } else {
         ev.StringData = nullptr;
-    }
-    
-    if (m_isCaching) {
-        m_cachePayload.Events.push_back(ev);
     }
 
     if (!skipCallback) {
@@ -198,7 +156,6 @@ std::shared_ptr<EmbeddedSpeechConfig> SynthesizerPool::CreateConfig() {
         paths.push_back(p);
     }
     decryptionKey = providerConfig.DecryptionKey;
-    s_enablePcmCache = providerConfig.EnablePcmCache;
 
     auto config = EmbeddedSpeechConfig::FromPaths(paths);
     config->SetSpeechSynthesisOutputFormat(SpeechSynthesisOutputFormat::Raw24Khz16BitMonoPcm);

@@ -166,7 +166,6 @@
     <ClInclude Include="SynthesizerPool.h" />
     <ClInclude Include="AzureEmbeddedSynthesizer.h" />
     <ClInclude Include="ConfigParser.h" />
-    <ClInclude Include="PcmCache.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
@@ -175,7 +174,6 @@
     <ClCompile Include="SynthesizerPool.cpp" />
     <ClCompile Include="AzureEmbeddedSynthesizer.cpp" />
     <ClCompile Include="ConfigParser.cpp" />
-    <ClCompile Include="PcmCache.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Create</PrecompiledHeader>

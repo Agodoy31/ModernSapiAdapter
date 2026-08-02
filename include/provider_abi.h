@@ -114,6 +114,8 @@ struct ProviderSpeakParams {
 typedef uint32_t (__stdcall* PFN_GET_PROVIDER_ABI_VERSION)(void);
 typedef bool     (__stdcall* PFN_GET_PROVIDER_AUDIO_FORMAT)(ProviderAudioFormat* format);
 typedef bool     (__stdcall* PFN_PROVIDER_SPEAK)(const ProviderSpeakParams* params);
+typedef void     (__stdcall* PFN_PROVIDER_INIT)(void);
+typedef void     (__stdcall* PFN_PROVIDER_SHUTDOWN)(void);
 
 #ifdef PROVIDER_EXPORTS
 extern "C" {
@@ -125,6 +127,12 @@ extern "C" {
 
     /** @brief Synthesizes speech synchronously using the provided parameters block. */
     __declspec(dllexport) bool     __stdcall ProviderSpeak(const ProviderSpeakParams* params);
+
+    /** @brief Optional. Initializes provider resources globally before first use. */
+    __declspec(dllexport) void     __stdcall ProviderInit(void);
+
+    /** @brief Optional. Safely spins down and releases all provider resources prior to unload. */
+    __declspec(dllexport) void     __stdcall ProviderShutdown(void);
 }
 #endif
 

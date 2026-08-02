@@ -51,13 +51,6 @@ bool VoiceManager::GenerateVoiceManifest(const std::wstring& outputDir) {
         enableLoggingItem["description"] = "If enabled, writes diagnostic traces to the local AppData directory.";
         configSchema.push_back(enableLoggingItem);
 
-        json enablePcmCacheItem;
-        enablePcmCacheItem["key"] = "EnablePcmCache";
-        enablePcmCacheItem["type"] = "boolean";
-        enablePcmCacheItem["displayName"] = "Enable PCM Cache";
-        enablePcmCacheItem["description"] = "If enabled, heavily boosts synthesis speeds by bypassing neural generation for repetitive navigation commands.";
-        configSchema.push_back(enablePcmCacheItem);
-
         root["configSchema"] = configSchema;
 
         std::vector<std::string> paths;

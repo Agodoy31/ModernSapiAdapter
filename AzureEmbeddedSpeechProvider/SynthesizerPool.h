@@ -10,7 +10,6 @@
 #include <memory>
 #include <mutex>
 #include "provider_abi.h"
-#include "PcmCache.h"
 
 class AudioStreamHandler : public Microsoft::CognitiveServices::Speech::Audio::PushAudioOutputStreamCallback {
 public:
@@ -21,7 +20,7 @@ public:
     void OnBookmarkReached(const Microsoft::CognitiveServices::Speech::SpeechSynthesisBookmarkEventArgs& e);
     void Close() override {}
 
-    void AttachContext(const ProviderSpeakParams* params, std::vector<std::pair<uint32_t, uint32_t>> offsetMap, bool enableCaching, const CacheKey& cacheKey);
+    void AttachContext(const ProviderSpeakParams* params, std::vector<std::pair<uint32_t, uint32_t>> offsetMap);
     void DetachContext(bool wasCancelled);
 
 private:
@@ -31,11 +30,6 @@ private:
     bool m_hasEncounteredAudio{false};
     size_t m_leadingOffsetBytes{0};
 
-    bool m_isCaching{false};
-
-    void CorrectCacheOffsets();
-    CacheKey m_cacheKey;
-    CachePayload m_cachePayload;
 };
 
 struct PooledSynthesizer {
@@ -55,7 +49,7 @@ public:
 
     static void ReleaseSynthesizer(std::shared_ptr<PooledSynthesizer> pooledSynth);
 
-    static bool IsCacheEnabled() { return s_enablePcmCache; }
+
 
 private:
     static void Initialize();
@@ -63,7 +57,6 @@ private:
 
     static std::mutex s_mutex;
     static std::shared_ptr<Microsoft::CognitiveServices::Speech::EmbeddedSpeechConfig> s_config;
-    static bool s_enablePcmCache;
 
     static std::mutex s_poolMutex;
     static std::condition_variable s_poolCondition;

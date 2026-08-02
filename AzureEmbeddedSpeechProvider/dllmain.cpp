@@ -4,7 +4,6 @@
 #include "AzureEmbeddedSynthesizer.h"
 #include "Logger.h"
 #include "VoiceManager.h"
-#include "PcmCache.h"
 
 #define PROVIDER_EXPORTS
 
@@ -12,7 +11,6 @@ void GlobalLazyInit() {
     static std::once_flag s_initFlag;
     std::call_once(s_initFlag, []() {
         LogInit();
-        PcmCache::LoadFromDisk();
     });
 }
 
@@ -35,17 +33,25 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
     case DLL_THREAD_DETACH:
         break;
     case DLL_PROCESS_DETACH:
-        if (lpReserved == nullptr) {
-            SynthesizerPool::Shutdown();
-            PcmCache::SaveToDisk();
-            LogShutdown();
-        }
+        // Intentional Fallthrough: Do not execute shutdown logic here to prevent loader lock deadlocks.
+        // CoreEngine will explicitly call ProviderShutdown() before FreeLibrary.
         break;
     }
     return TRUE;
 }
 
 extern "C" {
+
+    __declspec(dllexport) void __stdcall ProviderInit(void)
+    {
+        GlobalLazyInit();
+    }
+
+    __declspec(dllexport) void __stdcall ProviderShutdown(void)
+    {
+        SynthesizerPool::Shutdown();
+        LogShutdown();
+    }
 
     __declspec(dllexport) uint32_t __stdcall GetProviderAbiVersion(void)
     {

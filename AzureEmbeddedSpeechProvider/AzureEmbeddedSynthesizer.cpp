@@ -3,7 +3,6 @@
 #include "SynthesizerPool.h"
 #include "Logger.h"
 #include "../SapiSsmlParser.Cpp/SapiSsmlParser.h"
-#include "PcmCache.h"
 #include <algorithm>
 #include <future>
 #include <atomic>
@@ -49,76 +48,7 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
 
     LogInfo("Generated SSML: %s", ssmlUtf8.c_str());
 
-    uint32_t totalRawChars = 0;
-    for (uint32_t i = 0; i < params->FragmentCount; ++i) {
-        totalRawChars += params->Fragments[i].TextLength;
-    }
-    
-    bool isCachingCandidate = SynthesizerPool::IsCacheEnabled() && (totalRawChars > 0 && totalRawChars <= 48);
-    CacheKey cacheKey = {};
-    if (isCachingCandidate && params->FragmentCount > 0) {
-        cacheKey.VoiceName = voiceName;
-        cacheKey.Rate = (int)params->Fragments[0].Rate;
-        cacheKey.Pitch = (int)params->Fragments[0].Pitch;
-        cacheKey.Volume = (int)params->Fragments[0].Volume;
-        cacheKey.Text = parseResult.SsmlString;
 
-        std::shared_ptr<const CachePayload> payload;
-        if (PcmCache::TryGet(cacheKey, payload)) {
-            LogInfo("AzureEmbeddedSynthesizer::Speak Cache HIT for '%s'. Bypassing Azure SDK.", ssmlUtf8.c_str());
-            
-            size_t audioChunks = payload->AudioData.size() / 4096;
-            size_t remainder = payload->AudioData.size() % 4096;
-            size_t offset = 0;
-
-
-            // Replay events safely: we'll fire events BEFORE the audio chunk that crosses their timestamp
-            if (params->MetaCallback) {
-                uint32_t currentAudioOffset = 0;
-                size_t currentEventIdx = 0;
-                
-                while (offset < payload->AudioData.size()) {
-                    if (params->pAbortFlag && *params->pAbortFlag) return true;
-
-                    uint32_t chunkSize = (uint32_t)std::min<size_t>(4096, payload->AudioData.size() - offset);
-                    
-                    while (currentEventIdx < payload->Events.size() && 
-                           payload->Events[currentEventIdx].AudioByteOffset <= currentAudioOffset + chunkSize) {
-                        params->MetaCallback(&payload->Events[currentEventIdx], params->UserContext);
-                        currentEventIdx++;
-                    }
-
-                    if (params->AudioCallback) {
-                        if (!params->AudioCallback(payload->AudioData.data() + offset, chunkSize, params->UserContext)) {
-                            return true; // Aborted by SAPI
-                        }
-                    }
-                    offset += chunkSize;
-                    currentAudioOffset += chunkSize;
-                }
-                
-                // Fire any remaining trailing events
-                while (currentEventIdx < payload->Events.size()) {
-                    params->MetaCallback(&payload->Events[currentEventIdx], params->UserContext);
-                    currentEventIdx++;
-                }
-            } else if (params->AudioCallback && !payload->AudioData.empty()) {
-                size_t noMetaOffset = 0;
-                while (noMetaOffset < payload->AudioData.size()) {
-                    if (params->pAbortFlag && *params->pAbortFlag) return true;
-                    uint32_t chunkSize = (uint32_t)std::min<size_t>(4096, payload->AudioData.size() - noMetaOffset);
-                    if (!params->AudioCallback(payload->AudioData.data() + noMetaOffset, chunkSize, params->UserContext)) {
-                        return true;
-                    }
-                    noMetaOffset += chunkSize;
-                }
-            }
-
-            return true;
-        }
-        
-        LogInfo("AzureEmbeddedSynthesizer::Speak Cache MISS for '%s'. Proceeding to synthesis.", ssmlUtf8.c_str());
-    }
 
     std::shared_ptr<PooledSynthesizer> pooledSynth;
 
@@ -143,7 +73,7 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
     auto synth = pooledSynth->synth;
     auto streamHandler = pooledSynth->streamHandler;
 
-    streamHandler->AttachContext(params, std::move(parseResult.OffsetMap), isCachingCandidate, cacheKey);
+    streamHandler->AttachContext(params, std::move(parseResult.OffsetMap));
 
     try {
         auto future = synth->SpeakSsmlAsync(ssmlUtf8);
@@ -188,6 +118,7 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
 
         return true;
     } catch (const std::exception& e) {
+        streamHandler->DetachContext(true);
         LogError("SpeakSsmlAsync threw: %s", e.what());
         return false;
     }

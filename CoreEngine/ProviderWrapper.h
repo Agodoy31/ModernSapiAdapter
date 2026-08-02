@@ -29,5 +29,7 @@ private:
     PFN_GET_PROVIDER_ABI_VERSION m_pfnGetVersion = nullptr;
     PFN_GET_PROVIDER_AUDIO_FORMAT m_pfnGetAudioFormat = nullptr;
     PFN_PROVIDER_SPEAK m_pfnSpeak = nullptr;
+    PFN_PROVIDER_INIT m_pfnInit = nullptr;
+    PFN_PROVIDER_SHUTDOWN m_pfnShutdown = nullptr;
 };
 

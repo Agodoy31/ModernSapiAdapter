@@ -61,14 +61,22 @@ void SpeechWorker::ThreadProc(std::vector<char16_t> backingBuffer, std::vector<P
 
 bool __stdcall SpeechWorker::AudioCallback(const uint8_t* pAudioBytes, uint32_t byteCount, void* ctx)
 {
-    auto* worker = static_cast<SpeechWorker*>(ctx);
-    if (!worker || worker->m_abortFlag) return false;
-    return worker->m_pEngine->OnAudioData(pAudioBytes, byteCount);
+    try {
+        auto* worker = static_cast<SpeechWorker*>(ctx);
+        if (!worker || worker->m_abortFlag) return false;
+        return worker->m_pEngine->OnAudioData(pAudioBytes, byteCount);
+    } catch (...) {
+        return false;
+    }
 }
 
 void __stdcall SpeechWorker::MetaCallback(const ProviderSpeechEvent* pEvent, void* ctx)
 {
-    auto* worker = static_cast<SpeechWorker*>(ctx);
-    if (!worker || worker->m_abortFlag) return;
-    worker->m_pEngine->OnSpeechEvent(pEvent);
+    try {
+        auto* worker = static_cast<SpeechWorker*>(ctx);
+        if (!worker || worker->m_abortFlag) return;
+        worker->m_pEngine->OnSpeechEvent(pEvent);
+    } catch (...) {
+        // Suppress exceptions crossing ABI boundary
+    }
 }

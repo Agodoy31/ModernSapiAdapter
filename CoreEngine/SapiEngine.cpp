@@ -14,6 +14,10 @@ CSapiEngine::~CSapiEngine()
     if (m_pWorker)
     {
         m_pWorker->Stop();
+        {
+            std::lock_guard<std::mutex> lock(m_siteMutex);
+            m_cpSite = nullptr;
+        }
         m_pWorker->WaitUntilFinished();
     }
     

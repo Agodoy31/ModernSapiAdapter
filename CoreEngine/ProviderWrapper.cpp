@@ -14,6 +14,8 @@ HRESULT ProviderWrapper::Load(const std::wstring& dllPath)
     m_pfnGetVersion = (PFN_GET_PROVIDER_ABI_VERSION)GetProcAddress(m_module.get(), "GetProviderAbiVersion");
     m_pfnGetAudioFormat = (PFN_GET_PROVIDER_AUDIO_FORMAT)GetProcAddress(m_module.get(), "GetProviderAudioFormat");
     m_pfnSpeak = (PFN_PROVIDER_SPEAK)GetProcAddress(m_module.get(), "ProviderSpeak");
+    m_pfnInit = (PFN_PROVIDER_INIT)GetProcAddress(m_module.get(), "ProviderInit");
+    m_pfnShutdown = (PFN_PROVIDER_SHUTDOWN)GetProcAddress(m_module.get(), "ProviderShutdown");
 
     if (!m_pfnGetVersion || !m_pfnGetAudioFormat || !m_pfnSpeak)
     {
@@ -28,14 +30,26 @@ HRESULT ProviderWrapper::Load(const std::wstring& dllPath)
         return E_INVALIDARG;
     }
 
+    if (m_pfnInit)
+    {
+        m_pfnInit();
+    }
+
     return S_OK;
 }
 
 void ProviderWrapper::Unload()
 {
+    if (m_pfnShutdown)
+    {
+        m_pfnShutdown();
+    }
+
     m_pfnGetVersion = nullptr;
     m_pfnGetAudioFormat = nullptr;
     m_pfnSpeak = nullptr;
+    m_pfnInit = nullptr;
+    m_pfnShutdown = nullptr;
     m_module.reset();
 }
 
