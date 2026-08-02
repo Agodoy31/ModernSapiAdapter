@@ -79,7 +79,7 @@ int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
 
     size_t leadingOffset = 0;
     if (!m_hasEncounteredAudio) {
-        leadingOffset = PcmTrimmer::FindLeadingAudioOffset(dataBuffer, size, 5);
+        leadingOffset = PcmTrimmer::FindLeadingAudioOffset(dataBuffer, size, 50);
         if (leadingOffset < size) {
             m_hasEncounteredAudio = true;
             m_leadingOffsetBytes = leadingOffset;

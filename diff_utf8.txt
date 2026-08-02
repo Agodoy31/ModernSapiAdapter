@@ -1,0 +1,545 @@
+﻿diff --git a/AzureEmbeddedSpeechProvider/AzureEmbeddedSynthesizer.cpp b/AzureEmbeddedSpeechProvider/AzureEmbeddedSynthesizer.cpp
+index ecad52e..4851380 100644
+--- a/AzureEmbeddedSpeechProvider/AzureEmbeddedSynthesizer.cpp
++++ b/AzureEmbeddedSpeechProvider/AzureEmbeddedSynthesizer.cpp
+@@ -11,7 +11,6 @@
+ using namespace Microsoft::CognitiveServices::Speech;
+ 
+ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
+-    GlobalLazyInit();
+     if (!params || !params->VoiceModel) {
+         LogError("AzureEmbeddedSynthesizer::Speak failed: params or VoiceModel is null.");
+         return false;
+@@ -64,14 +63,12 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
+         cacheKey.Text = parseResult.SsmlString;
+ 
+         std::shared_ptr<const CachePayload> payload;
++        auto cacheStartTime = std::chrono::steady_clock::now();
+         if (PcmCache::TryGet(cacheKey, payload)) {
+             LogInfo("AzureEmbeddedSynthesizer::Speak Cache HIT for '%s'. Bypassing Azure SDK.", ssmlUtf8.c_str());
+             
+-            size_t audioChunks = payload->AudioData.size() / 4096;
+-            size_t remainder = payload->AudioData.size() % 4096;
+             size_t offset = 0;
+ 
+-
+             // Replay events safely: we'll fire events BEFORE the audio chunk that crosses their timestamp
+             if (params->MetaCallback) {
+                 uint32_t currentAudioOffset = 0;
+@@ -88,6 +85,12 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
+                         currentEventIdx++;
+                     }
+ 
++                    if (offset == 0) {
++                        auto now = std::chrono::steady_clock::now();
++                        auto latency = std::chrono::duration_cast<std::chrono::milliseconds>(now - cacheStartTime).count();
++                        LogInfo("AzureEmbeddedSynthesizer::Speak: First cached PCM byte generated! Cache Latency: %lld ms", latency);
++                    }
++
+                     if (params->AudioCallback) {
+                         if (!params->AudioCallback(payload->AudioData.data() + offset, chunkSize, params->UserContext)) {
+                             return true; // Aborted by SAPI
+@@ -106,6 +109,13 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
+                 size_t noMetaOffset = 0;
+                 while (noMetaOffset < payload->AudioData.size()) {
+                     if (params->pAbortFlag && *params->pAbortFlag) return true;
++                    
++                    if (noMetaOffset == 0) {
++                        auto now = std::chrono::steady_clock::now();
++                        auto latency = std::chrono::duration_cast<std::chrono::milliseconds>(now - cacheStartTime).count();
++                        LogInfo("AzureEmbeddedSynthesizer::Speak: First cached PCM byte generated! Cache Latency: %lld ms", latency);
++                    }
++
+                     uint32_t chunkSize = (uint32_t)std::min<size_t>(4096, payload->AudioData.size() - noMetaOffset);
+                     if (!params->AudioCallback(payload->AudioData.data() + noMetaOffset, chunkSize, params->UserContext)) {
+                         return true;
+@@ -120,63 +130,57 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
+         LogInfo("AzureEmbeddedSynthesizer::Speak Cache MISS for '%s'. Proceeding to synthesis.", ssmlUtf8.c_str());
+     }
+ 
+-    auto streamHandler = std::make_shared<AudioStreamHandler>();
+-    streamHandler->AttachContext(params, std::move(parseResult.OffsetMap), isCachingCandidate, cacheKey);
+-    std::shared_ptr<SpeechSynthesizer> synth;
++    std::shared_ptr<PooledSynthesizer> pooledSynth;
+ 
+     try {
+-        synth = SynthesizerPool::CreateSynthesizer(voiceName, streamHandler);
++        pooledSynth = SynthesizerPool::AcquireSynthesizer(voiceName, params->pAbortFlag);
+     } catch (const std::exception& e) {
+-        LogError("Failed to create synthesizer for %ls: %s", voiceName.c_str(), e.what());
++        LogError("Failed to acquire synthesizer for %ls: %s", voiceName.c_str(), e.what());
+         return false;
+     }
+ 
+-    if (!synth) return false;
+-
+-    auto synthesisStarted = std::make_shared<std::atomic<bool>>(false);
+-    synth->SynthesisStarted += [synthesisStarted](const SpeechSynthesisEventArgs&) {
+-        synthesisStarted->store(true, std::memory_order_relaxed);
+-    };
+-
+-    synth->WordBoundary += [streamHandler](const SpeechSynthesisWordBoundaryEventArgs& e) {
+-        streamHandler->OnWordBoundary(e);
+-    };
++    if (!pooledSynth) {
++        // Pool was empty (e.g. user aborted while waiting for an engine to become idle)
++        return true; 
++    }
+ 
+-    synth->BookmarkReached += [streamHandler](const SpeechSynthesisBookmarkEventArgs& e) {
+-        streamHandler->OnBookmarkReached(e);
+-    };
++    pooledSynth->StreamHandler->AttachContext(params, std::move(parseResult.OffsetMap), isCachingCandidate, cacheKey);
++    pooledSynth->SynthesisStartedFlag.store(false, std::memory_order_relaxed);
+ 
+     try {
+-        auto future = synth->SpeakSsmlAsync(ssmlUtf8);
++        auto future = pooledSynth->Synthesizer->SpeakSsmlAsync(ssmlUtf8);
+         while (future.wait_for(std::chrono::milliseconds(10)) == std::future_status::timeout) {
+             if (params->pAbortFlag && *params->pAbortFlag) {
+-                if (isCachingCandidate) {
+-                    LogInfo("AzureEmbeddedSynthesizer::Speak abort flag detected. Initiating Shadow Caching in background.");
+-                } else {
+-                    LogInfo("AzureEmbeddedSynthesizer::Speak abort flag detected, performing fire-and-forget cancellation.");
+-                }
++                LogInfo("AzureEmbeddedSynthesizer::Speak abort flag detected, tearing down Azure Engine.");
+                 
+-                streamHandler->DetachContext(true, isCachingCandidate);
++                // Fire and forget cancellation. No more shadow caching!
++                pooledSynth->StreamHandler->DetachContext(true, false);
+                 
+-                std::thread([synth, synthesisStarted, f = std::move(future), streamHandler, isCachingCandidate]() mutable {
+-                    while (synthesisStarted && !synthesisStarted->load(std::memory_order_relaxed)) {
+-                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
++                std::thread([pooledSynth, f = std::move(future)]() mutable {
++                    // PIN THE DLL IN MEMORY: Prevent FreeLibrary from unloading us while this thread is running!
++                    HMODULE hModule = NULL;
++                    GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, 
++                                      reinterpret_cast<LPCWSTR>(SynthesizerPool::ReleaseSynthesizer), 
++                                      &hModule);
++
++                    // Wait for either SynthesisStarted to fire, OR the future to complete/error
++                    while (!pooledSynth->SynthesisStartedFlag.load(std::memory_order_relaxed)) {
++                        if (f.wait_for(std::chrono::milliseconds(1)) == std::future_status::ready) {
++                            break; // The future resolved (error or instantly finished) without firing SynthesisStarted
++                        }
++                    }
++                    
++                    // Only attempt to stop if it actually started
++                    if (pooledSynth->SynthesisStartedFlag.load(std::memory_order_relaxed)) {
++                        try { pooledSynth->Synthesizer->StopSpeakingAsync().wait(); } catch (...) {}
+                     }
+                     
+-                    if (isCachingCandidate) {
+-                        try {
+-                            auto result = f.get();
+-                            if (result && result->Reason == ResultReason::SynthesizingAudioCompleted) {
+-                                streamHandler->FinalizeShadowCache();
+-                            }
+-                        } catch (...) {}
+-                    } else {
+-                        try {
+-                            synth->StopSpeakingAsync().wait();
+-                        } catch (...) {}
+-                        try {
+-                            f.wait();
+-                        } catch (...) {}
++                    try { f.wait(); } catch (...) {}
++                    
++                    SynthesizerPool::ReleaseSynthesizer(pooledSynth);
++
++                    if (hModule) {
++                        FreeLibraryAndExitThread(hModule, 0);
+                     }
+                 }).detach();
+                 return true;
+@@ -185,8 +189,10 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
+ 
+         auto result = future.get();
+         bool isCancelled = (result && result->Reason == ResultReason::Canceled);
+-        streamHandler->DetachContext(isCancelled);
++        pooledSynth->StreamHandler->DetachContext(isCancelled);
+         
++        SynthesizerPool::ReleaseSynthesizer(pooledSynth);
++
+         if (isCancelled) {
+             auto cancellation = SpeechSynthesisCancellationDetails::FromResult(result);
+             LogError("Synthesis Canceled: %s", cancellation->ErrorDetails.c_str());
+@@ -194,6 +200,7 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
+         }
+     } catch (const std::exception& e) {
+         LogError("SpeakSsmlAsync threw: %s", e.what());
++        SynthesizerPool::ReleaseSynthesizer(pooledSynth);
+         return false;
+     }
+     
+diff --git a/AzureEmbeddedSpeechProvider/SynthesizerPool.cpp b/AzureEmbeddedSpeechProvider/SynthesizerPool.cpp
+index cdbf1fe..c99c7ca 100644
+--- a/AzureEmbeddedSpeechProvider/SynthesizerPool.cpp
++++ b/AzureEmbeddedSpeechProvider/SynthesizerPool.cpp
+@@ -8,8 +8,12 @@ using namespace Microsoft::CognitiveServices::Speech;
+ using namespace winrt::Windows::Management::Deployment;
+ 
+ std::mutex SynthesizerPool::s_mutex;
+-std::shared_ptr<EmbeddedSpeechConfig> SynthesizerPool::s_config = nullptr;
+-bool SynthesizerPool::s_enablePcmCache = true;
++std::shared_ptr<Microsoft::CognitiveServices::Speech::EmbeddedSpeechConfig> SynthesizerPool::s_config;
++bool SynthesizerPool::s_enablePcmCache = false;
++
++std::mutex SynthesizerPool::s_poolMutex;
++std::condition_variable SynthesizerPool::s_poolCondition;
++std::vector<std::shared_ptr<PooledSynthesizer>> SynthesizerPool::s_pool;
+ 
+ 
+ 
+@@ -42,6 +46,8 @@ void AudioStreamHandler::AttachContext(const ProviderSpeakParams* params, std::v
+     m_cachePayload.AudioData.clear();
+     m_cachePayload.Events.clear();
+     m_cachePayload.StringStore.clear();
++
++    m_synthesisStartTime = std::chrono::steady_clock::now();
+ }
+ 
+ void AudioStreamHandler::DetachContext(bool wasCancelled, bool allowShadowCache) {
+@@ -75,14 +81,18 @@ int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
+     std::lock_guard<std::mutex> lock(m_contextMutex);
+     if (!m_params && !m_isShadowCaching) return 0;
+ 
+-
+-
+     size_t leadingOffset = 0;
+     if (!m_hasEncounteredAudio) {
+-        leadingOffset = PcmTrimmer::FindLeadingAudioOffset(dataBuffer, size, 5);
++        // Increased threshold from 5 to 50 (approx -56 dBFS) to properly trim
++        // neural "room tone" and completely eliminate dead sound before the voice starts.
++        leadingOffset = PcmTrimmer::FindLeadingAudioOffset(dataBuffer, size, 50);
+         if (leadingOffset < size) {
+             m_hasEncounteredAudio = true;
+             m_leadingOffsetBytes = leadingOffset;
++
++            auto now = std::chrono::steady_clock::now();
++            auto latency = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_synthesisStartTime).count();
++            LogInfo("AudioStreamHandler: First PCM byte generated! SDK Engine Latency: %lld ms", latency);
+         }
+     }
+ 
+@@ -246,28 +256,114 @@ void SynthesizerPool::Initialize() {
+ }
+ 
+ void SynthesizerPool::Shutdown() {
++    {
++        std::lock_guard<std::mutex> poolLock(s_poolMutex);
++        s_pool.clear();
++    }
+     std::lock_guard<std::mutex> lock(s_mutex);
+     s_config = nullptr;
+     LogInfo("SynthesizerPool shutdown completed.");
+ }
+ 
+-std::shared_ptr<SpeechSynthesizer> SynthesizerPool::CreateSynthesizer(
+-    const std::wstring& voiceName,
+-    std::shared_ptr<AudioStreamHandler> streamHandler) {
++std::shared_ptr<PooledSynthesizer> SynthesizerPool::AcquireSynthesizer(
++    const std::wstring& voiceName, 
++    const volatile uint32_t* pAbortFlag) {
++
++    while (true) {
++        std::unique_lock<std::mutex> poolLock(s_poolMutex);
++
++        // 1. Check if we already have an engine for this voice in the pool
++        int engineCount = 0;
++        for (auto& synth : s_pool) {
++            if (synth->VoiceName == voiceName) {
++                engineCount++;
++                if (!synth->IsBusy) {
++                    synth->IsBusy = true;
++                    LogInfo("SynthesizerPool: Acquired idle engine for %ls", voiceName.c_str());
++                    return synth;
++                }
++            }
++        }
+ 
+-    std::lock_guard<std::mutex> lock(s_mutex);
+-    if (!s_config) {
+-        Initialize();
+-    }
++        // 2. If all engines for this voice are busy, but we haven't reached the limit, create a new one
++        if (engineCount < MAX_ENGINES_PER_VOICE) {
++            // Unlock pool while we hit the heavy Azure SDK init
++            poolLock.unlock();
+ 
+-    std::string key = s_config->GetProperty("EmbeddedSpeech_DecryptionKey");
+-    s_config->SetSpeechSynthesisVoice(WStringToUTF8(voiceName), "Key:" + key);
++            std::lock_guard<std::mutex> lock(s_mutex);
+ 
+-    auto audioConfig = Audio::AudioConfig::FromStreamOutput(
+-        Audio::AudioOutputStream::CreatePushStream(streamHandler));
++            // Double check engine count in case another thread created one while we waited for s_mutex
++            poolLock.lock();
++            engineCount = 0;
++            for (auto& synth : s_pool) {
++                if (synth->VoiceName == voiceName) {
++                    engineCount++;
++                }
++            }
++            if (engineCount >= MAX_ENGINES_PER_VOICE) {
++                poolLock.unlock();
++                continue; // Restart loop to either acquire the newly created engine or wait on it
++            }
++            poolLock.unlock();
++
++            if (!s_config) {
++                Initialize();
++            }
+ 
+-    auto synth = SpeechSynthesizer::FromConfig(s_config, audioConfig);
+-    LogInfo("SynthesizerPool: Created request-scoped synthesizer for voice: %ls", voiceName.c_str());
++            std::string key = s_config->GetProperty("EmbeddedSpeech_DecryptionKey");
++            s_config->SetSpeechSynthesisVoice(WStringToUTF8(voiceName), "Key:" + key);
++
++            auto streamHandler = std::make_shared<AudioStreamHandler>();
++            auto audioConfig = Audio::AudioConfig::FromStreamOutput(
++                Audio::AudioOutputStream::CreatePushStream(streamHandler));
++
++            auto synth = SpeechSynthesizer::FromConfig(s_config, audioConfig);
++            
++            auto pooledSynth = std::make_shared<PooledSynthesizer>();
++            pooledSynth->VoiceName = voiceName;
++            pooledSynth->Synthesizer = synth;
++            pooledSynth->StreamHandler = streamHandler;
++            pooledSynth->IsBusy = true;
++
++            // Hook events once per engine lifetime
++            synth->WordBoundary += [streamHandler](const SpeechSynthesisWordBoundaryEventArgs& e) {
++                streamHandler->OnWordBoundary(e);
++            };
++            synth->BookmarkReached += [streamHandler](const SpeechSynthesisBookmarkEventArgs& e) {
++                streamHandler->OnBookmarkReached(e);
++            };
++            synth->SynthesisStarted += [pooledSynth_weak = std::weak_ptr<PooledSynthesizer>(pooledSynth)](const SpeechSynthesisEventArgs&) {
++                if (auto p = pooledSynth_weak.lock()) {
++                    p->SynthesisStartedFlag.store(true, std::memory_order_relaxed);
++                }
++            };
++
++            LogInfo("SynthesizerPool: Created new engine for %ls (Total: %d)", voiceName.c_str(), engineCount + 1);
++
++            poolLock.lock();
++            s_pool.push_back(pooledSynth);
++            return pooledSynth;
++        }
+ 
+-    return synth;
++        // 3. Ping-Pong buffer is full. Block and wait for one to become idle.
++        LogInfo("SynthesizerPool: Waiting for an engine to become idle for %ls", voiceName.c_str());
++        
++        // Wait on the global pool condition (with a timeout so we can occasionally check the abort flag)
++        s_poolCondition.wait_for(poolLock, std::chrono::milliseconds(10));
++        
++        if (pAbortFlag && *pAbortFlag) {
++            LogInfo("SynthesizerPool: Aborted while waiting for engine %ls", voiceName.c_str());
++            return nullptr;
++        }
++    }
++    
++    return nullptr;
++}
++
++void SynthesizerPool::ReleaseSynthesizer(std::shared_ptr<PooledSynthesizer> synth) {
++    if (!synth) return;
++    
++    std::lock_guard<std::mutex> lock(s_poolMutex);
++    synth->IsBusy = false;
++    s_poolCondition.notify_one();
+ }
+diff --git a/AzureEmbeddedSpeechProvider/SynthesizerPool.h b/AzureEmbeddedSpeechProvider/SynthesizerPool.h
+index 3ceb314..ceb81e3 100644
+--- a/AzureEmbeddedSpeechProvider/SynthesizerPool.h
++++ b/AzureEmbeddedSpeechProvider/SynthesizerPool.h
+@@ -38,23 +38,50 @@ private:
+     void CorrectCacheOffsets();
+     CacheKey m_cacheKey;
+     CachePayload m_cachePayload;
++
++    std::chrono::steady_clock::time_point m_synthesisStartTime;
++};
++
++#include <condition_variable>
++#include <atomic>
++
++struct PooledSynthesizer {
++    std::wstring VoiceName;
++    std::shared_ptr<Microsoft::CognitiveServices::Speech::SpeechSynthesizer> Synthesizer;
++    std::shared_ptr<AudioStreamHandler> StreamHandler;
++    
++    // Concurrency control for Ping-Pong architecture
++    bool IsBusy{false}; // Protected by s_poolMutex
++
++    // To avoid duplicate event handlers, we store the flag here and hook the event once
++    std::atomic<bool> SynthesisStartedFlag{false};
+ };
+ 
+ class SynthesizerPool {
+ public:
+     static void Shutdown();
+ 
+-    static std::shared_ptr<Microsoft::CognitiveServices::Speech::SpeechSynthesizer> CreateSynthesizer(
+-        const std::wstring& voiceName,
+-        std::shared_ptr<AudioStreamHandler> streamHandler);
++    // Max number of engines allowed per voice (Ping-Pong buffer)
++    static constexpr size_t MAX_ENGINES_PER_VOICE = 2;
++
++    static std::shared_ptr<PooledSynthesizer> AcquireSynthesizer(
++        const std::wstring& voiceName, 
++        const volatile uint32_t* pAbortFlag);
++
++    static void ReleaseSynthesizer(std::shared_ptr<PooledSynthesizer> synth);
+ 
+     static bool IsCacheEnabled() { return s_enablePcmCache; }
+ 
+-private:
+     static void Initialize();
++
++private:
+     static std::shared_ptr<Microsoft::CognitiveServices::Speech::EmbeddedSpeechConfig> CreateConfig();
+ 
+-    static std::mutex s_mutex;
++    static std::mutex s_mutex; // Protects global config initialization
+     static std::shared_ptr<Microsoft::CognitiveServices::Speech::EmbeddedSpeechConfig> s_config;
+     static bool s_enablePcmCache;
++
++    static std::mutex s_poolMutex; // Protects the pool array and IsBusy flags
++    static std::condition_variable s_poolCondition; // Wakes threads when an engine is released
++    static std::vector<std::shared_ptr<PooledSynthesizer>> s_pool;
+ };
+diff --git a/AzureEmbeddedSpeechProvider/VoiceManager.cpp b/AzureEmbeddedSpeechProvider/VoiceManager.cpp
+index b04c8b0..8f1a13d 100644
+--- a/AzureEmbeddedSpeechProvider/VoiceManager.cpp
++++ b/AzureEmbeddedSpeechProvider/VoiceManager.cpp
+@@ -22,7 +22,7 @@ static std::string GetVoiceAge(const std::string& shortName) {
+ }
+ 
+ bool VoiceManager::GenerateVoiceManifest(const std::wstring& outputDir) {
+-    GlobalLazyInit();
++    ProviderEagerInit();
+     try {
+         json root;
+         root["providerName"] = "AzureEmbeddedSpeechProvider";
+diff --git a/AzureEmbeddedSpeechProvider/dllmain.cpp b/AzureEmbeddedSpeechProvider/dllmain.cpp
+index 889f9c4..6bf20db 100644
+--- a/AzureEmbeddedSpeechProvider/dllmain.cpp
++++ b/AzureEmbeddedSpeechProvider/dllmain.cpp
+@@ -8,11 +8,14 @@
+ 
+ #define PROVIDER_EXPORTS
+ 
+-void GlobalLazyInit() {
++void ProviderEagerInit() {
+     static std::once_flag s_initFlag;
+     std::call_once(s_initFlag, []() {
+         LogInit();
+-        PcmCache::LoadFromDisk();
++        if (SynthesizerPool::IsCacheEnabled()) {
++            PcmCache::LoadFromDisk();
++        }
++        SynthesizerPool::Initialize(); // Eagerly load Azure ONNX models here
+     });
+ }
+ 
+@@ -28,8 +31,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
+         break;
+     case DLL_PROCESS_DETACH:
+         if (lpReserved == nullptr) {
+-            SynthesizerPool::Shutdown();
+-            PcmCache::SaveToDisk();
++            // Note: We deliberately do NOT call SynthesizerPool::Shutdown() here 
++            // to avoid a loader lock deadlock with Azure SDK threads on FreeLibrary.
++            // COM keeps the DLL loaded while JAWS is active, and the OS reclaims 
++            // the background threads gracefully when JAWS process terminates.
++            
++            if (SynthesizerPool::IsCacheEnabled()) {
++                PcmCache::SaveToDisk();
++            }
+             LogShutdown();
+         }
+         break;
+@@ -46,6 +55,8 @@ extern "C" {
+ 
+     __declspec(dllexport) bool __stdcall GetProviderAudioFormat(ProviderAudioFormat* format)
+     {
++        ProviderEagerInit(); // Eagerly block JAWS's voice setup to hide the ONNX load delay
++
+         if (!format) return false;
+         format->SampleRate = 24000;
+         format->BitsPerSample = 16;
+diff --git a/AzureEmbeddedSpeechProvider/pch.h b/AzureEmbeddedSpeechProvider/pch.h
+index 7e778dd..b69ae86 100644
+--- a/AzureEmbeddedSpeechProvider/pch.h
++++ b/AzureEmbeddedSpeechProvider/pch.h
+@@ -38,7 +38,7 @@
+ #include <provider_abi.h>
+ #include "../SapiSsmlParser.Cpp/SapiSsmlParser.h"
+ 
+-void GlobalLazyInit();
++void ProviderEagerInit();
+ 
+ inline std::string WStringToUTF8(const std::wstring& wstr) {
+     if (wstr.empty()) return {};
+diff --git a/CoreEngine/SapiEngine.cpp b/CoreEngine/SapiEngine.cpp
+index d03caf8..3ab4d2f 100644
+--- a/CoreEngine/SapiEngine.cpp
++++ b/CoreEngine/SapiEngine.cpp
+@@ -83,6 +83,8 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
+                                   const SPVTEXTFRAG* pTextFragList,
+                                   ISpTTSEngineSite* pOutputSite) noexcept try
+ {
++    std::lock_guard<std::mutex> speakLock(m_speakMutex);
++    
+     CoreLog(L"[CoreEngine] Speak called.");
+     if (!pOutputSite || !pTextFragList) return E_INVALIDARG;
+ 
+diff --git a/CoreEngine/SapiEngine.h b/CoreEngine/SapiEngine.h
+index 5ae49b7..197f613 100644
+--- a/CoreEngine/SapiEngine.h
++++ b/CoreEngine/SapiEngine.h
+@@ -40,6 +40,7 @@ private:
+     winrt::com_ptr<ISpObjectToken> m_cpToken;
+     winrt::com_ptr<ISpTTSEngineSite> m_cpSite;
+     std::mutex m_siteMutex;
++    std::mutex m_speakMutex;
+ 
+     std::unique_ptr<ProviderWrapper> m_pWrapper;
+     std::unique_ptr<SpeechWorker> m_pWorker;
+diff --git a/ModernSapiAdapter.slnx b/ModernSapiAdapter.slnx
+index b13cbad..651f127 100644
+--- a/ModernSapiAdapter.slnx
++++ b/ModernSapiAdapter.slnx
+@@ -8,6 +8,8 @@
+   </Project>
+   <Project Path="CoreEngine.Tests/CoreEngine.Tests.vcxproj" Id="1d72c1c4-adb8-4d19-9d76-14f7b8649573">
+     <Platform Project="x64" />
++    <Configuration Solution="Release|x64" Build="false" />
++    <Configuration Solution="Release|ARM64" Build="false" />
+   </Project>
+   <Project Path="CoreEngine/CoreEngine.vcxproj" Id="17ece6f7-00ac-432e-9bf9-01cefb4581b3" />
+   <Project Path="MockProvider/MockProvider.vcxproj" Id="5275e3dc-be43-4f0e-95d5-c7fc4d38a364">
+@@ -19,6 +21,8 @@
+   <Project Path="SapiManager/SapiManager.csproj" />
+   <Project Path="SapiSsmlParser.Cpp.Tests/SapiSsmlParser.Cpp.Tests.vcxproj" Id="d8622b2d-b5f3-40c9-a9c6-2e4b0501f048">
+     <Platform Project="x64" />
++    <Configuration Solution="Release|x64" Build="false" />
++    <Configuration Solution="Release|ARM64" Build="false" />
+   </Project>
+   <Project Path="SapiSsmlParser.Cpp/SapiSsmlParser.Cpp.vcxproj" Id="74a51726-222d-48a4-aeee-e94207526105">
+     <Platform Project="x64" />
+diff --git a/SapiSsmlParser.Cpp.Tests/pch.h b/SapiSsmlParser.Cpp.Tests/pch.h
+index 4cc951d..6ef6978 100644
+--- a/SapiSsmlParser.Cpp.Tests/pch.h
++++ b/SapiSsmlParser.Cpp.Tests/pch.h
+@@ -8,5 +8,5 @@
+ #include <windows.h>
+ #include <string>
+ #include <vector>
+-#include <provider_abi.h>
++#include "../include/provider_abi.h"
+ #include "gtest/gtest.h"
