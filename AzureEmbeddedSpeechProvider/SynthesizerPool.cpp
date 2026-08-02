@@ -36,7 +36,6 @@ void AudioStreamHandler::AttachContext(const ProviderSpeakParams* params, std::v
     m_isCaching = enableCaching;
     m_cacheKey = cacheKey;
     m_hasEncounteredAudio = false;
-    m_isShadowCaching = false;
     m_leadingOffsetBytes = 0;
     
     m_cachePayload.AudioData.clear();
@@ -44,16 +43,10 @@ void AudioStreamHandler::AttachContext(const ProviderSpeakParams* params, std::v
     m_cachePayload.StringStore.clear();
 }
 
-void AudioStreamHandler::DetachContext(bool wasCancelled, bool allowShadowCache) {
+void AudioStreamHandler::DetachContext(bool wasCancelled) {
     std::lock_guard<std::mutex> lock(m_contextMutex);
     m_params = nullptr;
     m_offsetMap.clear();
-
-    if (wasCancelled && allowShadowCache && m_isCaching) {
-        m_isShadowCaching = true;
-        LogInfo("AudioStreamHandler: Entering Shadow Caching mode. Silently recording background audio.");
-        return; // Don't put in cache yet! Wait for FinalizeShadowCache
-    }
 
     if (m_isCaching && m_hasEncounteredAudio && !wasCancelled) {
         CorrectCacheOffsets();
@@ -61,21 +54,9 @@ void AudioStreamHandler::DetachContext(bool wasCancelled, bool allowShadowCache)
     }
 }
 
-void AudioStreamHandler::FinalizeShadowCache() {
-    std::lock_guard<std::mutex> lock(m_contextMutex);
-    if (m_isShadowCaching && m_hasEncounteredAudio) {
-        LogInfo("AudioStreamHandler: Shadow Caching complete! Payload successfully persisted.");
-        CorrectCacheOffsets();
-        PcmCache::Put(m_cacheKey, std::make_shared<const CachePayload>(std::move(m_cachePayload)));
-        m_isShadowCaching = false;
-    }
-}
-
 int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
     std::lock_guard<std::mutex> lock(m_contextMutex);
-    if (!m_params && !m_isShadowCaching) return 0;
-
-
+    if (!m_params) return 0;
 
     size_t leadingOffset = 0;
     if (!m_hasEncounteredAudio) {
@@ -121,7 +102,7 @@ void AudioStreamHandler::CorrectCacheOffsets() {
 
 void AudioStreamHandler::OnWordBoundary(const SpeechSynthesisWordBoundaryEventArgs& e) {
     std::lock_guard<std::mutex> lock(m_contextMutex);
-    if (!m_params && !m_isShadowCaching) return;
+    if (!m_params) return;
 
     bool skipCallback = (!m_params || !m_params->MetaCallback);
 
@@ -142,7 +123,7 @@ void AudioStreamHandler::OnWordBoundary(const SpeechSynthesisWordBoundaryEventAr
 
 void AudioStreamHandler::OnBookmarkReached(const SpeechSynthesisBookmarkEventArgs& e) {
     std::lock_guard<std::mutex> lock(m_contextMutex);
-    if (!m_params && !m_isShadowCaching) return;
+    if (!m_params) return;
 
     bool skipCallback = (!m_params || !m_params->MetaCallback);
 
@@ -251,23 +232,74 @@ void SynthesizerPool::Shutdown() {
     LogInfo("SynthesizerPool shutdown completed.");
 }
 
-std::shared_ptr<SpeechSynthesizer> SynthesizerPool::CreateSynthesizer(
-    const std::wstring& voiceName,
-    std::shared_ptr<AudioStreamHandler> streamHandler) {
+std::mutex SynthesizerPool::s_poolMutex;
+std::condition_variable SynthesizerPool::s_poolCondition;
+std::vector<std::shared_ptr<PooledSynthesizer>> SynthesizerPool::s_pool;
 
-    std::lock_guard<std::mutex> lock(s_mutex);
+std::shared_ptr<PooledSynthesizer> SynthesizerPool::AcquireSynthesizer(
+    const std::wstring& voiceName,
+    const volatile uint32_t* pAbortFlag) {
+
+    std::unique_lock<std::mutex> lock(s_poolMutex);
+
     if (!s_config) {
         Initialize();
     }
 
-    std::string key = s_config->GetProperty("EmbeddedSpeech_DecryptionKey");
-    s_config->SetSpeechSynthesisVoice(WStringToUTF8(voiceName), "Key:" + key);
+    while (true) {
+        // Find an idle synthesizer for this voice
+        int voiceCount = 0;
+        for (auto& pooled : s_pool) {
+            if (pooled->voiceName == voiceName) {
+                voiceCount++;
+                if (!pooled->isBusy) {
+                    pooled->isBusy = true;
+                    return pooled;
+                }
+            }
+        }
 
-    auto audioConfig = Audio::AudioConfig::FromStreamOutput(
-        Audio::AudioOutputStream::CreatePushStream(streamHandler));
+        // If less than 2 exist for this voice, create one
+        if (voiceCount < 2) {
+            std::string key = s_config->GetProperty("EmbeddedSpeech_DecryptionKey");
+            s_config->SetSpeechSynthesisVoice(WStringToUTF8(voiceName), "Key:" + key);
 
-    auto synth = SpeechSynthesizer::FromConfig(s_config, audioConfig);
-    LogInfo("SynthesizerPool: Created request-scoped synthesizer for voice: %ls", voiceName.c_str());
+            auto streamHandler = std::make_shared<AudioStreamHandler>();
+            auto audioConfig = Audio::AudioConfig::FromStreamOutput(
+                Audio::AudioOutputStream::CreatePushStream(streamHandler));
 
-    return synth;
+            auto pooled = std::make_shared<PooledSynthesizer>();
+            pooled->synth = SpeechSynthesizer::FromConfig(s_config, audioConfig);
+            pooled->streamHandler = streamHandler;
+            pooled->voiceName = voiceName;
+            pooled->isBusy = true;
+
+            pooled->synth->WordBoundary += [streamHandler](const SpeechSynthesisWordBoundaryEventArgs& e) {
+                streamHandler->OnWordBoundary(e);
+            };
+
+            pooled->synth->BookmarkReached += [streamHandler](const SpeechSynthesisBookmarkEventArgs& e) {
+                streamHandler->OnBookmarkReached(e);
+            };
+
+            s_pool.push_back(pooled);
+            LogInfo("SynthesizerPool: Created pooled synthesizer (%d/2) for voice: %ls", voiceCount + 1, voiceName.c_str());
+            return pooled;
+        }
+
+        // Wait for one to become available
+        if (s_poolCondition.wait_for(lock, std::chrono::milliseconds(10)) == std::cv_status::timeout) {
+            if (pAbortFlag && *pAbortFlag) {
+                LogInfo("SynthesizerPool: Aborted while waiting for an idle engine.");
+                return nullptr;
+            }
+        }
+    }
+}
+
+void SynthesizerPool::ReleaseSynthesizer(std::shared_ptr<PooledSynthesizer> pooledSynth) {
+    if (!pooledSynth) return;
+    std::lock_guard<std::mutex> lock(s_poolMutex);
+    pooledSynth->isBusy = false;
+    s_poolCondition.notify_one();
 }

@@ -120,65 +120,44 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
         LogInfo("AzureEmbeddedSynthesizer::Speak Cache MISS for '%s'. Proceeding to synthesis.", ssmlUtf8.c_str());
     }
 
-    auto streamHandler = std::make_shared<AudioStreamHandler>();
-    streamHandler->AttachContext(params, std::move(parseResult.OffsetMap), isCachingCandidate, cacheKey);
-    std::shared_ptr<SpeechSynthesizer> synth;
+    std::shared_ptr<PooledSynthesizer> pooledSynth;
 
     try {
-        synth = SynthesizerPool::CreateSynthesizer(voiceName, streamHandler);
+        pooledSynth = SynthesizerPool::AcquireSynthesizer(voiceName, params->pAbortFlag);
     } catch (const std::exception& e) {
-        LogError("Failed to create synthesizer for %ls: %s", voiceName.c_str(), e.what());
+        LogError("Failed to acquire synthesizer for %ls: %s", voiceName.c_str(), e.what());
         return false;
     }
 
-    if (!synth) return false;
+    if (!pooledSynth) {
+        // Aborted while waiting for an idle engine
+        return true;
+    }
 
-    auto synthesisStarted = std::make_shared<std::atomic<bool>>(false);
-    synth->SynthesisStarted += [synthesisStarted](const SpeechSynthesisEventArgs&) {
-        synthesisStarted->store(true, std::memory_order_relaxed);
-    };
+    auto synth = pooledSynth->synth;
+    auto streamHandler = pooledSynth->streamHandler;
 
-    synth->WordBoundary += [streamHandler](const SpeechSynthesisWordBoundaryEventArgs& e) {
-        streamHandler->OnWordBoundary(e);
-    };
-
-    synth->BookmarkReached += [streamHandler](const SpeechSynthesisBookmarkEventArgs& e) {
-        streamHandler->OnBookmarkReached(e);
-    };
+    streamHandler->AttachContext(params, std::move(parseResult.OffsetMap), isCachingCandidate, cacheKey);
 
     try {
         auto future = synth->SpeakSsmlAsync(ssmlUtf8);
         while (future.wait_for(std::chrono::milliseconds(10)) == std::future_status::timeout) {
             if (params->pAbortFlag && *params->pAbortFlag) {
-                if (isCachingCandidate) {
-                    LogInfo("AzureEmbeddedSynthesizer::Speak abort flag detected. Initiating Shadow Caching in background.");
-                } else {
-                    LogInfo("AzureEmbeddedSynthesizer::Speak abort flag detected, performing fire-and-forget cancellation.");
-                }
+                LogInfo("AzureEmbeddedSynthesizer::Speak abort flag detected, performing fire-and-forget cancellation.");
                 
-                streamHandler->DetachContext(true, isCachingCandidate);
+                streamHandler->DetachContext(true);
                 
-                std::thread([synth, synthesisStarted, f = std::move(future), streamHandler, isCachingCandidate]() mutable {
-                    while (synthesisStarted && !synthesisStarted->load(std::memory_order_relaxed)) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    }
-                    
-                    if (isCachingCandidate) {
-                        try {
-                            auto result = f.get();
-                            if (result && result->Reason == ResultReason::SynthesizingAudioCompleted) {
-                                streamHandler->FinalizeShadowCache();
-                            }
-                        } catch (...) {}
-                    } else {
-                        try {
-                            synth->StopSpeakingAsync().wait();
-                        } catch (...) {}
-                        try {
-                            f.wait();
-                        } catch (...) {}
-                    }
+                std::thread([synth, f = std::move(future), pooledSynth]() mutable {
+                    try {
+                        synth->StopSpeakingAsync().wait();
+                    } catch (...) {}
+                    try {
+                        f.wait();
+                    } catch (...) {}
+
+                    SynthesizerPool::ReleaseSynthesizer(pooledSynth);
                 }).detach();
+                
                 return true;
             }
         }
@@ -186,12 +165,21 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
         auto result = future.get();
         bool isCancelled = (result && result->Reason == ResultReason::Canceled);
         streamHandler->DetachContext(isCancelled);
+        SynthesizerPool::ReleaseSynthesizer(pooledSynth);
         
         if (isCancelled) {
-            auto cancellation = SpeechSynthesisCancellationDetails::FromResult(result);
-            LogError("Synthesis Canceled: %s", cancellation->ErrorDetails.c_str());
+            LogWarn("AzureEmbeddedSynthesizer::Speak synthesis was canceled natively.");
+            auto cancellationDetails = SpeechSynthesisCancellationDetails::FromResult(result);
+            if (cancellationDetails) {
+                LogWarn("Cancellation Reason: %d", (int)cancellationDetails->Reason);
+                if (cancellationDetails->Reason == CancellationReason::Error) {
+                    LogWarn("Error Details: %s", cancellationDetails->ErrorDetails.c_str());
+                }
+            }
             return false;
         }
+
+        return true;
     } catch (const std::exception& e) {
         LogError("SpeakSsmlAsync threw: %s", e.what());
         return false;

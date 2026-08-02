@@ -22,15 +22,13 @@ public:
     void Close() override {}
 
     void AttachContext(const ProviderSpeakParams* params, std::vector<std::pair<uint32_t, uint32_t>> offsetMap, bool enableCaching, const CacheKey& cacheKey);
-    void DetachContext(bool wasCancelled, bool allowShadowCache = false);
-    void FinalizeShadowCache();
+    void DetachContext(bool wasCancelled);
 
 private:
     std::mutex m_contextMutex;
     const ProviderSpeakParams* m_params{nullptr};
     std::vector<std::pair<uint32_t, uint32_t>> m_offsetMap;
     bool m_hasEncounteredAudio{false};
-    bool m_isShadowCaching{false};
     size_t m_leadingOffsetBytes{0};
 
     bool m_isCaching{false};
@@ -40,13 +38,22 @@ private:
     CachePayload m_cachePayload;
 };
 
+struct PooledSynthesizer {
+    std::shared_ptr<Microsoft::CognitiveServices::Speech::SpeechSynthesizer> synth;
+    std::shared_ptr<AudioStreamHandler> streamHandler;
+    std::wstring voiceName;
+    bool isBusy{false};
+};
+
 class SynthesizerPool {
 public:
     static void Shutdown();
 
-    static std::shared_ptr<Microsoft::CognitiveServices::Speech::SpeechSynthesizer> CreateSynthesizer(
+    static std::shared_ptr<PooledSynthesizer> AcquireSynthesizer(
         const std::wstring& voiceName,
-        std::shared_ptr<AudioStreamHandler> streamHandler);
+        const volatile uint32_t* pAbortFlag);
+
+    static void ReleaseSynthesizer(std::shared_ptr<PooledSynthesizer> pooledSynth);
 
     static bool IsCacheEnabled() { return s_enablePcmCache; }
 
@@ -57,4 +64,8 @@ private:
     static std::mutex s_mutex;
     static std::shared_ptr<Microsoft::CognitiveServices::Speech::EmbeddedSpeechConfig> s_config;
     static bool s_enablePcmCache;
+
+    static std::mutex s_poolMutex;
+    static std::condition_variable s_poolCondition;
+    static std::vector<std::shared_ptr<PooledSynthesizer>> s_pool;
 };
