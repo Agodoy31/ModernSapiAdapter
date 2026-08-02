@@ -170,7 +170,12 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
             return S_OK;
         }
         
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        HANDLE hWorkerThread = (HANDLE)m_pWorker->GetThreadHandle();
+        DWORD dwIndex = 0;
+        // Wait up to 20ms for the worker thread to finish.
+        // Crucially, this pumps COM RPC calls and window messages, preventing STA deadlocks 
+        // when WASAPI or SAPI attempt cross-apartment initialization!
+        CoWaitForMultipleHandles(0, 20, 1, &hWorkerThread, &dwIndex);
     }
 
     m_pWorker->WaitUntilFinished();

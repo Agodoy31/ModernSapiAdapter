@@ -36,6 +36,7 @@ public:
     void WaitUntilFinished();
     
     bool IsFinished() const { return !m_isRunning; }
+    void* GetThreadHandle() { return m_thread.native_handle(); }
 
     static bool __stdcall AudioCallback(const uint8_t* pAudioBytes, uint32_t byteCount, void* ctx);
     static void __stdcall MetaCallback(const ProviderSpeechEvent* pEvent, void* ctx);

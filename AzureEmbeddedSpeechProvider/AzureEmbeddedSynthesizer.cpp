@@ -134,6 +134,12 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
         return true;
     }
 
+    struct EngineGuard {
+        std::shared_ptr<PooledSynthesizer> p;
+        ~EngineGuard() { if (p) SynthesizerPool::ReleaseSynthesizer(p); }
+        void detach() { p.reset(); }
+    } guard{pooledSynth};
+
     auto synth = pooledSynth->synth;
     auto streamHandler = pooledSynth->streamHandler;
 
@@ -141,7 +147,7 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
 
     try {
         auto future = synth->SpeakSsmlAsync(ssmlUtf8);
-        while (future.wait_for(std::chrono::milliseconds(10)) == std::future_status::timeout) {
+        while (future.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout) {
             if (params->pAbortFlag && *params->pAbortFlag) {
                 LogInfo("AzureEmbeddedSynthesizer::Speak abort flag detected, performing fire-and-forget cancellation.");
                 
@@ -158,6 +164,7 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
                     SynthesizerPool::ReleaseSynthesizer(pooledSynth);
                 }).detach();
                 
+                guard.detach(); // Transfer responsibility to the detached thread
                 return true;
             }
         }
@@ -165,7 +172,7 @@ bool AzureEmbeddedSynthesizer::Speak(const ProviderSpeakParams* params) {
         auto result = future.get();
         bool isCancelled = (result && result->Reason == ResultReason::Canceled);
         streamHandler->DetachContext(isCancelled);
-        SynthesizerPool::ReleaseSynthesizer(pooledSynth);
+        // guard automatically releases the synthesizer when the function returns
         
         if (isCancelled) {
             LogWarn("AzureEmbeddedSynthesizer::Speak synthesis was canceled natively.");

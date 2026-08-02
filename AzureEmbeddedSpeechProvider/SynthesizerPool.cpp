@@ -56,7 +56,7 @@ void AudioStreamHandler::DetachContext(bool wasCancelled) {
 
 int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
     std::lock_guard<std::mutex> lock(m_contextMutex);
-    if (!m_params) return 0;
+    if (!m_params || (m_params->pAbortFlag && *m_params->pAbortFlag)) return 0;
 
     size_t leadingOffset = 0;
     if (!m_hasEncounteredAudio) {
@@ -246,6 +246,16 @@ std::shared_ptr<PooledSynthesizer> SynthesizerPool::AcquireSynthesizer(
         Initialize();
     }
 
+    // Purge engines that don't match the requested voice name to prevent OOM crashes
+    auto it = std::remove_if(s_pool.begin(), s_pool.end(),
+        [&voiceName](const std::shared_ptr<PooledSynthesizer>& synth) {
+            return synth->voiceName != voiceName;
+        });
+    if (it != s_pool.end()) {
+        s_pool.erase(it, s_pool.end());
+        LogInfo("SynthesizerPool: Purged old voice engines to free memory.");
+    }
+
     while (true) {
         // Find an idle synthesizer for this voice
         int voiceCount = 0;
@@ -287,8 +297,8 @@ std::shared_ptr<PooledSynthesizer> SynthesizerPool::AcquireSynthesizer(
             return pooled;
         }
 
-        // Wait for one to become available
-        if (s_poolCondition.wait_for(lock, std::chrono::milliseconds(10)) == std::cv_status::timeout) {
+        // Wait for one to become available (poll every 50ms to check abort flag)
+        if (s_poolCondition.wait_for(lock, std::chrono::milliseconds(50)) == std::cv_status::timeout) {
             if (pAbortFlag && *pAbortFlag) {
                 LogInfo("SynthesizerPool: Aborted while waiting for an idle engine.");
                 return nullptr;

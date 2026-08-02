@@ -21,8 +21,16 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
     switch (ul_reason_for_call)
     {
     case DLL_PROCESS_ATTACH:
-        DisableThreadLibraryCalls(hModule);
+    {
+        // DO NOT call DisableThreadLibraryCalls(hModule) here!
+        // The C++ Runtime (CRT) relies on DLL_THREAD_ATTACH to initialize thread-local storage (TLS).
+        
+        // Pin the DLL in memory to prevent the OS from unloading it and deadlocking on the loader lock
+        HMODULE hPinnedModule = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+            reinterpret_cast<LPCWSTR>(&DllMain), &hPinnedModule);
         break;
+    }
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
         break;

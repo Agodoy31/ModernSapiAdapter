@@ -30,7 +30,12 @@ void SpeechWorker::WaitUntilFinished()
 {
     if (m_thread.joinable())
     {
-        m_thread.join();
+        HANDLE hThread = (HANDLE)m_thread.native_handle();
+        DWORD dwIndex = 0;
+        // MUST pump COM messages while waiting to avoid deadlocking WASAPI!
+        // If we just call m_thread.join(), the STA thread freezes, which can lock up audiosrv system-wide.
+        CoWaitForMultipleHandles(0, INFINITE, 1, &hThread, &dwIndex);
+        m_thread.join(); // Safe to join now since the thread has exited
     }
 }
 
