@@ -1,38 +1,21 @@
 #include "pch.h"
-#include <stdarg.h>
-
-static std::mutex g_coreLogMutex;
-static std::wofstream g_coreLogFile;
+#include "AsyncLogger.h"
 
 void CoreLog(const wchar_t* fmt, ...)
 {
 #ifdef _DEBUG
-    std::lock_guard<std::mutex> lock(g_coreLogMutex);
-    if (!g_coreLogFile.is_open())
+    va_list args;
+    va_start(args, fmt);
+    
+    int len = _vscwprintf(fmt, args);
+    if (len > 0)
     {
-        PWSTR path = nullptr;
-        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &path)))
-        {
-            std::wstring logPath = path;
-            CoTaskMemFree(path);
-            logPath += L"\\ModernSapiAdapter\\Logs";
-            CreateDirectoryW(logPath.c_str(), nullptr);
-            logPath += L"\\CoreEngine.log";
-            g_coreLogFile.open(logPath, std::ios::app);
-        }
+        std::wstring buffer(len, L'\0');
+        _vsnwprintf_s(&buffer[0], len + 1, _TRUNCATE, fmt, args);
+        AsyncLogger::GetInstance().Log(buffer);
     }
-
-    if (g_coreLogFile.is_open())
-    {
-        wchar_t buffer[2048];
-        va_list args;
-        va_start(args, fmt);
-        _vsnwprintf_s(buffer, _countof(buffer), _TRUNCATE, fmt, args);
-        va_end(args);
-
-        g_coreLogFile << buffer << L"\n";
-        g_coreLogFile.flush();
-    }
+    
+    va_end(args);
 #else
     (void)fmt;
 #endif

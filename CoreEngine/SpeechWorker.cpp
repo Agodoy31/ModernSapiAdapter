@@ -1,82 +1,96 @@
 #include "pch.h"
 #include "SpeechWorker.h"
 #include "SapiEngine.h"
-#include "ProviderWrapper.h"
 
-SpeechWorker::SpeechWorker(CSapiEngine* pEngine, ProviderWrapper* pWrapper)
-    : m_pEngine(pEngine), m_pWrapper(pWrapper)
+SpeechWorker::SpeechWorker(CSapiEngine* pEngine, std::shared_ptr<PipeClient> pClient)
+    : m_pEngine(pEngine), m_pClient(pClient), m_exit(false), m_isSpeaking(false)
 {
+    m_audioThread = std::thread(&SpeechWorker::AudioThreadProc, this);
+    m_controlThread = std::thread(&SpeechWorker::ControlThreadProc, this);
 }
 
 SpeechWorker::~SpeechWorker()
 {
-    WaitUntilFinished();
+    m_exit = true;
+    
+    // We detach instead of joining because PipeClient read operations are currently blocking overlapped IO
+    // and cannot be easily cancelled without CancelIoEx or closing the handles. 
+    // The OS will terminate the detached threads when the DLL unloads or process exits.
+    if (m_audioThread.joinable()) m_audioThread.detach();
+    if (m_controlThread.joinable()) m_controlThread.detach();
 }
 
-void SpeechWorker::Start(std::vector<char16_t> backingBuffer, std::vector<ProviderSpeechFragment> fragments, std::wstring voiceId)
+void SpeechWorker::Start(void* /*pSite*/)
 {
-    WaitUntilFinished(); // Ensure previous is joined
-    m_abortFlag = 0;
-    m_isRunning = true;
-    m_thread = std::thread(&SpeechWorker::ThreadProc, this, std::move(backingBuffer), std::move(fragments), std::move(voiceId));
+    m_isSpeaking = true;
 }
 
 void SpeechWorker::Stop()
 {
-    m_abortFlag = 1;
+    if (m_isSpeaking)
+    {
+        using namespace winrt::Windows::Data::Json;
+        JsonObject req;
+        req.SetNamedValue(L"command", JsonValue::CreateStringValue(L"cancel"));
+        req.SetNamedValue(L"speak_id", JsonValue::CreateNumberValue(1));
+        m_pClient->SendControlMessage(req);
+        m_isSpeaking = false;
+    }
 }
 
 void SpeechWorker::WaitUntilFinished()
 {
-    if (m_thread.joinable())
+    while (m_isSpeaking && !m_exit)
     {
-        HANDLE hThread = (HANDLE)m_thread.native_handle();
-        DWORD dwIndex = 0;
-        // MUST pump COM messages while waiting to avoid deadlocking WASAPI!
-        // If we just call m_thread.join(), the STA thread freezes, which can lock up audiosrv system-wide.
-        CoWaitForMultipleHandles(0, INFINITE, 1, &hThread, &dwIndex);
-        m_thread.join(); // Safe to join now since the thread has exited
+        Sleep(10);
     }
 }
 
-void SpeechWorker::ThreadProc(std::vector<char16_t> backingBuffer, std::vector<ProviderSpeechFragment> fragments, std::wstring voiceId)
+void SpeechWorker::AudioThreadProc()
 {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    
-    ProviderSpeakParams params{};
-    params.ContractVersion = PROVIDER_ABI_VERSION;
-    params.Fragments = fragments.data();
-    params.FragmentCount = static_cast<uint32_t>(fragments.size());
-    params.VoiceModel = reinterpret_cast<const char16_t*>(voiceId.c_str());
-    params.pAbortFlag = &m_abortFlag;
-    params.UserContext = this;
-    params.AudioCallback = &SpeechWorker::AudioCallback;
-    params.MetaCallback = &SpeechWorker::MetaCallback;
-
-    m_pWrapper->Speak(&params);
-    
-    m_isRunning = false;
+    std::vector<uint8_t> buffer(4096);
+    while (!m_exit)
+    {
+        DWORD bytesRead = 0;
+        HRESULT hr = m_pClient->ReadAudioChunk(buffer, bytesRead);
+        if (FAILED(hr))
+        {
+            Sleep(50);
+            continue;
+        }
+        
+        if (m_isSpeaking && bytesRead > 0)
+        {
+            m_pEngine->OnAudioData(buffer.data(), bytesRead);
+        }
+    }
     CoUninitialize();
 }
 
-bool __stdcall SpeechWorker::AudioCallback(const uint8_t* pAudioBytes, uint32_t byteCount, void* ctx)
+void SpeechWorker::ControlThreadProc()
 {
-    try {
-        auto* worker = static_cast<SpeechWorker*>(ctx);
-        if (!worker || worker->m_abortFlag) return false;
-        return worker->m_pEngine->OnAudioData(pAudioBytes, byteCount);
-    } catch (...) {
-        return false;
-    }
-}
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    while (!m_exit)
+    {
+        winrt::Windows::Data::Json::JsonObject json = nullptr;
+        HRESULT hr = m_pClient->ReadControlMessage(json);
+        if (FAILED(hr) || !json)
+        {
+            Sleep(50);
+            continue;
+        }
 
-void __stdcall SpeechWorker::MetaCallback(const ProviderSpeechEvent* pEvent, void* ctx)
-{
-    try {
-        auto* worker = static_cast<SpeechWorker*>(ctx);
-        if (!worker || worker->m_abortFlag) return;
-        worker->m_pEngine->OnSpeechEvent(pEvent);
-    } catch (...) {
-        // Suppress exceptions crossing ABI boundary
+        if (json.HasKey(L"event"))
+        {
+            auto eventStr = json.GetNamedString(L"event");
+            if (eventStr == L"completed" || eventStr == L"error")
+            {
+                m_isSpeaking = false;
+            }
+        }
+
+        m_pEngine->OnSpeechEvent(json);
     }
+    CoUninitialize();
 }

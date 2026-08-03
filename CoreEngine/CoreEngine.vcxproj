@@ -164,19 +164,18 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="AsyncLogger.h" />
     <ClInclude Include="pch.h" />
-    <ClInclude Include="$(ProjectDir)..\include\provider_abi.h" />
-    <ClInclude Include="ProviderWrapper.h" />
+    <ClInclude Include="PipeClient.h" />
     <ClInclude Include="SapiEngine.h" />
     <ClInclude Include="SpeechWorker.h" />
-
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="AsyncLogger.cpp" />
     <ClCompile Include="dllmain.cpp" />
-    <ClCompile Include="ProviderWrapper.cpp" />
+    <ClCompile Include="PipeClient.cpp" />
     <ClCompile Include="SapiEngine.cpp" />
     <ClCompile Include="SpeechWorker.cpp" />
-
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Create</PrecompiledHeader>

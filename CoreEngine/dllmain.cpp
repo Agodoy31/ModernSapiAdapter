@@ -12,8 +12,8 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 // If this GUID is ever changed, you MUST also update the 'CoreEngineClsid' 
 // constant in SapiManager/Services/RegistryManager.cs, otherwise SAPI 5 
 // will fail to instantiate the engine for voice tokens.
-const CLSID CLSID_SapiEngine = { 0xb7e2e0a6, 0xa067, 0x4286, { 0x9a, 0x38, 0x9f, 0xe7, 0xfa, 0x25, 0xc9, 0x8d } };
-const wchar_t* SapiEngineClsidString = L"{B7E2E0A6-A067-4286-9A38-9FE7FA25C98D}";
+const CLSID CLSID_SapiEngine = { 0x91cd243c, 0x63f7, 0x441f, { 0xae, 0x2f, 0x45, 0x05, 0x70, 0x05, 0xcb, 0x6d } };
+const wchar_t* SapiEngineClsidString = L"{91CD243C-63F7-441F-AE2F-45057005CB6D}";
 
 /**
  * @class SapiEngineClassFactory

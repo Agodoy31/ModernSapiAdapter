@@ -3,24 +3,9 @@
     <Platform Name="x64" />
     <Platform Name="ARM64" />
   </Configurations>
-  <Project Path="AzureEmbeddedSpeechProvider/AzureEmbeddedSpeechProvider.vcxproj" Id="a514542f-c6c3-4517-809b-4f44c6d8c837">
-    <Platform Project="x64" />
-  </Project>
   <Project Path="CoreEngine.Tests/CoreEngine.Tests.vcxproj" Id="1d72c1c4-adb8-4d19-9d76-14f7b8649573">
     <Platform Project="x64" />
   </Project>
   <Project Path="CoreEngine/CoreEngine.vcxproj" Id="17ece6f7-00ac-432e-9bf9-01cefb4581b3" />
-  <Project Path="MockProvider/MockProvider.vcxproj" Id="5275e3dc-be43-4f0e-95d5-c7fc4d38a364">
-    <Platform Project="x64" />
-  </Project>
-  <Project Path="PcmAudioUtils/PcmAudioUtils.vcxproj" Id="c1f97b4a-34a7-4a99-a999-978e9fe6c72f">
-    <Platform Project="x64" />
-  </Project>
   <Project Path="SapiManager/SapiManager.csproj" />
-  <Project Path="SapiSsmlParser.Cpp.Tests/SapiSsmlParser.Cpp.Tests.vcxproj" Id="d8622b2d-b5f3-40c9-a9c6-2e4b0501f048">
-    <Platform Project="x64" />
-  </Project>
-  <Project Path="SapiSsmlParser.Cpp/SapiSsmlParser.Cpp.vcxproj" Id="74a51726-222d-48a4-aeee-e94207526105">
-    <Platform Project="x64" />
-  </Project>
 </Solution>

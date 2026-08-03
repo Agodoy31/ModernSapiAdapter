@@ -28,8 +28,9 @@
 #include <wil/result.h>
 
 #include <winrt/base.h>
+#include <winrt/Windows.Data.Json.h>
+#include <winrt/Windows.Foundation.Collections.h>
 
-#include <provider_abi.h>
 #include <winreg.h>
 
 #include <string>

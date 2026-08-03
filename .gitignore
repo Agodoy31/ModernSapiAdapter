@@ -16,3 +16,4 @@ packages/
 .github/
 EdgeTtsProvider/
 SapiSsmlParser.Cs/
+v1/

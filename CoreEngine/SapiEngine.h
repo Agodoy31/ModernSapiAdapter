@@ -4,7 +4,7 @@
  */
 
 #pragma once
-#include "ProviderWrapper.h"
+#include "PipeClient.h"
 #include "SpeechWorker.h"
 
 /**
@@ -34,16 +34,17 @@ public:
                                    WAVEFORMATEX** ppCoMemOutputWaveFormatEx) noexcept override;
 
     bool OnAudioData(const uint8_t* pAudioBytes, uint32_t byteCount);
-    void OnSpeechEvent(const ProviderSpeechEvent* pEvent);
+    void OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& eventJson);
 
 private:
     winrt::com_ptr<ISpObjectToken> m_cpToken;
     winrt::com_ptr<ISpTTSEngineSite> m_cpSite;
     std::mutex m_siteMutex;
 
-    std::unique_ptr<ProviderWrapper> m_pWrapper;
+    std::shared_ptr<PipeClient> m_pClient;
     std::unique_ptr<SpeechWorker> m_pWorker;
     std::wstring m_voiceId;
+    WAVEFORMATEX m_audioFormat;
 
     HRESULT LoadProviderFromToken(ISpObjectToken* pToken);
 };
