@@ -13,11 +13,14 @@ SpeechWorker::~SpeechWorker()
 {
     m_exit = true;
     
-    // We detach instead of joining because PipeClient read operations are currently blocking overlapped IO
-    // and cannot be easily cancelled without CancelIoEx or closing the handles. 
-    // The OS will terminate the detached threads when the DLL unloads or process exits.
-    if (m_audioThread.joinable()) m_audioThread.detach();
-    if (m_controlThread.joinable()) m_controlThread.detach();
+    // Cancel I/O so blocking ReadFile/GetOverlappedResult returns immediately
+    if (m_pClient)
+    {
+        m_pClient->Cancel();
+    }
+
+    if (m_audioThread.joinable()) m_audioThread.join();
+    if (m_controlThread.joinable()) m_controlThread.join();
 }
 
 void SpeechWorker::Start(void* /*pSite*/)

@@ -161,11 +161,31 @@ void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& ev
     {
         SPEVENT spEvent = {};
         spEvent.eEventId = SPEI_TTS_BOOKMARK;
-        spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
         
         uint32_t audioMs = static_cast<uint32_t>(eventJson.GetNamedNumber(L"audio_offset_ms"));
         uint32_t bytesOffset = (audioMs * m_audioFormat.nAvgBytesPerSec) / 1000;
         spEvent.ullAudioStreamOffset = bytesOffset;
+
+        if (eventJson.HasKey(L"bookmark_name"))
+        {
+            auto bName = eventJson.GetNamedString(L"bookmark_name");
+            size_t numChars = bName.size() + 1;
+            wchar_t* pStr = (wchar_t*)CoTaskMemAlloc(numChars * sizeof(wchar_t));
+            if (pStr)
+            {
+                wcscpy_s(pStr, numChars, bName.c_str());
+                spEvent.elParamType = SPET_LPARAM_IS_STRING;
+                spEvent.lParam = (LPARAM)pStr;
+            }
+            else
+            {
+                spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
+            }
+        }
+        else
+        {
+            spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
+        }
         
         m_cpSite->AddEvents(&spEvent, 1);
     }

@@ -163,7 +163,6 @@ HRESULT PipeClient::ReadControlMessage(winrt::Windows::Data::Json::JsonObject& o
 
     std::wstring wideString(wideLen, 0);
     MultiByteToWideChar(CP_UTF8, 0, utf8String.c_str(), static_cast<int>(utf8String.size()), wideString.data(), wideLen);
-    wideString.resize(wideLen - 1); // remove null terminator
 
     try
     {
@@ -200,4 +199,10 @@ HRESULT PipeClient::ReadAudioChunk(std::vector<uint8_t>& buffer, DWORD& bytesRea
     }
 
     return S_OK;
+}
+
+void PipeClient::Cancel()
+{
+    if (m_controlPipe) CancelIoEx(m_controlPipe.get(), nullptr);
+    if (m_audioPipe) CancelIoEx(m_audioPipe.get(), nullptr);
 }
