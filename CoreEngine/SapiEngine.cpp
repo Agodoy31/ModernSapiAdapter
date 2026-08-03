@@ -86,22 +86,31 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
     while (pFrag)
     {
         JsonObject fragJson;
-        if (pFrag->pTextStart && pFrag->ulTextLen > 0)
-        {
-            std::wstring textStr((const wchar_t*)pFrag->pTextStart, pFrag->ulTextLen);
-            fragJson.SetNamedValue(L"text", JsonValue::CreateStringValue(textStr));
-        }
-
+        
         if (pFrag->State.eAction == SPVA_Bookmark)
         {
-            fragJson.SetNamedValue(L"bookmark", JsonValue::CreateNumberValue(pFrag->ulTextSrcOffset));
+            if (pFrag->pTextStart && pFrag->ulTextLen > 0)
+            {
+                std::wstring textStr((const wchar_t*)pFrag->pTextStart, pFrag->ulTextLen);
+                fragJson.SetNamedValue(L"bookmark", JsonValue::CreateStringValue(textStr));
+            }
         }
-        else
+        else if (pFrag->State.eAction == SPVA_Silence)
         {
+            fragJson.SetNamedValue(L"silence_ms", JsonValue::CreateNumberValue(pFrag->State.SilenceMSecs));
+        }
+        else // SPVA_Speak, SPVA_Pronounce, etc.
+        {
+            if (pFrag->pTextStart && pFrag->ulTextLen > 0)
+            {
+                std::wstring textStr((const wchar_t*)pFrag->pTextStart, pFrag->ulTextLen);
+                fragJson.SetNamedValue(L"text", JsonValue::CreateStringValue(textStr));
+            }
             fragJson.SetNamedValue(L"volume", JsonValue::CreateNumberValue(pFrag->State.Volume));
             fragJson.SetNamedValue(L"pitch", JsonValue::CreateNumberValue(pFrag->State.PitchAdj.MiddleAdj));
             fragJson.SetNamedValue(L"rate", JsonValue::CreateNumberValue(pFrag->State.RateAdj));
         }
+        
         fragments.Append(fragJson);
         pFrag = pFrag->pNext;
     }

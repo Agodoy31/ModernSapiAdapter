@@ -1,10 +1,42 @@
 #include "pch.h"
 #include "PipeClient.h"
+#include <sddl.h>
+
+static std::wstring GetCurrentUserSid()
+{
+    std::wstring sidString = L"DefaultUser";
+    HANDLE hToken = NULL;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+    {
+        DWORD dwLength = 0;
+        GetTokenInformation(hToken, TokenUser, NULL, 0, &dwLength);
+        if (GetLastError() == ERROR_INSUFFICIENT_BUFFER)
+        {
+            PTOKEN_USER pTokenUser = (PTOKEN_USER)malloc(dwLength);
+            if (pTokenUser)
+            {
+                if (GetTokenInformation(hToken, TokenUser, pTokenUser, dwLength, &dwLength))
+                {
+                    LPWSTR pSidStr = NULL;
+                    if (ConvertSidToStringSidW(pTokenUser->User.Sid, &pSidStr))
+                    {
+                        sidString = pSidStr;
+                        LocalFree(pSidStr);
+                    }
+                }
+                free(pTokenUser);
+            }
+        }
+        CloseHandle(hToken);
+    }
+    return sidString;
+}
 
 HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& exePath)
 {
-    std::wstring controlPipePath = L"\\\\.\\pipe\\" + pipeName + L"\\control";
-    std::wstring audioPipePath = L"\\\\.\\pipe\\" + pipeName + L"\\audio";
+    std::wstring sid = GetCurrentUserSid();
+    std::wstring controlPipePath = L"\\\\.\\pipe\\" + pipeName + L"\\" + sid + L"\\control";
+    std::wstring audioPipePath = L"\\\\.\\pipe\\" + pipeName + L"\\" + sid + L"\\audio";
 
     // Try to connect directly first.
     HRESULT hr = TryConnectPipes(controlPipePath, audioPipePath);
