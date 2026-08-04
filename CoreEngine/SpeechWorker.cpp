@@ -23,8 +23,9 @@ SpeechWorker::~SpeechWorker()
     if (m_controlThread.joinable()) m_controlThread.join();
 }
 
-void SpeechWorker::Start(void* /*pSite*/)
+void SpeechWorker::Start(void* /*pSite*/, uint64_t speakId)
 {
+    m_activeSpeakId = speakId;
     m_isSpeaking = true;
 }
 
@@ -35,7 +36,7 @@ void SpeechWorker::Stop()
         using namespace winrt::Windows::Data::Json;
         JsonObject req;
         req.SetNamedValue(L"command", JsonValue::CreateStringValue(L"cancel"));
-        req.SetNamedValue(L"speak_id", JsonValue::CreateNumberValue(1));
+        req.SetNamedValue(L"speak_id", JsonValue::CreateNumberValue(static_cast<double>(m_activeSpeakId.load())));
         m_pClient->SendControlMessage(req);
         m_isSpeaking = false;
     }
@@ -86,12 +87,32 @@ void SpeechWorker::ControlThreadProc()
             continue;
         }
 
-        if (json.HasKey(L"event"))
+        if (json.HasKey(L"event") && json.HasKey(L"speak_id"))
         {
             auto eventStr = json.GetNamedString(L"event");
-            if (eventStr == L"completed" || eventStr == L"error")
+            uint64_t eventSpeakId = static_cast<uint64_t>(json.GetNamedNumber(L"speak_id"));
+            
+            if (eventSpeakId == m_activeSpeakId.load())
             {
-                m_isSpeaking = false;
+                if (eventStr == L"completed")
+                {
+                    m_isSpeaking = false;
+                }
+                else if (eventStr == L"error")
+                {
+                    if (json.HasKey(L"severity"))
+                    {
+                        auto severity = json.GetNamedString(L"severity");
+                        if (severity == L"error" || severity == L"fatal")
+                        {
+                            m_isSpeaking = false;
+                        }
+                    }
+                    else
+                    {
+                        m_isSpeaking = false; // Default to fatal if no severity specified
+                    }
+                }
             }
         }
 

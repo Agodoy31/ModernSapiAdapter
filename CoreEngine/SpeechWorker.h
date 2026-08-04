@@ -38,8 +38,9 @@ public:
     /**
      * @brief Starts background worker thread operations for a speech synthesis request.
      * @param pSite Opaque output site pointer (tracked internally by engine).
+     * @param speakId The unique identifier for this speech request.
      */
-    void Start(void* pSite);
+    void Start(void* pSite, uint64_t speakId);
 
     /**
      * @brief Signals worker threads to stop and cancels pending I/O.
@@ -69,4 +70,5 @@ private:
     std::thread m_controlThread;             /**< Control event worker thread. */
     std::atomic<bool> m_exit;                /**< Flag indicating worker shutdown. */
     std::atomic<bool> m_isSpeaking;          /**< Flag indicating active speech synthesis. */
+    std::atomic<uint64_t> m_activeSpeakId{0};/**< Track the active speak_id for cancellation. */
 };
