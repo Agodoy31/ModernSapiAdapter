@@ -18,6 +18,14 @@ CSapiEngine::~CSapiEngine()
         m_pWorker->WaitUntilFinished();
     }
     m_pWorker.reset();
+    
+    if (m_pClient)
+    {
+        using namespace winrt::Windows::Data::Json;
+        JsonObject shutdownReq;
+        shutdownReq.SetNamedValue(L"command", JsonValue::CreateStringValue(L"shutdown"));
+        m_pClient->SendControlMessage(shutdownReq);
+    }
     m_pClient.reset();
 }
 
@@ -78,8 +86,14 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
     if (!m_pClient) return E_FAIL;
 
     using namespace winrt::Windows::Data::Json;
+    uint64_t speakId = ++m_speakIdCounter;
     JsonObject speakReq;
     speakReq.SetNamedValue(L"command", JsonValue::CreateStringValue(L"sapi_speak"));
+    speakReq.SetNamedValue(L"speak_id", JsonValue::CreateNumberValue(static_cast<double>(speakId)));
+    if (!m_voiceId.empty())
+    {
+        speakReq.SetNamedValue(L"voice_id", JsonValue::CreateStringValue(m_voiceId));
+    }
 
     JsonArray fragments;
     const SPVTEXTFRAG* pFrag = pTextFragList;
@@ -120,7 +134,7 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
     HRESULT hr = m_pClient->SendControlMessage(speakReq);
     if (FAILED(hr)) return hr;
 
-    m_pWorker->Start(pOutputSite);
+    m_pWorker->Start(pOutputSite, m_speakIdCounter.load());
 
     if ((dwSpeakFlags & SPF_ASYNC) == 0)
     {
@@ -149,6 +163,16 @@ void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& ev
 
     if (!eventJson.HasKey(L"event")) return;
     auto eventStr = eventJson.GetNamedString(L"event");
+    
+    if (eventJson.HasKey(L"speak_id") && eventJson.GetNamedValue(L"speak_id").ValueType() == winrt::Windows::Data::Json::JsonValueType::Number)
+    {
+        uint64_t eventSpeakId = static_cast<uint64_t>(eventJson.GetNamedNumber(L"speak_id"));
+        if (eventSpeakId != m_speakIdCounter.load())
+        {
+            return; // Drop stale event
+        }
+    }
+
     if (eventStr == L"word_boundary")
     {
         SPEVENT spEvent = {};
@@ -215,6 +239,14 @@ void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& ev
         
         m_cpSite->AddEvents(&spEvent, 1);
     }
+    else if (eventStr == L"error")
+    {
+        std::wstring msg = eventJson.HasKey(L"message") ? std::wstring(eventJson.GetNamedString(L"message").c_str()) : L"Unknown error";
+        std::wstring severity = eventJson.HasKey(L"severity") ? std::wstring(eventJson.GetNamedString(L"severity").c_str()) : L"error";
+        std::wstring friendly = eventJson.HasKey(L"friendly_text") ? std::wstring(eventJson.GetNamedString(L"friendly_text").c_str()) : L"";
+        
+        CoreLog(L"[CoreEngine] Provider error (%s): %s %s", severity.c_str(), msg.c_str(), friendly.c_str());
+    }
 }
 catch (...)
 {
@@ -253,6 +285,10 @@ HRESULT CSapiEngine::LoadProviderFromToken(ISpObjectToken* pToken)
         JsonObject infoRes = nullptr;
         if (SUCCEEDED(m_pClient->ReadControlMessage(infoRes)))
         {
+            std::wstring pName = infoRes.HasKey(L"provider_name") ? std::wstring(infoRes.GetNamedString(L"provider_name").c_str()) : L"Unknown";
+            std::wstring pVer = infoRes.HasKey(L"version") ? std::wstring(infoRes.GetNamedString(L"version").c_str()) : L"Unknown";
+            CoreLog(L"[CoreEngine] Connected to provider: %s v%s", pName.c_str(), pVer.c_str());
+
             if (infoRes.HasKey(L"audio_format"))
             {
                 auto fmtJson = infoRes.GetNamedObject(L"audio_format");
