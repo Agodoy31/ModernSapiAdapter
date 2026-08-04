@@ -22,7 +22,7 @@
     <ClInclude Include="$(SolutionDir)include\provider_abi.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="ProviderWrapper.h">
+    <ClInclude Include="PipeClient.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SapiEngine.h">
@@ -37,7 +37,7 @@
     <ClCompile Include="dllmain.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="ProviderWrapper.cpp">
+    <ClCompile Include="PipeClient.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="SapiEngine.cpp">

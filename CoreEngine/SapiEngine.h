@@ -16,24 +16,70 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_OnSpeechEventMapsAndDispatchesToSite_Test;
     friend class SapiEngineTests_OnSpeechEventMapsBookmarkStringEventToSite_Test;
 public:
+    /**
+     * @brief Constructs a new CSapiEngine instance.
+     */
     CSapiEngine();
+
+    /**
+     * @brief Destructs CSapiEngine and shuts down active worker threads.
+     */
     ~CSapiEngine();
 
+    /**
+     * @brief Associates a SAPI object token with the engine, triggering provider initialization.
+     * @param pToken Pointer to ISpObjectToken containing provider registry parameters.
+     * @return S_OK on success, or HRESULT error code on failure.
+     */
     IFACEMETHODIMP SetObjectToken(ISpObjectToken* pToken) noexcept override;
+
+    /**
+     * @brief Retrieves the current SAPI object token associated with the engine.
+     * @param[out] ppToken Pointer receiving the ISpObjectToken interface.
+     * @return S_OK on success, or HRESULT error code on failure.
+     */
     IFACEMETHODIMP GetObjectToken(ISpObjectToken** ppToken) noexcept override;
 
+    /**
+     * @brief Synthesizes speech text fragments via provider IPC and streams output to SAPI site.
+     * @param dwSpeakFlags Flags controlling speech synthesis execution (SPF_ASYNC, etc.).
+     * @param rguidFormatId Format GUID requested by caller.
+     * @param pWaveFormatEx Pointer to WAVEFORMATEX structure.
+     * @param pTextFragList Pointer to linked list of SAPI text fragments.
+     * @param pOutputSite Pointer to ISpTTSEngineSite receiving audio and events.
+     * @return S_OK on success, or SPERR/HRESULT error code on failure.
+     */
     IFACEMETHODIMP Speak(DWORD dwSpeakFlags,
                          REFGUID rguidFormatId,
                          const WAVEFORMATEX* pWaveFormatEx,
                          const SPVTEXTFRAG* pTextFragList,
                          ISpTTSEngineSite* pOutputSite) noexcept override;
 
+    /**
+     * @brief Queries supported output audio format from provider.
+     * @param pTargetFmtId Target format GUID requested.
+     * @param pTargetWaveFormatEx Target wave format requested.
+     * @param[out] pOutputFormatId Output format GUID supported by provider.
+     * @param[out] ppCoMemOutputWaveFormatEx CoTaskMemAlloc-allocated WAVEFORMATEX output.
+     * @return S_OK on success, or SPERR/HRESULT error code on failure.
+     */
     IFACEMETHODIMP GetOutputFormat(const GUID* pTargetFmtId,
                                    const WAVEFORMATEX* pTargetWaveFormatEx,
                                    GUID* pOutputFormatId,
                                    WAVEFORMATEX** ppCoMemOutputWaveFormatEx) noexcept override;
 
+    /**
+     * @brief Forwards raw PCM audio bytes to the active ISpTTSEngineSite.
+     * @param pAudioBytes Pointer to raw PCM audio buffer.
+     * @param byteCount Number of bytes in audio buffer.
+     * @return true on successful write, false on failure.
+     */
     bool OnAudioData(const uint8_t* pAudioBytes, uint32_t byteCount);
+
+    /**
+     * @brief Parses incoming JSON event payloads and translates them into SAPI SPEVENT notifications.
+     * @param eventJson JsonObject event payload received from Control Pipe.
+     */
     void OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& eventJson);
 
 private:

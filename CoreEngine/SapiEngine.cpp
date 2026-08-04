@@ -75,11 +75,11 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
         m_cpSite.copy_from(pOutputSite);
     }
 
+    if (!m_pClient) return E_FAIL;
+
     using namespace winrt::Windows::Data::Json;
-    JsonObject req;
-    req.SetNamedValue(L"command", JsonValue::CreateStringValue(L"sapi_speak"));
-    req.SetNamedValue(L"speak_id", JsonValue::CreateNumberValue(1));
-    req.SetNamedValue(L"voice_id", JsonValue::CreateStringValue(m_voiceId));
+    JsonObject speakReq;
+    speakReq.SetNamedValue(L"command", JsonValue::CreateStringValue(L"sapi_speak"));
 
     JsonArray fragments;
     const SPVTEXTFRAG* pFrag = pTextFragList;
@@ -115,9 +115,9 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
         pFrag = pFrag->pNext;
     }
 
-    req.SetNamedValue(L"fragments", fragments);
+    speakReq.SetNamedValue(L"fragments", fragments);
 
-    HRESULT hr = m_pClient->SendControlMessage(req);
+    HRESULT hr = m_pClient->SendControlMessage(speakReq);
     if (FAILED(hr)) return hr;
 
     m_pWorker->Start(pOutputSite);
@@ -126,7 +126,7 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
     {
         m_pWorker->WaitUntilFinished();
     }
-    
+
     return S_OK;
 }
 catch (const std::exception& e) { CoreLog(L"[CoreEngine] Speak exception: %hs", e.what()); return winrt::to_hresult(); }
@@ -142,7 +142,7 @@ bool CSapiEngine::OnAudioData(const uint8_t* pAudioBytes, uint32_t byteCount)
     return SUCCEEDED(hr) && (bytesWritten == byteCount);
 }
 
-void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& eventJson)
+void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& eventJson) try
 {
     std::lock_guard<std::mutex> lock(m_siteMutex);
     if (!m_cpSite) return;
@@ -155,12 +155,29 @@ void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& ev
         spEvent.eEventId = SPEI_WORD_BOUNDARY;
         spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
         
-        uint32_t audioMs = static_cast<uint32_t>(eventJson.GetNamedNumber(L"audio_offset_ms"));
-        uint32_t bytesOffset = (audioMs * m_audioFormat.nAvgBytesPerSec) / 1000;
+        uint32_t audioMs = eventJson.HasKey(L"audio_offset_ms") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"audio_offset_ms")) : 0;
+        uint32_t bytesOffset = (m_audioFormat.nAvgBytesPerSec > 0) ? (audioMs * m_audioFormat.nAvgBytesPerSec) / 1000 : 0;
         spEvent.ullAudioStreamOffset = bytesOffset;
 
-        uint32_t textOffset = static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_offset"));
-        uint32_t textLength = static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_length"));
+        uint32_t textOffset = eventJson.HasKey(L"text_offset") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_offset")) : 0;
+        uint32_t textLength = eventJson.HasKey(L"text_length") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_length")) : 0;
+        spEvent.lParam = textOffset;
+        spEvent.wParam = textLength;
+        
+        m_cpSite->AddEvents(&spEvent, 1);
+    }
+    else if (eventStr == L"sentence_boundary")
+    {
+        SPEVENT spEvent = {};
+        spEvent.eEventId = SPEI_SENTENCE_BOUNDARY;
+        spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
+        
+        uint32_t audioMs = eventJson.HasKey(L"audio_offset_ms") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"audio_offset_ms")) : 0;
+        uint32_t bytesOffset = (m_audioFormat.nAvgBytesPerSec > 0) ? (audioMs * m_audioFormat.nAvgBytesPerSec) / 1000 : 0;
+        spEvent.ullAudioStreamOffset = bytesOffset;
+
+        uint32_t textOffset = eventJson.HasKey(L"text_offset") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_offset")) : 0;
+        uint32_t textLength = eventJson.HasKey(L"text_length") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_length")) : 0;
         spEvent.lParam = textOffset;
         spEvent.wParam = textLength;
         
@@ -171,8 +188,8 @@ void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& ev
         SPEVENT spEvent = {};
         spEvent.eEventId = SPEI_TTS_BOOKMARK;
         
-        uint32_t audioMs = static_cast<uint32_t>(eventJson.GetNamedNumber(L"audio_offset_ms"));
-        uint32_t bytesOffset = (audioMs * m_audioFormat.nAvgBytesPerSec) / 1000;
+        uint32_t audioMs = eventJson.HasKey(L"audio_offset_ms") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"audio_offset_ms")) : 0;
+        uint32_t bytesOffset = (m_audioFormat.nAvgBytesPerSec > 0) ? (audioMs * m_audioFormat.nAvgBytesPerSec) / 1000 : 0;
         spEvent.ullAudioStreamOffset = bytesOffset;
 
         if (eventJson.HasKey(L"bookmark_name"))
@@ -199,34 +216,33 @@ void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& ev
         m_cpSite->AddEvents(&spEvent, 1);
     }
 }
+catch (...)
+{
+    CoreLog(L"[CoreEngine] Exception in OnSpeechEvent.");
+}
 
 HRESULT CSapiEngine::LoadProviderFromToken(ISpObjectToken* pToken)
 {
-    winrt::com_ptr<ISpDataKey> cpDataKey;
-    if (FAILED(pToken->QueryInterface(IID_PPV_ARGS(&cpDataKey)))) return E_FAIL;
+    wil::unique_cotaskmem_string pszExe;
+    HRESULT hr = pToken->GetStringValue(L"ProviderExecutablePath", &pszExe);
+    if (FAILED(hr)) return hr;
 
-    wil::unique_cotaskmem_string pszExe, pszPipe;
-    if (FAILED(cpDataKey->GetStringValue(L"ProviderExecutablePath", &pszExe))) return E_FAIL;
-    if (FAILED(cpDataKey->GetStringValue(L"ProviderPipeName", &pszPipe))) return E_FAIL;
+    wil::unique_cotaskmem_string pszPipe;
+    HRESULT hrPipe = pToken->GetStringValue(L"ProviderPipeName", &pszPipe);
+    if (FAILED(hrPipe)) return hrPipe;
 
-    wil::unique_cotaskmem_string pszVoiceId;
-    if (SUCCEEDED(cpDataKey->GetStringValue(L"VoiceId", &pszVoiceId))) {
-        m_voiceId = pszVoiceId.get();
-    } else {
-        wil::unique_cotaskmem_string pszId;
-        pToken->GetId(&pszId);
-        m_voiceId = pszId.get();
+    wil::unique_cotaskmem_string pszVoice;
+    if (SUCCEEDED(pToken->GetStringValue(L"VoiceId", &pszVoice)))
+    {
+        m_voiceId = pszVoice.get();
     }
 
-    m_pClient = std::make_shared<PipeClient>();
-    
     std::wstring exePath(pszExe.get());
     std::wstring pipeName(pszPipe.get());
 
-    HRESULT hr = m_pClient->Connect(pipeName, exePath);
+    m_pClient = std::make_shared<PipeClient>();
+    hr = m_pClient->Connect(pipeName, exePath);
     if (FAILED(hr)) return hr;
-
-    m_pWorker = std::make_unique<SpeechWorker>(this, m_pClient);
 
     using namespace winrt::Windows::Data::Json;
     JsonObject infoReq;
@@ -250,6 +266,8 @@ HRESULT CSapiEngine::LoadProviderFromToken(ISpObjectToken* pToken)
             }
         }
     }
+
+    m_pWorker = std::make_unique<SpeechWorker>(this, m_pClient);
 
     return S_OK;
 }

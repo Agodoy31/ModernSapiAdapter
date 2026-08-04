@@ -112,17 +112,18 @@
     <ClInclude Include="MockSapiInterfaces.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="ProviderWrapperTests.cpp" />
-    <ClCompile Include="SpeechWorkerTests.cpp" />
     <ClCompile Include="SapiEngineTests.cpp" />
 
     <ClCompile Include="..\CoreEngine\SapiEngine.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="..\CoreEngine\ProviderWrapper.cpp">
+    <ClCompile Include="..\CoreEngine\PipeClient.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\CoreEngine\SpeechWorker.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\CoreEngine\AsyncLogger.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="pch.cpp">
@@ -137,12 +138,6 @@
     <None Include="packages.config" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <Target Name="SkipReleaseBuild" BeforeTargets="BeforeBuild" Condition="'$(Configuration)' == 'Release'">
-    <Message Importance="High" Text="Skipping $(MSBuildProjectName) (excluded from Release builds)." />
-  </Target>
-  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
-    <BuildDependsOn />
-  </PropertyGroup>
   <ImportGroup Label="ExtensionTargets">
     <Import Project="..\packages\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-dyn.1.8.1.8\build\native\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-dyn.targets" Condition="Exists('..\packages\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-dyn.1.8.1.8\build\native\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-dyn.targets')" />
     <Import Project="..\packages\Microsoft.Windows.CppWinRT.3.0.260715.1\build\native\Microsoft.Windows.CppWinRT.targets" Condition="Exists('..\packages\Microsoft.Windows.CppWinRT.3.0.260715.1\build\native\Microsoft.Windows.CppWinRT.targets')" />

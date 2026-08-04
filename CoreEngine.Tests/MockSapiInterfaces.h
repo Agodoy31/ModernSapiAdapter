@@ -2,11 +2,13 @@
 
 struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngineSite, ISpEventSink>
 {
-    ULONG totalBytesWritten = 0;
-    ULONG writeCallCount = 0;
+    std::atomic<ULONG> totalBytesWritten = 0;
+    std::atomic<ULONG> writeCallCount = 0;
+    std::mutex eventsMutex;
     std::vector<SPEVENT> receivedEvents;
 
     IFACEMETHODIMP AddEvents(const SPEVENT* pEventArray, ULONG ulCount) noexcept override {
+        std::lock_guard<std::mutex> lock(eventsMutex);
         if (pEventArray && ulCount > 0) {
             for (ULONG i = 0; i < ulCount; ++i) {
                 receivedEvents.push_back(pEventArray[i]);
@@ -35,11 +37,25 @@ struct MockSpDataKey : winrt::implements<MockSpDataKey, ISpDataKey>
     IFACEMETHODIMP GetData(LPCWSTR, ULONG*, BYTE*) noexcept override { return E_NOTIMPL; }
     IFACEMETHODIMP SetStringValue(LPCWSTR, LPCWSTR) noexcept override { return E_NOTIMPL; }
     IFACEMETHODIMP GetStringValue(LPCWSTR pszValueName, LPWSTR* ppszValue) noexcept override {
-        if (wcscmp(pszValueName, L"ProviderDLL") == 0) {
-            const wchar_t* dllPath = L"MockProvider.dll";
-            size_t size = (wcslen(dllPath) + 1) * sizeof(wchar_t);
+        if (wcscmp(pszValueName, L"ProviderExecutablePath") == 0) {
+            const wchar_t* path = L"d:\\Projects\\ModernSapiAdapter\\bin\\MockProvider\\MockProvider.exe";
+            size_t size = (wcslen(path) + 1) * sizeof(wchar_t);
             *ppszValue = (LPWSTR)CoTaskMemAlloc(size);
-            wcscpy_s(*ppszValue, size / sizeof(wchar_t), dllPath);
+            wcscpy_s(*ppszValue, size / sizeof(wchar_t), path);
+            return S_OK;
+        }
+        if (wcscmp(pszValueName, L"ProviderPipeName") == 0) {
+            const wchar_t* name = L"msa_mock_provider";
+            size_t size = (wcslen(name) + 1) * sizeof(wchar_t);
+            *ppszValue = (LPWSTR)CoTaskMemAlloc(size);
+            wcscpy_s(*ppszValue, size / sizeof(wchar_t), name);
+            return S_OK;
+        }
+        if (wcscmp(pszValueName, L"VoiceId") == 0) {
+            const wchar_t* id = L"mock_voice_1";
+            size_t size = (wcslen(id) + 1) * sizeof(wchar_t);
+            *ppszValue = (LPWSTR)CoTaskMemAlloc(size);
+            wcscpy_s(*ppszValue, size / sizeof(wchar_t), id);
             return S_OK;
         }
         return E_NOTIMPL;
@@ -54,17 +70,31 @@ struct MockSpDataKey : winrt::implements<MockSpDataKey, ISpDataKey>
     IFACEMETHODIMP EnumValues(ULONG, LPWSTR*) noexcept override { return E_NOTIMPL; }
 };
 
-struct MockSpObjectToken : winrt::implements<MockSpObjectToken, ISpObjectToken, ISpDataKey>
+struct MockSpObjectToken : winrt::implements<MockSpObjectToken, ISpObjectToken>
 {
     IFACEMETHODIMP SetData(LPCWSTR, ULONG, const BYTE*) noexcept override { return E_NOTIMPL; }
     IFACEMETHODIMP GetData(LPCWSTR, ULONG*, BYTE*) noexcept override { return E_NOTIMPL; }
     IFACEMETHODIMP SetStringValue(LPCWSTR, LPCWSTR) noexcept override { return E_NOTIMPL; }
     IFACEMETHODIMP GetStringValue(LPCWSTR pszValueName, LPWSTR* ppszValue) noexcept override {
-        if (wcscmp(pszValueName, L"ProviderDLL") == 0) {
-            const wchar_t* dllPath = L"MockProvider.dll";
-            size_t size = (wcslen(dllPath) + 1) * sizeof(wchar_t);
+        if (wcscmp(pszValueName, L"ProviderExecutablePath") == 0) {
+            const wchar_t* path = L"d:\\Projects\\ModernSapiAdapter\\bin\\MockProvider\\MockProvider.exe";
+            size_t size = (wcslen(path) + 1) * sizeof(wchar_t);
             *ppszValue = (LPWSTR)CoTaskMemAlloc(size);
-            wcscpy_s(*ppszValue, size / sizeof(wchar_t), dllPath);
+            wcscpy_s(*ppszValue, size / sizeof(wchar_t), path);
+            return S_OK;
+        }
+        if (wcscmp(pszValueName, L"ProviderPipeName") == 0) {
+            const wchar_t* name = L"msa_mock_provider";
+            size_t size = (wcslen(name) + 1) * sizeof(wchar_t);
+            *ppszValue = (LPWSTR)CoTaskMemAlloc(size);
+            wcscpy_s(*ppszValue, size / sizeof(wchar_t), name);
+            return S_OK;
+        }
+        if (wcscmp(pszValueName, L"VoiceId") == 0) {
+            const wchar_t* id = L"mock_voice_1";
+            size_t size = (wcslen(id) + 1) * sizeof(wchar_t);
+            *ppszValue = (LPWSTR)CoTaskMemAlloc(size);
+            wcscpy_s(*ppszValue, size / sizeof(wchar_t), id);
             return S_OK;
         }
         return E_NOTIMPL;

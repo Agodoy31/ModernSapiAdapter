@@ -17,3 +17,5 @@ packages/
 EdgeTtsProvider/
 SapiSsmlParser.Cs/
 v1/
+.superpowers/
+docs/

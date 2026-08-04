@@ -32,17 +32,37 @@ static std::wstring GetCurrentUserSid()
     return sidString;
 }
 
+PipeClient::PipeClient() = default;
+
+PipeClient::~PipeClient()
+{
+    Cancel();
+    m_controlPipe.reset();
+    m_audioPipe.reset();
+
+    if (m_providerProcess.hProcess)
+    {
+        TerminateProcess(m_providerProcess.hProcess, 0);
+        WaitForSingleObject(m_providerProcess.hProcess, 1000);
+    }
+}
+
 HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& exePath)
 {
     std::wstring sid = GetCurrentUserSid();
     std::wstring controlPipePath = L"\\\\.\\pipe\\" + pipeName + L"\\" + sid + L"\\control";
     std::wstring audioPipePath = L"\\\\.\\pipe\\" + pipeName + L"\\" + sid + L"\\audio";
 
-    // Try to connect directly first.
-    HRESULT hr = TryConnectPipes(controlPipePath, audioPipePath);
-    if (SUCCEEDED(hr))
+    // Try to connect directly first (retry briefly in case provider is re-initializing pipes).
+    HRESULT hr = E_FAIL;
+    for (int i = 0; i < 30; ++i)
     {
-        return S_OK;
+        hr = TryConnectPipes(controlPipePath, audioPipePath);
+        if (SUCCEEDED(hr))
+        {
+            return S_OK;
+        }
+        Sleep(50);
     }
 
     // If WaitNamedPipe or CreateFile fails, invoke CreateProcessW to launch the provider
@@ -52,8 +72,11 @@ HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& ex
     si.wShowWindow = SW_HIDE; // hidden/in-background
 
     // Create a mutable copy of the command line for CreateProcessW
-    std::vector<wchar_t> cmdLine(exePath.begin(), exePath.end());
+    std::wstring fullCmdLine = L"\"" + exePath + L"\"";
+    std::vector<wchar_t> cmdLine(fullCmdLine.begin(), fullCmdLine.end());
     cmdLine.push_back(L'\0');
+
+    std::wstring exeDir = exePath.substr(0, exePath.find_last_of(L"\\/"));
 
     if (!CreateProcessW(
         nullptr,
@@ -63,7 +86,7 @@ HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& ex
         FALSE,
         CREATE_NO_WINDOW,
         nullptr,
-        nullptr,
+        exeDir.c_str(),
         &si,
         &processInfo))
     {
@@ -77,13 +100,10 @@ HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& ex
     for (int i = 0; i < maxRetries; ++i)
     {
         Sleep(100); // Wait for the provider to start and create pipes
-        if (WaitNamedPipeW(controlPipePath.c_str(), NMPWAIT_USE_DEFAULT_WAIT))
+        hr = TryConnectPipes(controlPipePath, audioPipePath);
+        if (SUCCEEDED(hr))
         {
-            hr = TryConnectPipes(controlPipePath, audioPipePath);
-            if (SUCCEEDED(hr))
-            {
-                return S_OK;
-            }
+            return S_OK;
         }
     }
 
@@ -106,15 +126,22 @@ HRESULT PipeClient::TryConnectPipes(const std::wstring& controlPipePath, const s
         return HRESULT_FROM_WIN32(GetLastError());
     }
 
-    wil::unique_handle audioPipe(CreateFileW(
-        audioPipePath.c_str(), 
-        GENERIC_READ, 
-        0, 
-        nullptr, 
-        OPEN_EXISTING, 
-        FILE_FLAG_OVERLAPPED, 
-        nullptr));
-        
+    wil::unique_handle audioPipe;
+    for (int retry = 0; retry < 20; ++retry)
+    {
+        audioPipe.reset(CreateFileW(
+            audioPipePath.c_str(), 
+            GENERIC_READ, 
+            0, 
+            nullptr, 
+            OPEN_EXISTING, 
+            FILE_FLAG_OVERLAPPED, 
+            nullptr));
+
+        if (audioPipe) break;
+        Sleep(50);
+    }
+
     if (!audioPipe)
     {
         return HRESULT_FROM_WIN32(GetLastError());
@@ -133,13 +160,15 @@ HRESULT PipeClient::SendControlMessage(const winrt::Windows::Data::Json::JsonObj
 {
     if (!m_controlPipe) return E_UNEXPECTED;
 
-    std::wstring jsonStringW = json.Stringify().c_str();
+    winrt::hstring jsonHString = json.Stringify();
+    std::wstring jsonStringW(jsonHString.c_str(), jsonHString.size());
     int utf8Len = WideCharToMultiByte(CP_UTF8, 0, jsonStringW.c_str(), -1, nullptr, 0, nullptr, nullptr);
     if (utf8Len == 0) return HRESULT_FROM_WIN32(GetLastError());
 
     std::string utf8String(utf8Len, 0);
     WideCharToMultiByte(CP_UTF8, 0, jsonStringW.c_str(), -1, utf8String.data(), utf8Len, nullptr, nullptr);
     utf8String.resize(utf8Len - 1); 
+    utf8String += "\n";
 
     wil::unique_event overlappedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     if (!overlappedEvent) return HRESULT_FROM_WIN32(GetLastError());
@@ -165,46 +194,78 @@ HRESULT PipeClient::SendControlMessage(const winrt::Windows::Data::Json::JsonObj
 
 HRESULT PipeClient::ReadControlMessage(winrt::Windows::Data::Json::JsonObject& outJson)
 {
+    outJson = nullptr;
     if (!m_controlPipe) return E_UNEXPECTED;
 
-    std::vector<uint8_t> buffer(4096);
-    wil::unique_event overlappedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-    if (!overlappedEvent) return HRESULT_FROM_WIN32(GetLastError());
+    std::vector<char> buffer;
+    char chunk[256];
 
-    OVERLAPPED overlapped = {};
-    overlapped.hEvent = overlappedEvent.get();
-
-    DWORD bytesRead = 0;
-    BOOL result = ReadFile(m_controlPipe.get(), buffer.data(), static_cast<DWORD>(buffer.size()), nullptr, &overlapped);
-
-    if (!result && GetLastError() != ERROR_IO_PENDING)
+    while (true)
     {
-        return HRESULT_FROM_WIN32(GetLastError());
+        wil::unique_event overlappedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+        if (!overlappedEvent) return HRESULT_FROM_WIN32(GetLastError());
+
+        OVERLAPPED overlapped = {};
+        overlapped.hEvent = overlappedEvent.get();
+
+        DWORD bytesRead = 0;
+        BOOL success = ReadFile(m_controlPipe.get(), chunk, sizeof(chunk), nullptr, &overlapped);
+        if (!success)
+        {
+            DWORD err = GetLastError();
+            if (err == ERROR_IO_PENDING)
+            {
+                if (!GetOverlappedResult(m_controlPipe.get(), &overlapped, &bytesRead, TRUE))
+                {
+                    return HRESULT_FROM_WIN32(GetLastError());
+                }
+            }
+            else
+            {
+                return HRESULT_FROM_WIN32(err);
+            }
+        }
+
+        if (bytesRead > 0)
+        {
+            buffer.insert(buffer.end(), chunk, chunk + bytesRead);
+            if (buffer.back() == '\n')
+            {
+                break;
+            }
+        }
+        else
+        {
+            return E_FAIL;
+        }
     }
 
-    if (!GetOverlappedResult(m_controlPipe.get(), &overlapped, &bytesRead, TRUE))
-    {
-        return HRESULT_FROM_WIN32(GetLastError());
-    }
-
-    if (bytesRead == 0) return E_FAIL;
-
-    std::string utf8String(reinterpret_cast<char*>(buffer.data()), bytesRead);
+    std::string utf8String(buffer.begin(), buffer.end());
     int wideLen = MultiByteToWideChar(CP_UTF8, 0, utf8String.c_str(), static_cast<int>(utf8String.size()), nullptr, 0);
     if (wideLen == 0) return HRESULT_FROM_WIN32(GetLastError());
 
     std::wstring wideString(wideLen, 0);
     MultiByteToWideChar(CP_UTF8, 0, utf8String.c_str(), static_cast<int>(utf8String.size()), wideString.data(), wideLen);
 
+    while (!wideString.empty() && (wideString.back() == L'\r' || wideString.back() == L'\n' || wideString.back() == L'\0' || wideString.back() == L' '))
+    {
+        wideString.pop_back();
+    }
+
     try
     {
         outJson = winrt::Windows::Data::Json::JsonObject::Parse(wideString);
-        return S_OK;
     }
     catch (const winrt::hresult_error& e)
     {
         return e.code();
     }
+    catch (...)
+    {
+        return E_FAIL;
+    }
+
+    return S_OK;
 }
 
 HRESULT PipeClient::ReadAudioChunk(std::vector<uint8_t>& buffer, DWORD& bytesRead)

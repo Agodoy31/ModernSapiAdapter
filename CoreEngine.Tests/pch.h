@@ -16,12 +16,11 @@
 
 #include <sapiddk.h>
 
-#include <unknwn.h>
 #include <winrt/base.h>
+#include <winrt/Windows.Data.Json.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <wil/com.h>
 #include <wil/resource.h>
-
-#include <provider_abi.h>
 
 #include <string>
 #include <thread>

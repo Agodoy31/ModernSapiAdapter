@@ -51,7 +51,7 @@ void SpeechWorker::WaitUntilFinished()
 
 void SpeechWorker::AudioThreadProc()
 {
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
     std::vector<uint8_t> buffer(4096);
     while (!m_exit)
     {
@@ -59,6 +59,7 @@ void SpeechWorker::AudioThreadProc()
         HRESULT hr = m_pClient->ReadAudioChunk(buffer, bytesRead);
         if (FAILED(hr))
         {
+            if (m_exit) break;
             Sleep(50);
             continue;
         }
@@ -68,18 +69,19 @@ void SpeechWorker::AudioThreadProc()
             m_pEngine->OnAudioData(buffer.data(), bytesRead);
         }
     }
-    CoUninitialize();
+    winrt::uninit_apartment();
 }
 
 void SpeechWorker::ControlThreadProc()
 {
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
     while (!m_exit)
     {
         winrt::Windows::Data::Json::JsonObject json = nullptr;
         HRESULT hr = m_pClient->ReadControlMessage(json);
         if (FAILED(hr) || !json)
         {
+            if (m_exit) break;
             Sleep(50);
             continue;
         }
@@ -95,5 +97,5 @@ void SpeechWorker::ControlThreadProc()
 
         m_pEngine->OnSpeechEvent(json);
     }
-    CoUninitialize();
+    winrt::uninit_apartment();
 }
