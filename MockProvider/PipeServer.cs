@@ -9,8 +9,8 @@ namespace MockProvider;
 public class PipeServer : IDisposable
 {
     private readonly string _pipePrefix;
-    private NamedPipeServerStream? _controlPipe;
-    private NamedPipeServerStream? _audioPipe;
+    public NamedPipeServerStream? ControlPipe { get; private set; }
+    public NamedPipeServerStream? AudioPipe { get; private set; }
 
     public PipeServer(string pipePrefix)
     {
@@ -27,29 +27,29 @@ public class PipeServer : IDisposable
         string controlPipeName = $"{_pipePrefix}\\{userSid}\\control";
         string audioPipeName = $"{_pipePrefix}\\{userSid}\\audio";
 
-        _controlPipe = new NamedPipeServerStream(
+        ControlPipe = new NamedPipeServerStream(
             controlPipeName,
             PipeDirection.InOut,
             1,
             PipeTransmissionMode.Message,
             PipeOptions.Asynchronous);
 
-        _audioPipe = new NamedPipeServerStream(
+        AudioPipe = new NamedPipeServerStream(
             audioPipeName,
             PipeDirection.Out,
             1,
             PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous);
 
-        var controlTask = _controlPipe.WaitForConnectionAsync(cancellationToken);
-        var audioTask = _audioPipe.WaitForConnectionAsync(cancellationToken);
+        var controlTask = ControlPipe.WaitForConnectionAsync(cancellationToken);
+        var audioTask = AudioPipe.WaitForConnectionAsync(cancellationToken);
 
         await Task.WhenAll(controlTask, audioTask);
     }
 
     public void Dispose()
     {
-        _controlPipe?.Dispose();
-        _audioPipe?.Dispose();
+        ControlPipe?.Dispose();
+        AudioPipe?.Dispose();
     }
 }
