@@ -21,6 +21,7 @@ CSapiEngine::~CSapiEngine()
     
     if (m_pClient)
     {
+        // Send explicit shutdown command to external provider before disconnecting pipe client
         using namespace winrt::Windows::Data::Json;
         JsonObject shutdownReq;
         shutdownReq.SetNamedValue(L"command", JsonValue::CreateStringValue(L"shutdown"));
