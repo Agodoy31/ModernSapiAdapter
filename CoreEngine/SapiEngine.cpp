@@ -21,11 +21,29 @@ CSapiEngine::~CSapiEngine()
     
     if (m_pClient)
     {
-        // Send explicit shutdown command to external provider before disconnecting pipe client
-        using namespace winrt::Windows::Data::Json;
-        JsonObject shutdownReq;
-        shutdownReq.SetNamedValue(L"command", JsonValue::CreateStringValue(L"shutdown"));
-        m_pClient->SendControlMessage(shutdownReq);
+        try
+        {
+            using namespace winrt::Windows::Data::Json;
+            JsonObject shutdownReq;
+            shutdownReq.SetNamedValue(L"command", JsonValue::CreateStringValue(L"shutdown"));
+            HRESULT hr = m_pClient->SendControlMessage(shutdownReq);
+            if (SUCCEEDED(hr))
+            {
+                CoreLog(L"[CoreEngine] Sent shutdown command to provider.");
+            }
+            else
+            {
+                CoreLog(L"[CoreEngine] Failed to send shutdown command: 0x%08x", hr);
+            }
+        }
+        catch (const winrt::hresult_error& e)
+        {
+            CoreLog(L"[CoreEngine] Exception sending shutdown command: 0x%08x", e.code().value);
+        }
+        catch (...)
+        {
+            CoreLog(L"[CoreEngine] Unknown exception sending shutdown command.");
+        }
     }
     m_pClient.reset();
 }
