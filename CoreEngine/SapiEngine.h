@@ -91,6 +91,7 @@ private:
     std::unique_ptr<SpeechWorker> m_pWorker;
     std::wstring m_voiceId;
     WAVEFORMATEX m_audioFormat;
+    std::atomic<uint64_t> m_speakIdCounter{0};
 
     HRESULT LoadProviderFromToken(ISpObjectToken* pToken);
 };
