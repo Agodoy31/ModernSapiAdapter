@@ -19,7 +19,7 @@ namespace SapiManager;
 
 public partial class MainWindow : Window
 {
-    private readonly ProviderProber _prober = new();
+    private readonly ProviderDiscovery _prober = new();
     private readonly ObservableCollection<ProviderViewModel> _providers = new();
 
     private SpeechSynthesizer? _synthesizer;

@@ -14,14 +14,13 @@ namespace SapiManager.Views;
 public partial class AddProviderWindow : Window
 {
     private readonly string _providersDir;
-    private readonly ZipProviderInstaller _installer;
+    private readonly ProviderInstaller _installer = new();
     private PackageInspectionResult? _inspectionResult;
 
     public AddProviderWindow(string providersDir)
     {
         InitializeComponent();
         _providersDir = providersDir;
-        _installer = new ZipProviderInstaller();
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
