@@ -87,32 +87,12 @@ void SpeechWorker::ControlThreadProc()
             continue;
         }
 
-        if (json.HasKey(L"event") && json.HasKey(L"speak_id"))
+        if (json.HasKey(L"event"))
         {
             auto eventStr = json.GetNamedString(L"event");
-            uint64_t eventSpeakId = static_cast<uint64_t>(json.GetNamedNumber(L"speak_id"));
-            
-            if (eventSpeakId == m_activeSpeakId.load())
+            if (eventStr == L"completed" || eventStr == L"error")
             {
-                if (eventStr == L"completed")
-                {
-                    m_isSpeaking = false;
-                }
-                else if (eventStr == L"error")
-                {
-                    if (json.HasKey(L"severity"))
-                    {
-                        auto severity = json.GetNamedString(L"severity");
-                        if (severity == L"error" || severity == L"fatal")
-                        {
-                            m_isSpeaking = false;
-                        }
-                    }
-                    else
-                    {
-                        m_isSpeaking = false; // Default to fatal if no severity specified
-                    }
-                }
+                m_isSpeaking = false;
             }
         }
 
