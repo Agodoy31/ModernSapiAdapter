@@ -131,10 +131,14 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
 
     speakReq.SetNamedValue(L"fragments", fragments);
 
-    HRESULT hr = m_pClient->SendControlMessage(speakReq);
-    if (FAILED(hr)) return hr;
+    m_pWorker->Start(pOutputSite, speakId);
 
-    m_pWorker->Start(pOutputSite, m_speakIdCounter.load());
+    HRESULT hr = m_pClient->SendControlMessage(speakReq);
+    if (FAILED(hr))
+    {
+        m_pWorker->Stop();
+        return hr;
+    }
 
     if ((dwSpeakFlags & SPF_ASYNC) == 0)
     {
@@ -162,6 +166,7 @@ void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& ev
     if (!m_cpSite) return;
 
     if (!eventJson.HasKey(L"event")) return;
+    if (eventJson.GetNamedValue(L"event").ValueType() != winrt::Windows::Data::Json::JsonValueType::String) return;
     auto eventStr = eventJson.GetNamedString(L"event");
     
     if (eventJson.HasKey(L"speak_id") && eventJson.GetNamedValue(L"speak_id").ValueType() == winrt::Windows::Data::Json::JsonValueType::Number)

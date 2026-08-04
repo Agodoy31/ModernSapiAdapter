@@ -87,39 +87,51 @@ void SpeechWorker::ControlThreadProc()
             continue;
         }
 
-        if (json.HasKey(L"event") && json.HasKey(L"speak_id"))
+        try
         {
-            auto eventStr = json.GetNamedString(L"event");
-            if (json.GetNamedValue(L"speak_id").ValueType() == winrt::Windows::Data::Json::JsonValueType::Number)
+            if (json.HasKey(L"event") && json.HasKey(L"speak_id"))
             {
-                uint64_t eventSpeakId = static_cast<uint64_t>(json.GetNamedNumber(L"speak_id"));
-                
-                if (eventSpeakId == m_activeSpeakId.load())
+                if (json.GetNamedValue(L"event").ValueType() == winrt::Windows::Data::Json::JsonValueType::String &&
+                    json.GetNamedValue(L"speak_id").ValueType() == winrt::Windows::Data::Json::JsonValueType::Number)
                 {
-                    if (eventStr == L"completed")
+                    auto eventStr = json.GetNamedString(L"event");
+                    uint64_t eventSpeakId = static_cast<uint64_t>(json.GetNamedNumber(L"speak_id"));
+                    
+                    if (eventSpeakId == m_activeSpeakId.load())
                     {
-                        m_isSpeaking = false;
-                    }
-                    else if (eventStr == L"error")
-                    {
-                        if (json.HasKey(L"severity"))
+                        if (eventStr == L"completed")
                         {
-                            auto severity = json.GetNamedString(L"severity");
-                            if (severity == L"error" || severity == L"fatal")
-                            {
-                                m_isSpeaking = false;
-                            }
+                            m_isSpeaking = false;
                         }
-                        else
+                        else if (eventStr == L"error")
                         {
-                            m_isSpeaking = false; // Default to fatal if no severity specified
+                            if (json.HasKey(L"severity") && json.GetNamedValue(L"severity").ValueType() == winrt::Windows::Data::Json::JsonValueType::String)
+                            {
+                                auto severity = json.GetNamedString(L"severity");
+                                if (severity == L"error" || severity == L"fatal")
+                                {
+                                    m_isSpeaking = false;
+                                }
+                            }
+                            else
+                            {
+                                m_isSpeaking = false; // Default to fatal if no severity specified or invalid type
+                            }
                         }
                     }
                 }
             }
-        }
 
-        m_pEngine->OnSpeechEvent(json);
+            m_pEngine->OnSpeechEvent(json);
+        }
+        catch (const std::exception& e)
+        {
+            CoreLog(L"[SpeechWorker] Exception in ControlThreadProc: %hs", e.what());
+        }
+        catch (...)
+        {
+            CoreLog(L"[SpeechWorker] Unknown exception in ControlThreadProc.");
+        }
     }
     winrt::uninit_apartment();
 }
