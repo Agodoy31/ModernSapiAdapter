@@ -31,14 +31,31 @@ void SpeechWorker::Start(void* /*pSite*/, uint64_t speakId)
 
 void SpeechWorker::Stop()
 {
-    if (m_isSpeaking)
+    if (m_isSpeaking.exchange(false))
     {
-        using namespace winrt::Windows::Data::Json;
-        JsonObject req;
-        req.SetNamedValue(L"command", JsonValue::CreateStringValue(L"cancel"));
-        req.SetNamedValue(L"speak_id", JsonValue::CreateNumberValue(static_cast<double>(m_activeSpeakId.load())));
-        m_pClient->SendControlMessage(req);
-        m_isSpeaking = false;
+        try
+        {
+            using namespace winrt::Windows::Data::Json;
+            JsonObject req;
+            req.SetNamedValue(L"command", JsonValue::CreateStringValue(L"cancel"));
+            req.SetNamedValue(L"speak_id", JsonValue::CreateNumberValue(static_cast<double>(m_activeSpeakId.load())));
+            if (m_pClient)
+            {
+                m_pClient->SendControlMessage(req);
+            }
+        }
+        catch (const winrt::hresult_error& e)
+        {
+            CoreLog(L"[SpeechWorker] WinRT exception in Stop: 0x%08x - %s", e.code().value, e.message().c_str());
+        }
+        catch (const std::exception& e)
+        {
+            CoreLog(L"[SpeechWorker] Exception in Stop: %hs", e.what());
+        }
+        catch (...)
+        {
+            CoreLog(L"[SpeechWorker] Unknown exception in Stop.");
+        }
     }
 }
 
@@ -123,6 +140,10 @@ void SpeechWorker::ControlThreadProc()
             }
 
             m_pEngine->OnSpeechEvent(json);
+        }
+        catch (const winrt::hresult_error& e)
+        {
+            CoreLog(L"[SpeechWorker] WinRT exception in ControlThreadProc: 0x%08x - %s", e.code().value, e.message().c_str());
         }
         catch (const std::exception& e)
         {
