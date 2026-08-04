@@ -1,151 +1,139 @@
 <Window x:Class="SapiManager.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="ModernSapiAdapter - Speech Provider Manager" Height="650" Width="950"
+        Title="ModernSapiAdapter - Speech Provider Manager" Height="700" Width="1000"
         WindowStartupLocation="CenterScreen"
-        Background="#F9FAFB">
+        WindowState="Maximized"
+        Background="#F8FAFC">
     <Grid>
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="260"/>
-            <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
+        <TabControl x:Name="MainTabControl" Background="White" BorderThickness="0">
+            <!-- Tab 1: Provider Management -->
+            <TabItem Header="Provider Management" AutomationProperties.Name="Provider Management">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="280"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
 
-        <!-- Sidebar: Provider List -->
-        <Border Grid.Column="0" Background="#1E293B" Padding="16">
-            <DockPanel>
-                <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
-                    <TextBlock Text="ModernSapiAdapter" FontSize="18" FontWeight="Bold" Foreground="White"/>
-                    <TextBlock Text="Speech Provider Manager" FontSize="12" Foreground="#94A3B8" Margin="0,2,0,0"/>
-                </StackPanel>
-
-                <Button x:Name="BtnRefresh" DockPanel.Dock="Bottom" Content="Refresh Providers" Height="36" Background="#334155" Foreground="White" FontWeight="SemiBold" Click="BtnRefresh_Click" AutomationProperties.Name="Refresh Providers" AutomationProperties.HelpText="Scans for added or updated speech providers."/>
-
-                <ListBox x:Name="LstProviders" Background="Transparent" BorderThickness="0" Foreground="White" SelectionChanged="LstProviders_SelectionChanged" Margin="0,0,0,12" AutomationProperties.Name="Providers List" AutomationProperties.HelpText="Select a speech provider to configure its voices and parameters. Press Shift+F10 for context actions.">
-                    <ListBox.ContextMenu>
-                        <ContextMenu>
-                            <MenuItem Header="Generate / Refresh Voice Manifest" Click="MenuItem_GenerateManifest_Click"/>
-                            <MenuItem Header="Open Provider Folder" Click="MenuItem_OpenFolder_Click"/>
-                        </ContextMenu>
-                    </ListBox.ContextMenu>
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <StackPanel Margin="8,6" AutomationProperties.Name="{Binding ProviderName}">
-                                <DockPanel>
-                                    <TextBlock Text="{Binding ProviderName}" FontSize="15" FontWeight="Bold" Foreground="White"/>
-                                </DockPanel>
-                                <TextBlock Text="{Binding Version, StringFormat='Version: {0}'}" FontSize="11" Foreground="#94A3B8"/>
-                            </StackPanel>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-            </DockPanel>
-        </Border>
-
-        <!-- Main Workspace -->
-        <Grid Grid.Column="1" Margin="24">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-
-            <!-- Provider Header -->
-            <StackPanel Grid.Row="0" Margin="0,0,0,16">
-                <TextBlock x:Name="TxtSelectedProvider" Text="Select a Provider" FontSize="22" FontWeight="Bold" Foreground="#0F172A"/>
-                <TextBlock x:Name="TxtProviderDetails" Text="Scan or select a provider from the sidebar to manage voices and settings." FontSize="13" Foreground="#64748B" Margin="0,2,0,0"/>
-            </StackPanel>
-
-            <!-- Unmanifested Provider Banner -->
-            <Border x:Name="PnlUnmanifestedBanner" Grid.Row="1" Background="#FEF2F2" BorderBrush="#FCA5A5" BorderThickness="1" CornerRadius="6" Padding="16" VerticalAlignment="Top" Visibility="Collapsed" Panel.ZIndex="10">
-                <DockPanel>
-                    <Button x:Name="BtnGenerateManifest" DockPanel.Dock="Right" Content="Generate Voice Manifest" Height="36" Padding="12,0" Background="#DC2626" Foreground="White" FontWeight="Bold" Click="BtnGenerateManifest_Click" AutomationProperties.Name="Generate Voice Manifest" AutomationProperties.HelpText="Invokes provider DLL to scan for voices and generate the JSON manifest."/>
-                    <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
-                        <TextBlock x:Name="TxtBannerTitle" Text="Voice Manifest Missing" FontSize="16" FontWeight="Bold" Foreground="#991B1B"/>
-                        <TextBlock x:Name="TxtBannerDesc" Text="This provider DLL is installed but missing its voice manifest JSON. Click Generate Voice Manifest to build its voice catalog." FontSize="12" Foreground="#B91C1C" TextWrapping="Wrap"/>
-                    </StackPanel>
-                </DockPanel>
-            </Border>
-
-            <!-- Workspace Tabs -->
-            <TabControl x:Name="TabWorkspace" Grid.Row="1" Background="White" BorderBrush="#E2E8F0" BorderThickness="1" AutomationProperties.Name="Workspace">
-                <!-- Tab 1: Voice Management -->
-                <TabItem Header="Voices &amp; Tokens" AutomationProperties.Name="Voices &amp; Tokens">
-                    <Grid Margin="16">
+                    <!-- Left Sidebar -->
+                    <Border Grid.Column="0" Background="#1E293B" Padding="16">
                         <DockPanel>
-                            <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
-                                <TextBlock Text="Available Voices" FontSize="16" FontWeight="SemiBold" Foreground="#1E293B"/>
-                                <TextBlock Text="Enable voices and customize their aliases before writing to SAPI 5 registry." FontSize="12" Foreground="#64748B"/>
+                            <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+                                <TextBlock Text="ModernSapiAdapter" FontSize="18" FontWeight="Bold" Foreground="White"/>
+                                <TextBlock Text="Speech Provider Manager" FontSize="12" Foreground="#94A3B8" Margin="0,2,0,0"/>
                             </StackPanel>
 
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                <StackPanel x:Name="PnlVoiceList" Margin="0,4"/>
-                            </ScrollViewer>
-                        </DockPanel>
-                    </Grid>
-                </TabItem>
+                            <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+                                <Button x:Name="BtnAddProvider" Content="Add Provider..." Height="36" Background="#2563EB" Foreground="White" FontWeight="Bold" Margin="0,0,0,8" Click="BtnAddProvider_Click" AutomationProperties.Name="Add Provider" AutomationProperties.HelpText="Browse for an external Provider executable file to add."/>
+                                <Button x:Name="BtnRefresh" Content="Refresh Providers" Height="36" Background="#334155" Foreground="White" FontWeight="SemiBold" Click="BtnRefresh_Click" AutomationProperties.Name="Refresh Providers" AutomationProperties.HelpText="Scans for added or updated speech providers."/>
+                            </StackPanel>
 
-                <!-- Tab 2: Dynamic Provider Settings -->
-                <TabItem Header="Provider Configuration" AutomationProperties.Name="Provider Configuration">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16">
-                        <StackPanel>
-                            <DockPanel Margin="0,0,0,16">
-                                <StackPanel DockPanel.Dock="Left">
-                                    <TextBlock Text="Provider Settings" FontSize="16" FontWeight="SemiBold" Foreground="#1E293B"/>
-                                    <TextBlock Text="Configure provider credentials and operational parameters." FontSize="12" Foreground="#64748B"/>
+                            <ListBox x:Name="LstProviders" Background="Transparent" BorderThickness="0" Foreground="White" SelectionChanged="LstProviders_SelectionChanged" Margin="0,0,0,12" AutomationProperties.Name="Discovered Providers List" AutomationProperties.HelpText="Select a speech provider to configure its voices and settings.">
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="AutomationProperties.Name" Value="{Binding ProviderName}"/>
+                                        <Setter Property="Padding" Value="8,6"/>
+                                        <Setter Property="Margin" Value="0,2"/>
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="4,2">
+                                            <TextBlock Text="{Binding ProviderName}" FontSize="15" FontWeight="Bold" Foreground="White"/>
+                                            <TextBlock Text="{Binding Version, StringFormat='Version: {0}'}" FontSize="11" Foreground="#94A3B8"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- Right Pane (Provider Details Panel) -->
+                    <Border Grid.Column="1" Padding="24" Background="#F8FAFC">
+                        <Grid x:Name="PnlProviderDetails" IsEnabled="False">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Provider Details Header -->
+                            <DockPanel Grid.Row="0" Margin="0,0,0,20">
+                                <Button x:Name="BtnConfigure" DockPanel.Dock="Right" Content="Configure Provider" Height="36" Padding="16,0" Background="#0EA5E9" Foreground="White" FontWeight="Bold" Click="BtnConfigure_Click" AutomationProperties.Name="Configure Provider" AutomationProperties.HelpText="Launches the configuration UI for the selected provider executable."/>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock x:Name="TxtSelectedProvider" Text="Select a Provider" FontSize="22" FontWeight="Bold" Foreground="#0F172A"/>
+                                    <TextBlock x:Name="TxtProviderDetails" Text="Select a provider from the sidebar to manage voices and settings." FontSize="13" Foreground="#64748B" Margin="0,2,0,0"/>
                                 </StackPanel>
                             </DockPanel>
 
-                            <!-- Config Scope Selector Bar -->
-                            <Border Background="#F8FAFC" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,16">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    
-                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
-                                        <TextBlock Text="Target Config Scope:" FontWeight="SemiBold" FontSize="12" Foreground="#334155"/>
-                                        <TextBlock x:Name="TxtActiveConfigPath" Text="C:\Program Files\..." FontSize="10" Foreground="#64748B" TextTrimming="CharacterEllipsis" MaxWidth="350"/>
+                            <!-- Voices List Panel -->
+                            <Border Grid.Row="1" Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="16">
+                                <DockPanel>
+                                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+                                        <TextBlock Text="Available Voices" FontSize="16" FontWeight="SemiBold" Foreground="#1E293B"/>
+                                        <TextBlock Text="Check voices to register them as SAPI 5 system tokens." FontSize="12" Foreground="#64748B" Margin="0,2,0,0"/>
                                     </StackPanel>
 
-                                    <ComboBox x:Name="CmbConfigScope" Grid.Column="1" Height="32" VerticalContentAlignment="Center" SelectionChanged="CmbConfigScope_SelectionChanged" AutomationProperties.Name="Target Config Scope" AutomationProperties.HelpText="Switch between editing Machine-Wide baseline config and User-Wide override config."/>
+                                    <ListBox x:Name="LstVoices" BorderThickness="0" Background="Transparent" VerticalAlignment="Stretch" HorizontalContentAlignment="Stretch" KeyDown="LstVoices_KeyDown">
+                                        <ListBox.ItemContainerStyle>
+                                            <Style TargetType="ListBoxItem">
+                                                <Setter Property="AutomationProperties.Name" Value="{Binding FullAccessibilityLabel}"/>
+                                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                <Setter Property="Padding" Value="4"/>
+                                                <Setter Property="Margin" Value="0,2"/>
+                                            </Style>
+                                        </ListBox.ItemContainerStyle>
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Background="#F8FAFC" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="6" Padding="12">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                        </Grid.ColumnDefinitions>
 
-                                    <Button x:Name="BtnCreateUserConfig" Grid.Column="2" Content="Create User Override" Height="32" Padding="10,0" Margin="12,0,0,0" Background="#0EA5E9" Foreground="White" FontWeight="Bold" Click="BtnCreateUserConfig_Click" Visibility="Collapsed" AutomationProperties.Name="Create User Configuration Override" AutomationProperties.HelpText="Initializes a User-Wide configuration override file in LocalAppData."/>
-                                </Grid>
+                                                        <CheckBox Grid.Column="0" IsChecked="{Binding IsRegistered, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,12,0" Focusable="False" AutomationProperties.Name="{Binding Name}"/>
+
+                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="Bold" Foreground="#1E293B"/>
+                                                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                                <TextBlock Text="{Binding Language, StringFormat='Language: {0}'}" FontSize="11" Foreground="#64748B" Margin="0,0,16,0"/>
+                                                                <TextBlock Text="{Binding Gender, StringFormat='Gender: {0}'}" FontSize="11" Foreground="#64748B" Margin="0,0,16,0"/>
+                                                                <TextBlock Text="{Binding Vendor, StringFormat='Vendor: {0}'}" FontSize="11" Foreground="#64748B"/>
+                                                            </StackPanel>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </DockPanel>
                             </Border>
-                            
-                            <!-- Dynamic UI container -->
-                            <StackPanel x:Name="PnlDynamicSettings" Margin="0,4"/>
 
-                            <!-- Raw JSON Editor (Hidden by default) -->
-                            <StackPanel x:Name="PnlRawJsonEditor" Visibility="Collapsed" Margin="0,4">
-                                <TextBlock Text="Raw JSON Configuration Editor" FontWeight="SemiBold" FontSize="13" Foreground="#334155" Margin="0,0,0,4"/>
-                                <TextBlock Text="This provider uses an advanced JSON schema. Edit the raw configuration below." FontSize="11" Foreground="#64748B" Margin="0,0,0,8"/>
-                                <TextBox x:Name="TxtRawJsonConfig" Height="300" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" Background="#1E293B" Foreground="#E2E8F0" Padding="8" AutomationProperties.Name="Raw JSON Configuration Editor"/>
+                            <!-- Bottom Save Action Bar -->
+                            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+                                <Button x:Name="BtnSaveVoices" Content="Save Voices" Width="160" Height="40" Background="#2563EB" Foreground="White" FontWeight="Bold" Click="BtnSaveVoices_Click" AutomationProperties.Name="Save Voices" AutomationProperties.HelpText="Applies voice registration changes to the SAPI 5 system registry."/>
                             </StackPanel>
-                        </StackPanel>
-                    </ScrollViewer>
-                </TabItem>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </TabItem>
 
-                <!-- Tab 3: SAPI 5 Voice Tester -->
-                <TabItem Header="SAPI 5 Tester" AutomationProperties.Name="SAPI 5 Tester">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16">
+            <!-- Tab 2: SAPI 5 Tester (Reserved Container for Task 5) -->
+            <TabItem Header="SAPI 5 Tester" AutomationProperties.Name="SAPI 5 Tester">
+                <Border Padding="24" Background="#F8FAFC">
+                    <Grid x:Name="PnlSapiTesterContainer">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel>
-                            <TextBlock Text="SAPI 5 Speech Tester" FontSize="16" FontWeight="SemiBold" Foreground="#1E293B"/>
-                            <TextBlock Text="Query and test installed SAPI 5 voices with custom text, speech parameters, and event telemetry." FontSize="12" Foreground="#64748B" Margin="0,2,0,16"/>
+                            <TextBlock Text="SAPI 5 Speech Tester" FontSize="20" FontWeight="Bold" Foreground="#0F172A"/>
+                            <TextBlock Text="Query and test installed SAPI 5 voices with custom text, speech parameters, and event telemetry." FontSize="13" Foreground="#64748B" Margin="0,2,0,16"/>
 
                             <!-- Voice Selection Section -->
                             <Grid Margin="0,0,0,16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0">
+                                <StackPanel>
                                     <TextBlock Text="Select SAPI 5 Voice" FontWeight="SemiBold" FontSize="13" Foreground="#334155" Margin="0,0,0,4"/>
                                     <ComboBox x:Name="CmbTestVoice" Height="32" VerticalContentAlignment="Center" SelectionChanged="CmbTestVoice_SelectionChanged" AutomationProperties.Name="Select SAPI 5 Voice" AutomationProperties.HelpText="Selects the target SAPI 5 voice for speech synthesis."/>
                                 </StackPanel>
-                                <CheckBox x:Name="ChkFilterProviderVoices" Grid.Column="1" Content="Filter Selected Provider Only" VerticalAlignment="Bottom" Margin="16,0,0,6" IsChecked="False" Click="ChkFilterProviderVoices_Click" AutomationProperties.Name="Filter Selected Provider Voices Only" AutomationProperties.HelpText="When checked, filters the dropdown to show only voices belonging to the selected provider."/>
                             </Grid>
 
                             <!-- Speech Parameters Sliders -->
@@ -210,13 +198,11 @@
                             <TextBox x:Name="TxtTestLog" Height="110" TextWrapping="Wrap" IsReadOnly="True" VerticalScrollBarVisibility="Auto" Background="#F1F5F9" Foreground="#1E293B" FontFamily="Consolas" FontSize="11" Padding="8" AutomationProperties.Name="Event Telemetry Log" AutomationProperties.HelpText="Displays real-time SAPI 5 synthesis events, word progress, and bookmark callbacks."/>
                         </StackPanel>
                     </ScrollViewer>
-                </TabItem>
-            </TabControl>
-
-            <!-- Footer / Action Bar -->
-            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-                <Button x:Name="BtnSaveConfig" Content="Save &amp; Register SAPI Voices" Width="220" Height="40" Background="#2563EB" Foreground="White" FontWeight="Bold" Click="BtnSaveConfig_Click" AutomationProperties.Name="Save &amp; Register Voices" AutomationProperties.HelpText="Saves settings and updates SAPI 5 voice tokens."/>
-            </StackPanel>
-        </Grid>
+                </Grid>
+            </Border>
+        </TabItem>
+        </TabControl>
+        <!-- Modal Overlay to dim the background when a dialog is open -->
+        <Border x:Name="ModalOverlay" Background="#66000000" Visibility="Collapsed" Panel.ZIndex="999"/>
     </Grid>
 </Window>

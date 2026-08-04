@@ -3,7 +3,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="ModernSapiAdapter Setup" Height="380" Width="520"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
-        Background="#F5F5F7">
+        Background="#F5F5F7"
+        AutomationProperties.Name="{Binding RelativeSource={RelativeSource Self}, Path=Title}"
+        Loaded="Window_Loaded">
     <Grid Margin="24">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -14,7 +16,7 @@
 
         <!-- Header -->
         <StackPanel Grid.Row="0">
-            <TextBlock x:Name="TxtTitle" Text="ModernSapiAdapter Setup" FontSize="22" FontWeight="Bold" Foreground="#111827" AutomationProperties.Name="Setup Title"/>
+            <TextBlock x:Name="TxtTitle" Text="ModernSapiAdapter Setup" FontSize="22" FontWeight="Bold" Foreground="#111827" Focusable="True" KeyboardNavigation.TabIndex="0" AutomationProperties.Name="{Binding Text, RelativeSource={RelativeSource Self}}"/>
             <TextBlock x:Name="TxtSubtitle" Text="SAPI 5 Speech Adapter Management Ecosystem" FontSize="13" Foreground="#6B7280" Margin="0,4,0,0"/>
         </StackPanel>
 

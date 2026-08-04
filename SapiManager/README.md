@@ -55,7 +55,6 @@ SapiManager/
 │   └── ProviderManifest.cs      # Data models for provider manifests & user config JSONs
 ├── Services/
 │   ├── ComRegistrar.cs          # P/Invoke wrapper for CoreEngine.dll COM registration
-│   ├── CredentialManager.cs     # Windows Credential Manager & DPAPI encryption service
 │   ├── RegistryManager.cs       # SAPI 5 voice token & uninstall registry manager
 │   └── ShortcutManager.cs       # Native COM interop Start Menu shortcut (.lnk) manager
 └── Views/

@@ -6,17 +6,24 @@ using SapiManager.Services;
 
 namespace SapiManager.Views;
 
+public enum InstallerMode
+{
+    Install,
+    Uninstall,
+    Upgrade
+}
+
 public partial class InstallerWindow : Window
 {
-    private readonly bool _isUninstallMode;
+    private readonly InstallerMode _mode;
     private static readonly string TargetDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "ModernSapiAdapter");
 
-    public InstallerWindow(bool isUninstallMode)
+    public InstallerWindow(InstallerMode mode)
     {
         InitializeComponent();
-        _isUninstallMode = isUninstallMode;
+        _mode = mode;
 
-        if (_isUninstallMode)
+        if (_mode == InstallerMode.Uninstall)
         {
             Title = "ModernSapiAdapter Uninstaller";
             TxtTitle.Text = "Uninstall ModernSapiAdapter";
@@ -26,6 +33,16 @@ public partial class InstallerWindow : Window
             BtnAction.Background = System.Windows.Media.Brushes.DarkRed;
             System.Windows.Automation.AutomationProperties.SetName(BtnAction, "Uninstall");
             System.Windows.Automation.AutomationProperties.SetHelpText(BtnAction, "Uninstalls ModernSapiAdapter and removes all registered SAPI tokens.");
+        }
+        else if (_mode == InstallerMode.Upgrade)
+        {
+            Title = "ModernSapiAdapter Upgrade";
+            TxtTitle.Text = "Upgrade ModernSapiAdapter";
+            TxtSubtitle.Text = "Upgrade ModernSapiAdapter SAPI 5 Engine";
+            TxtDescription.Text = $"This will upgrade the ModernSapiAdapter binaries in:\n{TargetDirectory}\n\nIt will re-register CoreEngine.dll with COM and update the application.";
+            BtnAction.Content = "Upgrade";
+            System.Windows.Automation.AutomationProperties.SetName(BtnAction, "Upgrade");
+            System.Windows.Automation.AutomationProperties.SetHelpText(BtnAction, "Upgrades ModernSapiAdapter in Program Files and updates COM components.");
         }
         else
         {
@@ -39,12 +56,18 @@ public partial class InstallerWindow : Window
         }
     }
 
+    private void Window_Loaded(object sender, RoutedEventArgs e)
+    {
+        System.Windows.Automation.AutomationProperties.SetName(this, Title);
+        TxtTitle.Focus();
+    }
+
     private void BtnAction_Click(object sender, RoutedEventArgs e)
     {
         BtnAction.IsEnabled = false;
         BtnCancel.IsEnabled = false;
 
-        if (_isUninstallMode)
+        if (_mode == InstallerMode.Uninstall)
         {
             PerformUninstall();
         }
@@ -58,13 +81,23 @@ public partial class InstallerWindow : Window
     {
         try
         {
+            string sourceDir = AppDomain.CurrentDomain.BaseDirectory;
+            string sourceCoreEngine = Path.Combine(sourceDir, "CoreEngine.dll");
+            if (!File.Exists(sourceCoreEngine))
+            {
+                TxtStatus.Text = "Installation aborted: CoreEngine.dll missing.";
+                MessageBox.Show($"Installation aborted.\n\n'CoreEngine.dll' was not found in the source directory:\n{sourceDir}\n\nPlease place CoreEngine.dll in the folder alongside SapiManager.exe before running setup.", "Setup Error - CoreEngine.dll Missing", MessageBoxButton.OK, MessageBoxImage.Error);
+                BtnAction.IsEnabled = true;
+                BtnCancel.IsEnabled = true;
+                return;
+            }
+
             TxtStatus.Text = "Creating installation directory...";
             if (!Directory.Exists(TargetDirectory))
             {
                 Directory.CreateDirectory(TargetDirectory);
             }
 
-            string sourceDir = AppDomain.CurrentDomain.BaseDirectory;
             TxtStatus.Text = "Copying application binaries...";
 
             // Copy all files in source folder to Program Files target directory
