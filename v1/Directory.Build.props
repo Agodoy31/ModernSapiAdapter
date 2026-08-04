@@ -1,0 +1,15 @@
+<Project>
+  <!-- Global Build Output & Intermediate Directories -->
+  <PropertyGroup>
+    <!-- Centralized binary output directory per project -->
+    <OutDir>$(MSBuildThisFileDirectory)bin\$(MSBuildProjectName)\$(Platform)\$(Configuration)\</OutDir>
+    
+    <!-- Centralized intermediate build directory per project -->
+    <IntDir>$(MSBuildThisFileDirectory)build\$(MSBuildProjectName)\$(Platform)\$(Configuration)\</IntDir>
+
+    <!-- .NET / C# project equivalents -->
+    <OutputPath>$(OutDir)</OutputPath>
+    <IntermediateOutputPath>$(IntDir)</IntermediateOutputPath>
+    <PublishDir>$(OutDir)publish\</PublishDir>
+  </PropertyGroup>
+</Project>

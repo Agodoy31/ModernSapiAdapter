@@ -1,0 +1,272 @@
+#include "pch.h"
+#include "SynthesizerPool.h"
+#include "ConfigParser.h"
+#include "Logger.h"
+#include "PcmTrimmer.h"
+
+using namespace Microsoft::CognitiveServices::Speech;
+using namespace winrt::Windows::Management::Deployment;
+
+std::mutex SynthesizerPool::s_mutex;
+std::shared_ptr<EmbeddedSpeechConfig> SynthesizerPool::s_config = nullptr;
+
+
+
+static uint32_t ReverseMapOffset(uint32_t ssmlOffset, const std::vector<std::pair<uint32_t, uint32_t>>& offsetMap) {
+    if (offsetMap.empty()) return 0;
+    auto it = std::upper_bound(offsetMap.begin(), offsetMap.end(),
+        ssmlOffset, [](uint32_t val, const std::pair<uint32_t, uint32_t>& item) {
+            return val < item.first;
+        });
+    if (it != offsetMap.begin()) {
+        --it;
+        return it->second + (ssmlOffset - it->first);
+    }
+    return 0;
+}
+
+AudioStreamHandler::AudioStreamHandler() {
+}
+
+void AudioStreamHandler::AttachContext(const ProviderSpeakParams* params, std::vector<std::pair<uint32_t, uint32_t>> offsetMap) {
+    std::lock_guard<std::mutex> lock(m_contextMutex);
+    m_params = params;
+    m_offsetMap = std::move(offsetMap);
+    m_hasEncounteredAudio = false;
+    m_leadingOffsetBytes = 0;
+}
+
+void AudioStreamHandler::DetachContext(bool wasCancelled) {
+    std::lock_guard<std::mutex> lock(m_contextMutex);
+    m_params = nullptr;
+    m_offsetMap.clear();
+}
+
+int AudioStreamHandler::Write(uint8_t* dataBuffer, uint32_t size) {
+    std::lock_guard<std::mutex> lock(m_contextMutex);
+    if (!m_params || (m_params->pAbortFlag && *m_params->pAbortFlag)) return 0;
+
+    size_t leadingOffset = 0;
+    if (!m_hasEncounteredAudio) {
+        leadingOffset = PcmTrimmer::FindLeadingAudioOffset(dataBuffer, size, 50);
+        if (leadingOffset < size) {
+            m_hasEncounteredAudio = true;
+            m_leadingOffsetBytes = leadingOffset;
+        }
+    }
+
+    uint8_t* activeData = dataBuffer + leadingOffset;
+    size_t activeSize = size - leadingOffset;
+
+    if (activeSize > 0) {
+        if (m_params && m_params->AudioCallback) {
+            bool cont = m_params->AudioCallback(activeData, static_cast<uint32_t>(activeSize), m_params->UserContext);
+            if (!cont) {
+                return 0;
+            }
+        }
+    }
+    return size;
+}
+
+void AudioStreamHandler::OnWordBoundary(const SpeechSynthesisWordBoundaryEventArgs& e) {
+    std::lock_guard<std::mutex> lock(m_contextMutex);
+    if (!m_params) return;
+
+    bool skipCallback = (!m_params || !m_params->MetaCallback);
+
+    ProviderSpeechEvent ev = {};
+    ev.EventType = PROVIDER_EVENT_WORD_BOUNDARY;
+    ev.TextOffset = ReverseMapOffset(e.TextOffset, m_offsetMap);
+    ev.TextLength = e.WordLength;
+    ev.AudioByteOffset = (e.AudioOffset * 48) / 10000;
+    
+    ev.AudioByteOffset = (e.AudioOffset * 48) / 10000;
+    
+    if (!skipCallback) {
+        m_params->MetaCallback(&ev, m_params->UserContext);
+    }
+}
+
+void AudioStreamHandler::OnBookmarkReached(const SpeechSynthesisBookmarkEventArgs& e) {
+    std::lock_guard<std::mutex> lock(m_contextMutex);
+    if (!m_params) return;
+
+    bool skipCallback = (!m_params || !m_params->MetaCallback);
+
+    ProviderSpeechEvent ev = {};
+    ev.EventType = PROVIDER_EVENT_BOOKMARK;
+
+    uint32_t originalOffset = 0;
+    std::wstring bookmarkName;
+
+    if (e.Text.find("OFFSET_") == 0) {
+        size_t nextUnderscore = e.Text.find('_', 7);
+        if (nextUnderscore != std::string::npos) {
+            try {
+                originalOffset = std::stoul(e.Text.substr(7, nextUnderscore - 7));
+            } catch (...) {}
+
+            std::string utf8Name = e.Text.substr(nextUnderscore + 1);
+            int size = MultiByteToWideChar(CP_UTF8, 0, utf8Name.c_str(), -1, nullptr, 0);
+            if (size > 0) {
+                bookmarkName.resize(size - 1);
+                MultiByteToWideChar(CP_UTF8, 0, utf8Name.c_str(), -1, bookmarkName.data(), size);
+            }
+        }
+    }
+
+    ev.TextOffset = originalOffset;
+    ev.TextLength = 0;
+    ev.AudioByteOffset = (e.AudioOffset * 48) / 10000;
+    ev.Reserved = 0;
+    
+    if (!bookmarkName.empty()) {
+        ev.StringData = reinterpret_cast<const char16_t*>(bookmarkName.c_str());
+    } else {
+        ev.StringData = nullptr;
+    }
+
+    if (!skipCallback) {
+        m_params->MetaCallback(&ev, m_params->UserContext);
+    }
+}
+
+std::shared_ptr<EmbeddedSpeechConfig> SynthesizerPool::CreateConfig() {
+    std::vector<std::string> paths;
+
+    try {
+        PackageManager packageManager;
+        auto packages = packageManager.FindPackagesForUser(L"");
+        for (auto package : packages) {
+            std::wstring pkgName = package.Id().Name().c_str();
+            if (pkgName.find(L"MicrosoftWindows.Voice.") == 0) {
+                std::wstring path = package.InstalledLocation().Path().c_str();
+                paths.push_back(WStringToUTF8(path));
+            }
+        }
+    } catch (const winrt::hresult_error& e) {
+        LogWarn("Failed to enumerate MSIX packages: 0x%08X", e.code());
+    }
+
+    std::string decryptionKey;
+
+    ProviderConfig providerConfig = ConfigParser::LoadMergedConfig();
+    for (const auto& p : providerConfig.ExtraVoicePaths) {
+        paths.push_back(p);
+    }
+    decryptionKey = providerConfig.DecryptionKey;
+
+    auto config = EmbeddedSpeechConfig::FromPaths(paths);
+    config->SetSpeechSynthesisOutputFormat(SpeechSynthesisOutputFormat::Raw24Khz16BitMonoPcm);
+    config->SetProperty(PropertyId::SpeechServiceResponse_SynthesisEventsSyncToAudio, "false");
+    config->SetProperty(PropertyId::SpeechServiceResponse_RequestSentenceBoundary, "false");
+    config->SetProperty(PropertyId::SpeechServiceResponse_RequestPunctuationBoundary, "false");
+    
+#ifdef _DEBUG
+    config->SetProperty(PropertyId::Speech_LogFilename, "C:\\Users\\AndresGodoy\\AppData\\Local\\ModernSapiAdapter\\Logs\\AzureSpeechSDK_debug.log");
+#endif
+    
+    if (!decryptionKey.empty()) {
+        config->SetProperty("EmbeddedSpeech_DecryptionKey", decryptionKey);
+    } else {
+        config->SetProperty("EmbeddedSpeech_DecryptionKey", "ZCjZ7nHDSLvf4gpELteM4AnzaWUjTpn7UkV7D@vvksl0w1SNgon6d1905WANbktDc9S39oaA4r29HJNayXvTq8fJsq");
+    }
+
+    return config;
+}
+
+void SynthesizerPool::Initialize() {
+    if (!s_config) {
+        s_config = CreateConfig();
+        LogInfo("SynthesizerPool initialized.");
+    }
+}
+
+void SynthesizerPool::Shutdown() {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_config = nullptr;
+    LogInfo("SynthesizerPool shutdown completed.");
+}
+
+std::mutex SynthesizerPool::s_poolMutex;
+std::condition_variable SynthesizerPool::s_poolCondition;
+std::vector<std::shared_ptr<PooledSynthesizer>> SynthesizerPool::s_pool;
+
+std::shared_ptr<PooledSynthesizer> SynthesizerPool::AcquireSynthesizer(
+    const std::wstring& voiceName,
+    const volatile uint32_t* pAbortFlag) {
+
+    std::unique_lock<std::mutex> lock(s_poolMutex);
+
+    if (!s_config) {
+        Initialize();
+    }
+
+    // Purge engines that don't match the requested voice name to prevent OOM crashes
+    auto it = std::remove_if(s_pool.begin(), s_pool.end(),
+        [&voiceName](const std::shared_ptr<PooledSynthesizer>& synth) {
+            return synth->voiceName != voiceName;
+        });
+    if (it != s_pool.end()) {
+        s_pool.erase(it, s_pool.end());
+        LogInfo("SynthesizerPool: Purged old voice engines to free memory.");
+    }
+
+    while (true) {
+        // Find an idle synthesizer for this voice
+        int voiceCount = 0;
+        for (auto& pooled : s_pool) {
+            if (pooled->voiceName == voiceName) {
+                voiceCount++;
+                if (!pooled->isBusy) {
+                    pooled->isBusy = true;
+                    return pooled;
+                }
+            }
+        }
+
+        // If less than 2 exist for this voice, create one
+        if (voiceCount < 2) {
+            std::string key = s_config->GetProperty("EmbeddedSpeech_DecryptionKey");
+            s_config->SetSpeechSynthesisVoice(WStringToUTF8(voiceName), "Key:" + key);
+
+            auto streamHandler = std::make_shared<AudioStreamHandler>();
+            auto audioConfig = Audio::AudioConfig::FromStreamOutput(
+                Audio::AudioOutputStream::CreatePushStream(streamHandler));
+
+            auto pooled = std::make_shared<PooledSynthesizer>();
+            pooled->synth = SpeechSynthesizer::FromConfig(s_config, audioConfig);
+            pooled->streamHandler = streamHandler;
+            pooled->voiceName = voiceName;
+            pooled->isBusy = true;
+
+            pooled->synth->WordBoundary += [streamHandler](const SpeechSynthesisWordBoundaryEventArgs& e) {
+                streamHandler->OnWordBoundary(e);
+            };
+
+            pooled->synth->BookmarkReached += [streamHandler](const SpeechSynthesisBookmarkEventArgs& e) {
+                streamHandler->OnBookmarkReached(e);
+            };
+
+            s_pool.push_back(pooled);
+            LogInfo("SynthesizerPool: Created pooled synthesizer (%d/2) for voice: %ls", voiceCount + 1, voiceName.c_str());
+            return pooled;
+        }
+
+        // Wait for one to become available (poll every 50ms to check abort flag)
+        if (s_poolCondition.wait_for(lock, std::chrono::milliseconds(50)) == std::cv_status::timeout) {
+            if (pAbortFlag && *pAbortFlag) {
+                LogInfo("SynthesizerPool: Aborted while waiting for an idle engine.");
+                return nullptr;
+            }
+        }
+    }
+}
+
+void SynthesizerPool::ReleaseSynthesizer(std::shared_ptr<PooledSynthesizer> pooledSynth) {
+    if (!pooledSynth) return;
+    std::lock_guard<std::mutex> lock(s_poolMutex);
+    pooledSynth->isBusy = false;
+    s_poolCondition.notify_one();
+}

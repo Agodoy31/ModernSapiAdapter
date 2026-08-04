@@ -16,6 +16,4 @@ packages/
 .github/
 EdgeTtsProvider/
 SapiSsmlParser.Cs/
-v1/
 .superpowers/
-docs/
