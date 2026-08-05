@@ -7,10 +7,10 @@ namespace SapiManager.Models;
 /// </summary>
 public class ProviderPackageManifest
 {
-    [JsonPropertyName("provider_id")]
+    [JsonPropertyName("id")]
     public string ProviderId { get; set; } = string.Empty;
 
-    [JsonPropertyName("provider_name")]
+    [JsonPropertyName("name")]
     public string ProviderName { get; set; } = string.Empty;
 
     [JsonPropertyName("version")]
@@ -19,7 +19,7 @@ public class ProviderPackageManifest
     [JsonPropertyName("publisher")]
     public string Publisher { get; set; } = "Unknown";
 
-    [JsonPropertyName("executable_name")]
+    [JsonPropertyName("executable")]
     public string ExecutableName { get; set; } = string.Empty;
 
     [JsonPropertyName("description")]

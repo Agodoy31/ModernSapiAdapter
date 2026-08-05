@@ -97,7 +97,24 @@ Upon startup, `App.xaml.cs` queries `RegistryManager.GetInstallLocation()` and c
 #### Inspection, Lock Detection & Root Stripping
 
 - **Inspection**: Opens the ZIP archive in memory using `ZipArchive` and inspects `manifest.json`.
-- **Mandatory Manifest Rule**: Packages MUST contain a valid `manifest.json` with a non-empty `provider_id`. If `manifest.json` is missing or invalid, inspection fails immediately.
+- **Mandatory Manifest Rule**: Packages MUST contain a valid `manifest.json` with a non-empty `id`. If `manifest.json` is missing or invalid, inspection fails immediately.
+- **Manifest Schema Specification**:
+  ```json
+  {
+    "id": "AzureTtsProvider",
+    "name": "Azure TTS Provider",
+    "executable": "AzureTtsProvider.exe",
+    "version": "0.1.0",
+    "publisher": "My Company",
+    "description": "Provides Azure Cloud and Embedded Neural Voices."
+  }
+  ```
+  - `id`: Provider unique ID (e.g. `"AzureTtsProvider"`)
+  - `name`: Human readable name (e.g. `"Azure TTS Provider"`)
+  - `executable`: Target executable file name (e.g. `"AzureTtsProvider.exe"`)
+  - `version`: Version string (e.g. `"0.1.0"`)
+  - `publisher`: Publisher / vendor name (defaults to `"Unknown"` if omitted)
+  - `description`: Provider description text
 - **Process Lock Check**: Queries `Process.GetProcessesByName(executableName)`. If matching processes are running, sets `IsRunningProcessDetected = true` and records `RunningProcessId`.
 - **Process Termination**: Offers `TerminateProcess(processId)`, which kills active process trees using `proc.Kill(entireProcessTree: true)` and waits for process exit.
 - **Root Directory Stripping Extraction**: Detects if all files in the ZIP archive share a single top-level directory wrapper (e.g., `SampleProvider_v1.0/`). If present, automatically strips the root directory prefix during extraction so files land cleanly inside `.\providers\<ProviderId>\`.
