@@ -59,7 +59,6 @@ public class ProviderDiscovery
             var startInfo = new ProcessStartInfo
             {
                 FileName = exePath,
-                Arguments = "/pipe",
                 UseShellExecute = false,
                 CreateNoWindow = true
             };

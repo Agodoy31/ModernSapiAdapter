@@ -62,19 +62,9 @@ public partial class MainWindow : Window
             var subDirs = Directory.GetDirectories(providersDir);
             foreach (var dir in subDirs)
             {
-                string[] exeFiles = Directory.GetFiles(dir, "*.exe");
-                foreach (var exePath in exeFiles)
+                foreach (var exePath in Directory.GetFiles(dir, "*.exe"))
                 {
                     await TryAddProviderFromExeAsync(exePath);
-                }
-
-                if (exeFiles.Length == 0)
-                {
-                    string[] manifestFiles = Directory.GetFiles(dir, "*_voices.json");
-                    foreach (var manifestPath in manifestFiles)
-                    {
-                        TryAddProviderFromManifest(manifestPath, dir);
-                    }
                 }
             }
         }
@@ -137,64 +127,10 @@ public partial class MainWindow : Window
             Debug.WriteLine($"Failed probing {exePath}: {ex.Message}");
         }
 
-        // Fallback: Check if manifest file exists in folder
-        string dir = Path.GetDirectoryName(exePath)!;
-        string[] manifestFiles = Directory.GetFiles(dir, "*_voices.json");
-        if (manifestFiles.Length > 0)
-        {
-            return TryAddProviderFromManifest(manifestFiles[0], dir, exePath);
-        }
-
         return false;
     }
 
-    private bool TryAddProviderFromManifest(string manifestPath, string folderPath, string? exePath = null)
-    {
-        try
-        {
-            string json = File.ReadAllText(manifestPath);
-            var manifest = JsonSerializer.Deserialize<ProviderManifest>(json);
-            if (manifest != null && !string.IsNullOrEmpty(manifest.ProviderName))
-            {
-                string resolvedExe = exePath ?? Directory.GetFiles(folderPath, "*.exe").FirstOrDefault() ?? string.Empty;
-                if (_providers.Any(p => string.Equals(p.ProviderId, manifest.ProviderName, StringComparison.OrdinalIgnoreCase)))
-                {
-                    return false;
-                }
 
-                var providerVm = new ProviderViewModel
-                {
-                    ProviderId = manifest.ProviderName,
-                    ProviderName = manifest.ProviderName,
-                    Version = manifest.Version,
-                    ExePath = resolvedExe,
-                    PipeName = manifest.ProviderName
-                };
-
-                foreach (var v in manifest.Voices)
-                {
-                    string tokenName = $"MSA_{manifest.ProviderName}_{v.VoiceId}";
-                    bool isRegistered = RegistryManager.IsVoiceTokenRegistered(tokenName);
-
-                    providerVm.Voices.Add(new VoiceViewModel
-                    {
-                        VoiceId = v.VoiceId,
-                        Name = v.SapiAttributes.Name,
-                        Language = v.SapiAttributes.Language,
-                        Gender = v.SapiAttributes.Gender,
-                        Vendor = v.SapiAttributes.Vendor,
-                        IsRegistered = isRegistered
-                    });
-                }
-
-                _providers.Add(providerVm);
-                return true;
-            }
-        }
-        catch { }
-
-        return false;
-    }
 
     private async void BtnAddProvider_Click(object sender, RoutedEventArgs e)
     {
