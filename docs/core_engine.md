@@ -90,7 +90,7 @@ Loop executing on `m_audioThread`. Initializes a WinRT multi-threaded apartment 
 ```cpp
 void ControlThreadProc();
 ```
-Loop executing on `m_controlThread`. Initializes a WinRT multi-threaded apartment, calls `ReadControlMessage`, verifies `speak_id` matching `m_activeSpeakId.load()`, updates internal speaking state on `completed` or `error` (`error`/`fatal` severity) events, and dispatches JSON events to `CSapiEngine::OnSpeechEvent`. Wrapped in `try/catch(winrt::hresult_error)` to prevent unhandled WinRT exceptions from crashing the host process.
+Loop executing on `m_controlThread`. Initializes a WinRT multi-threaded apartment, calls `ReadControlMessage`, verifies `speak_id` matching `m_activeSpeakId.load()`, updates internal speaking state on `completed` or `log` (`error`/`fatal` severity) events, and dispatches JSON events to `CSapiEngine::OnSpeechEvent`. Wrapped in `try/catch(winrt::hresult_error)` to prevent unhandled WinRT exceptions from crashing the host process.
 
 ```cpp
 void Start(void* pSite, uint64_t speakId);
@@ -265,16 +265,16 @@ sequenceDiagram
 | `sentence_boundary` | `SPEI_SENTENCE_BOUNDARY` | `audio_offset_ms` -> `ullAudioStreamOffset`, `text_offset` -> `lParam`, `text_length` -> `wParam` |
 | `bookmark_reached` | `SPEI_TTS_BOOKMARK` | `audio_offset_ms` -> `ullAudioStreamOffset`, `bookmark_name` -> `CoTaskMemAlloc` string in `lParam` (`SPET_LPARAM_IS_STRING`) |
 | `completed` | *N/A (Internal)* | Resets `m_isSpeaking = false` in `SpeechWorker` |
-| `error` | *N/A (Diagnostic)* | Logs `message`, `severity`, `friendly_text` via `CoreLog`. Resets `m_isSpeaking = false` for `error`/`fatal` severities |
+| `log` | *N/A (Diagnostic)* | Logs `message`, `severity`, `friendly_text` via `CoreLog`. Resets `m_isSpeaking = false` for `error`/`fatal` severities |
 
-### Error Severities
+### Log Severities
 
 | Severity | Description | CoreEngine Action |
 | :--- | :--- | :--- |
 | `info` | Informational diagnostic message | Logged to `CoreLog`. Synthesis continues. |
 | `warning` | Non-critical warning | Logged to `CoreLog`. Synthesis continues. |
-| `error` | Synthesis request failed | Logged to `CoreLog`. Speech state reset (`m_isSpeaking = false`). |
-| `fatal` | Unrecoverable provider failure | Logged to `CoreLog`. Speech state reset (`m_isSpeaking = false`). |
+| `error` | Speech-level failure | Logged to `CoreLog`. Speech state reset (`m_isSpeaking = false`). |
+| `fatal` | Provider-level failure | Logged to `CoreLog`. Speech state reset (`m_isSpeaking = false`). |
 
 ### Stale Event Filtering
 

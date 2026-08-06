@@ -270,28 +270,28 @@ Signals `CoreEngine` worker threads that speech synthesis for `speak_id` is fini
 
 ---
 
-### `error` Event
+### `log` Event
 
-Fired if the provider encounters a synthesis failure.
+Fired if the provider encounters an issue, diagnostic event, or synthesis failure.
 
 ```json
 {
-  "event": "error",
+  "event": "log",
   "speak_id": 1,
-  "severity": "fatal",
+  "severity": "error",
   "message": "HTTP 401 Unauthorized. Failed to connect to TTS API.",
   "friendly_text": "TTS Provider failed to authenticate. Check your configuration."
 }
 ```
 
-#### Error Severities
+#### Log Severities
 
 | Value | Description |
 | :--- | :--- |
 | `info` | Informational diagnostic message. Synthesis continues. |
 | `warning` | A non-critical issue occurred. Synthesis continues. |
-| `error` | A specific fragment or request failed, but the provider process remains stable. |
-| `fatal` | An unrecoverable error occurred (e.g. network disconnect, API auth failure). Synthesis aborts. |
+| `error` | Speech-level failure. The current utterance aborts, but the provider process is still healthy and CoreEngine can issue future requests. |
+| `fatal` | Provider-level failure. An unrecoverable error occurred (e.g. repeated network disconnects, API auth failure, bad config). The provider process cannot continue, and the connection should be treated as dead. |
 ```
 
 ---

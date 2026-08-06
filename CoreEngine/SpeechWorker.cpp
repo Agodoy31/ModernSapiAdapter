@@ -120,7 +120,7 @@ void SpeechWorker::ControlThreadProc()
                         {
                             m_isSpeaking = false;
                         }
-                        else if (eventStr == L"error")
+                        else if (eventStr == L"log")
                         {
                             if (json.HasKey(L"severity") && json.GetNamedValue(L"severity").ValueType() == winrt::Windows::Data::Json::JsonValueType::String)
                             {

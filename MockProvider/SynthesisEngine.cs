@@ -113,8 +113,8 @@ public class SynthesisEngine
         }
         catch (Exception ex)
         {
-            var errorEvent = new { @event = "error", message = ex.Message };
-            await WriteControlEventAsync(errorEvent, CancellationToken.None);
+            var logEvent = new { @event = "log", severity = "error", message = ex.Message };
+            await WriteControlEventAsync(logEvent, CancellationToken.None);
         }
     }
 
