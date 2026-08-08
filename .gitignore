@@ -4,6 +4,7 @@ build/
 obj/
 SapiManager/Properties
 .vs/
+.worktrees/
 *.user
 *.suo
 *.userosv
