@@ -182,16 +182,10 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
         return hr;
     }
 
-    {
-        const HRESULT waitHr = worker->WaitUntilFinished(pOutputSite);
-        std::lock_guard<std::mutex> sessionLock(m_sessionMutex);
-        if (m_pWorker.get() == worker && worker->IsFaulted())
-        {
-            RetireFaultedSessionLocked();
-            return E_FAIL;
-        }
-        return waitHr;
-    }
+    // A cancellation-transport failure leaves the session in its discard-only Faulted state.
+    // This call must return promptly without disrupting outstanding provider reads; the next
+    // Speak owns worker/client retirement and replacement under the session lifecycle lock.
+    return worker->WaitUntilFinished(pOutputSite);
 }
 catch (const std::exception& e) { CoreLog(L"[CoreEngine] Speak exception: %hs", e.what()); return winrt::to_hresult(); }
 catch (...) { CoreLog(L"[CoreEngine] Speak unknown exception."); return winrt::to_hresult(); }

@@ -30,6 +30,7 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 
 #include "gtest/gtest.h"

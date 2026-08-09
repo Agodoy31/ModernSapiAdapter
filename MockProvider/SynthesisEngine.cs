@@ -105,6 +105,7 @@ public class SynthesisEngine
                             await _audioPipe.WriteAsync(audioData, cancellationToken);
                             await _audioPipe.FlushAsync(cancellationToken);
                             audioBytesWritten += audioData.Length;
+                            RecordProviderActivityForTest(speakId, "pcm");
                             firstAudioBuffer = false;
                         }
                         else
@@ -143,6 +144,7 @@ public class SynthesisEngine
                 await _audioPipe.WriteAsync(audioData, cancellationToken);
                 await _audioPipe.FlushAsync(cancellationToken);
                 audioBytesWritten += audioData.Length;
+                RecordProviderActivityForTest(speakId, "pcm");
             }
         }
         catch (OperationCanceledException)
@@ -185,10 +187,10 @@ public class SynthesisEngine
         byte[] bytes = Encoding.UTF8.GetBytes(json + "\n");
         await _controlPipe.WriteAsync(bytes, cancellationToken);
         await _controlPipe.FlushAsync(cancellationToken);
-        RecordControlEventForTest(speakId, eventName);
+        RecordProviderActivityForTest(speakId, eventName);
     }
 
-    private void RecordControlEventForTest(ulong speakId, string eventName)
+    private void RecordProviderActivityForTest(ulong speakId, string activityName)
     {
         if (string.IsNullOrWhiteSpace(_faultEventLogPath))
         {
@@ -197,7 +199,7 @@ public class SynthesisEngine
 
         try
         {
-            File.AppendAllText(_faultEventLogPath, $"{speakId}:{eventName}{Environment.NewLine}");
+            File.AppendAllText(_faultEventLogPath, $"{speakId}:{activityName}{Environment.NewLine}");
         }
         catch
         {

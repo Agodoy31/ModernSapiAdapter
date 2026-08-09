@@ -141,6 +141,81 @@ private:
     std::thread& m_thread;
 };
 
+class ScopedFaultEventLog
+{
+public:
+    ScopedFaultEventLog()
+    {
+        wchar_t tempDirectory[MAX_PATH] = {};
+        const DWORD tempDirectoryLength = GetTempPathW(ARRAYSIZE(tempDirectory), tempDirectory);
+        if (tempDirectoryLength == 0 || tempDirectoryLength >= ARRAYSIZE(tempDirectory))
+        {
+            return;
+        }
+
+        m_path = std::filesystem::path(tempDirectory) /
+            (L"ModernSapiAdapterFaultTrace_" + std::to_wstring(GetCurrentProcessId()) + L"_" +
+             std::to_wstring(++s_nextTraceId) + L".log");
+        std::error_code error;
+        std::filesystem::remove(m_path, error);
+
+        const DWORD savedLength = GetEnvironmentVariableW(k_environmentVariable, nullptr, 0);
+        if (savedLength != 0)
+        {
+            m_previousValue.resize(savedLength);
+            GetEnvironmentVariableW(k_environmentVariable, m_previousValue.data(), savedLength);
+            m_previousValue.resize(savedLength - 1);
+            m_hadPreviousValue = true;
+        }
+
+        m_isActive = SetEnvironmentVariableW(k_environmentVariable, m_path.c_str()) != FALSE;
+    }
+
+    ~ScopedFaultEventLog()
+    {
+        if (m_isActive)
+        {
+            SetEnvironmentVariableW(k_environmentVariable, m_hadPreviousValue ? m_previousValue.c_str() : nullptr);
+        }
+
+        std::error_code error;
+        std::filesystem::remove(m_path, error);
+    }
+
+    bool IsActive() const noexcept { return m_isActive; }
+
+    size_t SnapshotSize() const
+    {
+        std::error_code error;
+        return std::filesystem::exists(m_path, error) ? static_cast<size_t>(std::filesystem::file_size(m_path, error)) : 0;
+    }
+
+    bool WaitForEntryAfter(size_t snapshotSize, const std::string& entry, DWORD timeoutMs) const
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        do
+        {
+            std::ifstream stream(m_path, std::ios::binary);
+            std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+            if (contents.size() >= snapshotSize && contents.find(entry, snapshotSize) != std::string::npos)
+            {
+                return true;
+            }
+            Sleep(10);
+        } while (std::chrono::steady_clock::now() < deadline);
+
+        return false;
+    }
+
+private:
+    static constexpr const wchar_t* k_environmentVariable = L"MODERN_SAPI_ADAPTER_TEST_FAULT_EVENT_LOG";
+    inline static std::atomic_uint64_t s_nextTraceId{0};
+    std::filesystem::path m_path;
+    std::wstring m_previousValue;
+    bool m_hadPreviousValue{false};
+    bool m_isActive{false};
+};
+
 }
 
 class SapiEngineTests : public ::testing::Test {
@@ -625,6 +700,9 @@ TEST_F(SapiEngineTests, FaultedSessionDoesNotForwardAnEventPausedBeforeItsSapiCa
 }
 
 TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorker) {
+    ScopedFaultEventLog faultEventLog;
+    ASSERT_TRUE(faultEventLog.IsActive());
+
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     auto engine = winrt::make_self<CSapiEngine>();
     auto mockToken = winrt::make_self<MockSpObjectToken>();
@@ -635,6 +713,11 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
     WAVEFORMATEX* pWaveFormat = nullptr;
     ASSERT_EQ(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat), S_OK);
     ASSERT_NE(pWaveFormat, nullptr);
+
+    SpeechWorker* faultedWorker = engine->m_pWorker.get();
+    PipeClient* faultedClient = engine->m_pClient.get();
+    ASSERT_NE(faultedWorker, nullptr);
+    ASSERT_NE(faultedClient, nullptr);
 
     wchar_t firstText[] = L"[delay-cancelled-event] old request";
     SPVTEXTFRAG firstFragment = {};
@@ -675,14 +758,25 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
     EXPECT_EQ(firstSpeakResult, E_FAIL);
     EXPECT_LT(std::chrono::steady_clock::now() - firstSpeakStart, std::chrono::seconds(1));
 
-    // The provider continues producing old PCM because the injected cancel control write failed.
-    // Discard events accepted before the rejected write; only late faulted-session output matters below.
+    // The failed utterance publishes Faulted but retains its discard-only worker/client until a later Speak owns teardown.
+    EXPECT_EQ(engine->m_pWorker.get(), faultedWorker);
+    EXPECT_EQ(engine->m_pClient.get(), faultedClient);
+    EXPECT_TRUE(faultedWorker->IsFaulted());
+
+    // Discard events accepted before the rejected write. The trace offset makes the subsequent observations
+    // prove post-fault provider activity rather than merely output that arrived before fault publication.
     {
         std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
         mockSite->receivedEvents.clear();
     }
+    const size_t postFaultTraceOffset = faultEventLog.SnapshotSize();
 
-    // A faulted provider must not deliver more PCM or events before the session is retired.
+    ASSERT_TRUE(faultEventLog.WaitForEntryAfter(postFaultTraceOffset, "1:word_boundary", 1000))
+        << "The faulted provider did not emit a late control event.";
+    ASSERT_TRUE(faultEventLog.WaitForEntryAfter(postFaultTraceOffset, "1:pcm", 1000))
+        << "The faulted provider did not emit late PCM.";
+
+    // Faulted-session PCM and events must be consumed or discarded without crossing the SAPI boundary.
     EXPECT_EQ(mockSite->BytesAcceptedAfterRejectedWrite(), 0u);
     {
         std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
@@ -700,6 +794,9 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
     EXPECT_EQ(engine->Speak(0, formatId, pWaveFormat, &secondFragment, mockSite.get()), S_OK);
     CoTaskMemFree(pWaveFormat);
 
+    ASSERT_NE(engine->m_pWorker, nullptr);
+    ASSERT_NE(engine->m_pClient, nullptr);
+    EXPECT_FALSE(engine->m_pWorker->IsFaulted());
     EXPECT_GT(mockSite->writeCallCount.load(), writesBeforeNextSpeak);
     EXPECT_EQ(mockSite->totalBytesWritten.load(), bytesBeforeNextSpeak + 9600u);
 }
