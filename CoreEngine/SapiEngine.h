@@ -16,6 +16,8 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_OnSpeechEventMapsAndDispatchesToSite_Test;
     friend class SapiEngineTests_OnSpeechEventMapsSentenceBoundaryToSite_Test;
     friend class SapiEngineTests_OnSpeechEventMapsBookmarkStringEventToSite_Test;
+    friend class SapiEngineTests_OnSpeechEventPreservesLongAudioOffsets_Test;
+    friend class SapiEngineTests_OnSpeechEventAlignsOffsetsToPcmFrames_Test;
 public:
     /**
      * @brief Constructs a new CSapiEngine instance.
@@ -94,6 +96,7 @@ private:
     WAVEFORMATEX m_audioFormat;
     std::atomic<uint64_t> m_speakIdCounter{0};
 
+    uint64_t AudioOffsetMsToBytes(uint32_t audioMs) const;
     HRESULT LoadProviderFromToken(ISpObjectToken* pToken);
 };
 

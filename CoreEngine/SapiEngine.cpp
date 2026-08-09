@@ -175,6 +175,17 @@ bool CSapiEngine::OnAudioData(const uint8_t* pAudioBytes, uint32_t byteCount)
     return SUCCEEDED(hr) && (bytesWritten == byteCount);
 }
 
+uint64_t CSapiEngine::AudioOffsetMsToBytes(uint32_t audioMs) const
+{
+    if (m_audioFormat.nSamplesPerSec == 0 || m_audioFormat.nBlockAlign == 0)
+    {
+        return 0;
+    }
+
+    const uint64_t frames = (static_cast<uint64_t>(audioMs) * m_audioFormat.nSamplesPerSec) / 1000;
+    return frames * m_audioFormat.nBlockAlign;
+}
+
 void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& eventJson) try
 {
     std::lock_guard<std::mutex> lock(m_siteMutex);
@@ -200,8 +211,7 @@ void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& ev
         spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
         
         uint32_t audioMs = eventJson.HasKey(L"audio_offset_ms") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"audio_offset_ms")) : 0;
-        uint32_t bytesOffset = (m_audioFormat.nAvgBytesPerSec > 0) ? (audioMs * m_audioFormat.nAvgBytesPerSec) / 1000 : 0;
-        spEvent.ullAudioStreamOffset = bytesOffset;
+        spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
 
         uint32_t textOffset = eventJson.HasKey(L"text_offset") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_offset")) : 0;
         uint32_t textLength = eventJson.HasKey(L"text_length") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_length")) : 0;
@@ -217,8 +227,7 @@ void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& ev
         spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
         
         uint32_t audioMs = eventJson.HasKey(L"audio_offset_ms") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"audio_offset_ms")) : 0;
-        uint32_t bytesOffset = (m_audioFormat.nAvgBytesPerSec > 0) ? (audioMs * m_audioFormat.nAvgBytesPerSec) / 1000 : 0;
-        spEvent.ullAudioStreamOffset = bytesOffset;
+        spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
 
         uint32_t textOffset = eventJson.HasKey(L"text_offset") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_offset")) : 0;
         uint32_t textLength = eventJson.HasKey(L"text_length") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_length")) : 0;
@@ -233,8 +242,7 @@ void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& ev
         spEvent.eEventId = SPEI_TTS_BOOKMARK;
         
         uint32_t audioMs = eventJson.HasKey(L"audio_offset_ms") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"audio_offset_ms")) : 0;
-        uint32_t bytesOffset = (m_audioFormat.nAvgBytesPerSec > 0) ? (audioMs * m_audioFormat.nAvgBytesPerSec) / 1000 : 0;
-        spEvent.ullAudioStreamOffset = bytesOffset;
+        spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
 
         if (eventJson.HasKey(L"bookmark_name"))
         {

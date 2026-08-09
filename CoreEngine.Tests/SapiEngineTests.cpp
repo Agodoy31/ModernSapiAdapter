@@ -197,6 +197,48 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsAndDispatchesToSite) {
     EXPECT_EQ(received.lParam, 5);
 }
 
+TEST_F(SapiEngineTests, OnSpeechEventPreservesLongAudioOffsets) {
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+    engine->m_audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
+
+    using namespace winrt::Windows::Data::Json;
+    JsonObject eventJson;
+    eventJson.SetNamedValue(L"event", JsonValue::CreateStringValue(L"word_boundary"));
+    eventJson.SetNamedValue(L"audio_offset_ms", JsonValue::CreateNumberValue(90000));
+    eventJson.SetNamedValue(L"text_offset", JsonValue::CreateNumberValue(0));
+    eventJson.SetNamedValue(L"text_length", JsonValue::CreateNumberValue(4));
+
+    engine->OnSpeechEvent(eventJson);
+
+    std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
+    ASSERT_EQ(mockSite->receivedEvents.size(), 1u);
+    EXPECT_EQ(mockSite->receivedEvents.front().ullAudioStreamOffset, 4320000u);
+}
+
+TEST_F(SapiEngineTests, OnSpeechEventAlignsOffsetsToPcmFrames) {
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+    engine->m_audioFormat = { WAVE_FORMAT_PCM, 2, 11099, 66594, 6, 24, 0 };
+
+    using namespace winrt::Windows::Data::Json;
+    JsonObject eventJson;
+    eventJson.SetNamedValue(L"event", JsonValue::CreateStringValue(L"bookmark_reached"));
+    eventJson.SetNamedValue(L"audio_offset_ms", JsonValue::CreateNumberValue(9));
+    eventJson.SetNamedValue(L"bookmark_name", JsonValue::CreateStringValue(L"1"));
+
+    engine->OnSpeechEvent(eventJson);
+
+    std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
+    ASSERT_EQ(mockSite->receivedEvents.size(), 1u);
+    const SPEVENT& received = mockSite->receivedEvents.front();
+    EXPECT_EQ(received.ullAudioStreamOffset, 594u);
+    EXPECT_EQ(received.ullAudioStreamOffset % engine->m_audioFormat.nBlockAlign, 0u);
+    CoTaskMemFree(reinterpret_cast<void*>(received.lParam));
+}
+
 TEST_F(SapiEngineTests, OnSpeechEventMapsSentenceBoundaryToSite) {
     auto engine = winrt::make_self<CSapiEngine>();
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
