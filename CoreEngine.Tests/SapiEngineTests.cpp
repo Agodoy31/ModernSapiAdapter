@@ -194,13 +194,9 @@ private:
 class SapiEngineTests : public ::testing::Test {
 protected:
     void SetUp() override {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
     }
 
-    void TearDown() override {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
 };
 
 TEST_F(SapiEngineTests, ReadControlMessageRetainsSecondJsonLineFromOnePipeRead) {

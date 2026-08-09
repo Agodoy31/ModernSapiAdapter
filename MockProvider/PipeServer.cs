@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.IO.Pipes;
 using System.Security.Principal;
 using System.Threading;
@@ -7,72 +8,74 @@ using System.Threading.Tasks;
 namespace MockProvider;
 
 /// <summary>
-/// Manages asynchronous dual Named Pipe servers (Control and Audio) for the mock provider.
+/// Accepts independent control/audio pipe pairs for provider sessions.
 /// </summary>
-public class PipeServer : IDisposable
+public sealed class PipeServer : IDisposable
 {
     private readonly string _pipePrefix;
 
-    /// <summary>
-    /// Gets the Control Pipe server stream for bidirectional JSON messaging.
-    /// </summary>
-    public NamedPipeServerStream? ControlPipe { get; private set; }
-
-    /// <summary>
-    /// Gets the Audio Pipe server stream for outbound raw PCM streaming.
-    /// </summary>
-    public NamedPipeServerStream? AudioPipe { get; private set; }
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="PipeServer"/> class with the specified pipe prefix.
-    /// </summary>
-    /// <param name="pipePrefix">Base name prefix for named pipes.</param>
     public PipeServer(string pipePrefix)
     {
         _pipePrefix = pipePrefix;
     }
 
     /// <summary>
-    /// Asynchronously listens for incoming client connections on both Control and Audio pipes.
+    /// Creates a fresh pair of server instances and waits until one client connects to both.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token to cancel connection waiting.</param>
-    /// <returns>A task representing the asynchronous listen operation.</returns>
-    public async Task ListenAsync(CancellationToken cancellationToken = default)
+    public async Task<PipeSession> AcceptSessionAsync(CancellationToken cancellationToken = default)
     {
         string userSid = WindowsIdentity.GetCurrent().User?.Value ?? "DefaultUser";
-        
-        string controlPipeName = $"{_pipePrefix}\\{userSid}\\control";
-        string audioPipeName = $"{_pipePrefix}\\{userSid}\\audio";
-
-        ControlPipe?.Dispose();
-        AudioPipe?.Dispose();
-
-        ControlPipe = new NamedPipeServerStream(
-            controlPipeName,
+        string baseName = $"{_pipePrefix}\\{userSid}";
+        var controlPipe = new NamedPipeServerStream(
+            $"{baseName}\\control",
             PipeDirection.InOut,
-            1,
+            NamedPipeServerStream.MaxAllowedServerInstances,
             PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous);
-
-        AudioPipe = new NamedPipeServerStream(
-            audioPipeName,
+        var audioPipe = new NamedPipeServerStream(
+            $"{baseName}\\audio",
             PipeDirection.Out,
-            1,
+            NamedPipeServerStream.MaxAllowedServerInstances,
             PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous);
 
-        var controlTask = ControlPipe.WaitForConnectionAsync(cancellationToken);
-        var audioTask = AudioPipe.WaitForConnectionAsync(cancellationToken);
-
-        await Task.WhenAll(controlTask, audioTask);
+        try
+        {
+            await Task.WhenAll(
+                controlPipe.WaitForConnectionAsync(cancellationToken),
+                audioPipe.WaitForConnectionAsync(cancellationToken));
+            return new PipeSession(controlPipe, audioPipe);
+        }
+        catch
+        {
+            controlPipe.Dispose();
+            audioPipe.Dispose();
+            throw;
+        }
     }
 
-    /// <summary>
-    /// Disposes control and audio pipe streams.
-    /// </summary>
     public void Dispose()
     {
-        ControlPipe?.Dispose();
-        AudioPipe?.Dispose();
+    }
+}
+
+/// <summary>
+/// Owns the two streams belonging to a single provider client session.
+/// </summary>
+public sealed class PipeSession : IDisposable
+{
+    public PipeSession(NamedPipeServerStream controlPipe, NamedPipeServerStream audioPipe)
+    {
+        ControlPipe = controlPipe;
+        AudioPipe = audioPipe;
+    }
+
+    public Stream ControlPipe { get; }
+    public Stream AudioPipe { get; }
+
+    public void Dispose()
+    {
+        ControlPipe.Dispose();
+        AudioPipe.Dispose();
     }
 }

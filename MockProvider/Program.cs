@@ -27,6 +27,7 @@ class Program
 
         using var pipeServer = new PipeServer(pipePrefix);
         var cts = new CancellationTokenSource();
+        var lifetime = new ProviderLifetime(cts);
 
         Console.CancelKeyPress += (s, e) =>
         {
@@ -34,113 +35,15 @@ class Program
             cts.Cancel();
         };
 
+        lifetime.ArmIdleShutdown();
+
         try
         {
             while (!cts.Token.IsCancellationRequested)
             {
-                try
-                {
-                    Task listenTask = pipeServer.ListenAsync(cts.Token);
-                    if (await Task.WhenAny(listenTask, Task.Delay(TimeSpan.FromSeconds(1), cts.Token)) != listenTask)
-                    {
-                        break;
-                    }
-                    await listenTask;
-                    Console.WriteLine("Client connected.");
-
-                    if (pipeServer.ControlPipe == null || pipeServer.AudioPipe == null)
-                    {
-                        Console.WriteLine("Error: Pipes are not initialized.");
-                        break;
-                    }
-
-                    var synthesisEngine = new SynthesisEngine(pipeServer.ControlPipe, pipeServer.AudioPipe);
-                    using var reader = new StreamReader(pipeServer.ControlPipe);
-                    using var writer = new StreamWriter(pipeServer.ControlPipe) { AutoFlush = true };
-
-                    CancellationTokenSource? speakCts = null;
-                    Task? speakTask = null;
-
-                    while (!cts.Token.IsCancellationRequested)
-                    {
-                        string? line = await reader.ReadLineAsync(cts.Token);
-                        if (line == null) break;
-
-                        try
-                        {
-                            using var doc = JsonDocument.Parse(line);
-                            var root = doc.RootElement;
-                            string command = root.GetProperty("command").GetString() ?? "";
-
-                            if (command == "info")
-                            {
-                                var response = new
-                                {
-                                    response = "info",
-                                    audio_format = new
-                                    {
-                                        sample_rate = 24000,
-                                        bits_per_sample = 16,
-                                        channels = 1
-                                    }
-                                };
-                                await writer.WriteLineAsync(JsonSerializer.Serialize(response));
-                            }
-                            else if (command == "voices")
-                            {
-                                var response = new
-                                {
-                                    voices = new[]
-                                    {
-                                        new { id = "mock_voice_1", name = "Mock Voice 1", language = "en-US", gender = "Female" },
-                                        new { id = "mock_voice_2", name = "Mock Voice 2", language = "en-GB", gender = "Male" }
-                                    }
-                                };
-                                await writer.WriteLineAsync(JsonSerializer.Serialize(response));
-                            }
-                            else if (command == "sapi_speak")
-                            {
-                                ulong speakId = root.GetProperty("speak_id").GetUInt64();
-                                if (speakTask != null && !speakTask.IsCompleted)
-                                {
-                                    await writer.WriteLineAsync(JsonSerializer.Serialize(new
-                                    {
-                                        @event = "log",
-                                        speak_id = speakId,
-                                        severity = "error",
-                                        message = "Another synthesis request is still active."
-                                    }));
-                                    continue;
-                                }
-
-                                speakCts = new CancellationTokenSource();
-                                var fragments = root.GetProperty("fragments");
-                                speakTask = synthesisEngine.HandleSpeakAsync(fragments.Clone(), speakId, speakCts.Token);
-                            }
-                            else if (command == "cancel")
-                            {
-                                speakCts?.Cancel();
-                                if (speakTask != null)
-                                {
-                                    try { await speakTask; } catch { /* cancellation is acknowledged by the event. */ }
-                                }
-                            }
-                            else
-                            {
-                                await writer.WriteLineAsync(JsonSerializer.Serialize(new { error = "Unknown command" }));
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"Error processing command: {ex.Message}");
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Connection loop error: {ex.Message}");
-                    await Task.Delay(100);
-                }
+                PipeSession session = await pipeServer.AcceptSessionAsync(cts.Token);
+                lifetime.SessionOpened();
+                _ = HandleSessionAsync(session, cts.Token, lifetime.SessionClosed);
             }
         }
         catch (OperationCanceledException)
@@ -150,6 +53,169 @@ class Program
         catch (Exception ex)
         {
             Console.WriteLine($"Unhandled exception: {ex.Message}");
+        }
+    }
+
+    private static async Task HandleSessionAsync(PipeSession session, CancellationToken cancellationToken, Action sessionClosed)
+    {
+        using (session)
+        {
+            using var reader = new StreamReader(session.ControlPipe);
+            using var writer = new StreamWriter(session.ControlPipe) { AutoFlush = true };
+            var synthesisEngine = new SynthesisEngine(session.ControlPipe, session.AudioPipe);
+            CancellationTokenSource? speakCts = null;
+            Task? speakTask = null;
+
+            try
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    string? line = await reader.ReadLineAsync(cancellationToken);
+                    if (line == null) break;
+
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(line);
+                        var root = doc.RootElement;
+                        string command = root.GetProperty("command").GetString() ?? "";
+
+                        if (command == "info")
+                        {
+                            await writer.WriteLineAsync(JsonSerializer.Serialize(new
+                            {
+                                response = "info",
+                                audio_format = new { sample_rate = 24000, bits_per_sample = 16, channels = 1 }
+                            }));
+                        }
+                        else if (command == "voices")
+                        {
+                            await writer.WriteLineAsync(JsonSerializer.Serialize(new
+                            {
+                                voices = new[]
+                                {
+                                    new { id = "mock_voice_1", name = "Mock Voice 1", language = "en-US", gender = "Female" },
+                                    new { id = "mock_voice_2", name = "Mock Voice 2", language = "en-GB", gender = "Male" }
+                                }
+                            }));
+                        }
+                        else if (command == "sapi_speak")
+                        {
+                            ulong speakId = root.GetProperty("speak_id").GetUInt64();
+                            if (speakTask != null && !speakTask.IsCompleted)
+                            {
+                                await writer.WriteLineAsync(JsonSerializer.Serialize(new { @event = "log", speak_id = speakId, severity = "error", message = "Another synthesis request is still active." }));
+                                continue;
+                            }
+
+                            speakCts = new CancellationTokenSource();
+                            speakTask = synthesisEngine.HandleSpeakAsync(root.GetProperty("fragments").Clone(), speakId, speakCts.Token);
+                        }
+                        else if (command == "cancel")
+                        {
+                            speakCts?.Cancel();
+                            if (speakTask != null)
+                            {
+                                try { await speakTask; } catch { }
+                            }
+                        }
+                        else
+                        {
+                            await writer.WriteLineAsync(JsonSerializer.Serialize(new { error = "Unknown command" }));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error processing command: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Console.WriteLine($"Session error: {ex.Message}");
+            }
+            finally
+            {
+                speakCts?.Cancel();
+                sessionClosed();
+            }
+        }
+    }
+
+    private sealed class ProviderLifetime
+    {
+        private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(1);
+
+        private readonly CancellationTokenSource _shutdown;
+        private readonly object _sync = new();
+        private CancellationTokenSource? _idleTimer;
+        private int _activeSessions;
+
+        public ProviderLifetime(CancellationTokenSource shutdown)
+        {
+            _shutdown = shutdown;
+        }
+
+        public void ArmIdleShutdown()
+        {
+            lock (_sync)
+            {
+                if (_activeSessions == 0)
+                {
+                    StartIdleTimerLocked();
+                }
+            }
+        }
+
+        public void SessionOpened()
+        {
+            lock (_sync)
+            {
+                _activeSessions++;
+                _idleTimer?.Cancel();
+                _idleTimer = null;
+            }
+        }
+
+        public void SessionClosed()
+        {
+            lock (_sync)
+            {
+                _activeSessions--;
+                if (_activeSessions == 0)
+                {
+                    StartIdleTimerLocked();
+                }
+            }
+        }
+
+        private void StartIdleTimerLocked()
+        {
+            _idleTimer?.Cancel();
+            var timer = new CancellationTokenSource();
+            _idleTimer = timer;
+            _ = ShutdownWhenIdleAsync(timer);
+        }
+
+        private async Task ShutdownWhenIdleAsync(CancellationTokenSource timer)
+        {
+            try
+            {
+                await Task.Delay(IdleTimeout, timer.Token);
+                lock (_sync)
+                {
+                    if (ReferenceEquals(_idleTimer, timer) && _activeSessions == 0)
+                    {
+                        _shutdown.Cancel();
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                timer.Dispose();
+            }
         }
     }
 }
