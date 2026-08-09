@@ -14,6 +14,7 @@
 class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjectWithToken>
 {
     friend class SapiEngineTests_OnSpeechEventMapsAndDispatchesToSite_Test;
+    friend class SapiEngineTests_OnSpeechEventMapsSentenceBoundaryToSite_Test;
     friend class SapiEngineTests_OnSpeechEventMapsBookmarkStringEventToSite_Test;
 public:
     /**

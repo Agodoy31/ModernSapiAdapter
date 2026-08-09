@@ -74,7 +74,9 @@ public class SynthesisEngine
                 {
                     string text = textProp.GetString() ?? "";
                     string[] words = text.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-                    int charOffset = 0;
+                    uint charOffset = fragment.TryGetProperty("source_offset", out var sourceOffsetProp)
+                        ? sourceOffsetProp.GetUInt32()
+                        : 0;
                     foreach (var word in words)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
@@ -106,7 +108,7 @@ public class SynthesisEngine
                         totalAudioBytes += audioData.Length;
 
                         totalAudioMs += 200;
-                        charOffset += word.Length + 1;
+                        charOffset += (uint)(word.Length + 1);
                     }
                 }
                 else if (fragment.TryGetProperty("bookmark", out var bookmarkProp))

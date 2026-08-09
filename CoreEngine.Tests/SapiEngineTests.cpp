@@ -172,6 +172,82 @@ TEST_F(SapiEngineTests, GetOutputFormatFailsWhenNoProviderLoaded) {
     EXPECT_TRUE(pWaveFormat == nullptr);
 }
 
+TEST_F(SapiEngineTests, OnSpeechEventMapsAndDispatchesToSite) {
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+    engine->m_audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
+
+    using namespace winrt::Windows::Data::Json;
+    JsonObject eventJson;
+    eventJson.SetNamedValue(L"event", JsonValue::CreateStringValue(L"word_boundary"));
+    eventJson.SetNamedValue(L"audio_offset_ms", JsonValue::CreateNumberValue(50));
+    eventJson.SetNamedValue(L"text_offset", JsonValue::CreateNumberValue(17));
+    eventJson.SetNamedValue(L"text_length", JsonValue::CreateNumberValue(5));
+
+    engine->OnSpeechEvent(eventJson);
+
+    std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
+    ASSERT_EQ(mockSite->receivedEvents.size(), 1u);
+    const SPEVENT& received = mockSite->receivedEvents.front();
+    EXPECT_EQ(received.eEventId, SPEI_WORD_BOUNDARY);
+    EXPECT_EQ(received.elParamType, SPET_LPARAM_IS_UNDEFINED);
+    EXPECT_EQ(received.ullAudioStreamOffset, 2400u);
+    EXPECT_EQ(received.wParam, 17u);
+    EXPECT_EQ(received.lParam, 5);
+}
+
+TEST_F(SapiEngineTests, OnSpeechEventMapsSentenceBoundaryToSite) {
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+    engine->m_audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
+
+    using namespace winrt::Windows::Data::Json;
+    JsonObject eventJson;
+    eventJson.SetNamedValue(L"event", JsonValue::CreateStringValue(L"sentence_boundary"));
+    eventJson.SetNamedValue(L"audio_offset_ms", JsonValue::CreateNumberValue(75));
+    eventJson.SetNamedValue(L"text_offset", JsonValue::CreateNumberValue(22));
+    eventJson.SetNamedValue(L"text_length", JsonValue::CreateNumberValue(9));
+
+    engine->OnSpeechEvent(eventJson);
+
+    std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
+    ASSERT_EQ(mockSite->receivedEvents.size(), 1u);
+    const SPEVENT& received = mockSite->receivedEvents.front();
+    EXPECT_EQ(received.eEventId, SPEI_SENTENCE_BOUNDARY);
+    EXPECT_EQ(received.elParamType, SPET_LPARAM_IS_UNDEFINED);
+    EXPECT_EQ(received.ullAudioStreamOffset, 3600u);
+    EXPECT_EQ(received.wParam, 22u);
+    EXPECT_EQ(received.lParam, 9);
+}
+
+TEST_F(SapiEngineTests, OnSpeechEventMapsBookmarkStringEventToSite) {
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+    engine->m_audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
+
+    using namespace winrt::Windows::Data::Json;
+    JsonObject eventJson;
+    eventJson.SetNamedValue(L"event", JsonValue::CreateStringValue(L"bookmark_reached"));
+    eventJson.SetNamedValue(L"audio_offset_ms", JsonValue::CreateNumberValue(100));
+    eventJson.SetNamedValue(L"bookmark_name", JsonValue::CreateStringValue(L"42"));
+
+    engine->OnSpeechEvent(eventJson);
+
+    std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
+    ASSERT_EQ(mockSite->receivedEvents.size(), 1u);
+    const SPEVENT& received = mockSite->receivedEvents.front();
+    EXPECT_EQ(received.eEventId, SPEI_TTS_BOOKMARK);
+    EXPECT_EQ(received.elParamType, SPET_LPARAM_IS_STRING);
+    EXPECT_EQ(received.ullAudioStreamOffset, 4800u);
+    EXPECT_EQ(received.wParam, 42u);
+    ASSERT_NE(received.lParam, 0);
+    EXPECT_STREQ(reinterpret_cast<const wchar_t*>(received.lParam), L"42");
+    CoTaskMemFree(reinterpret_cast<void*>(received.lParam));
+}
+
 TEST_F(SapiEngineTests, SetObjectTokenConnectsToPipeAndQueriesInfo) {
     auto engine = winrt::make_self<CSapiEngine>();
     auto mockToken = winrt::make_self<MockSpObjectToken>();
@@ -229,6 +305,42 @@ TEST_F(SapiEngineTests, SpeakWaitsForSynthesisCompleteByteBoundary) {
         }
     }
     EXPECT_TRUE(foundWordBoundary);
+}
+
+TEST_F(SapiEngineTests, SpeakPreservesNonContiguousSapiSourceOffsets) {
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockToken = winrt::make_self<MockSpObjectToken>();
+
+    ASSERT_EQ(engine->SetObjectToken(mockToken.get()), S_OK);
+
+    GUID formatId = {};
+    WAVEFORMATEX* pWaveFormat = nullptr;
+    ASSERT_EQ(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat), S_OK);
+    ASSERT_NE(pWaveFormat, nullptr);
+
+    wchar_t firstText[] = L"first";
+    wchar_t secondText[] = L"second";
+    SPVTEXTFRAG firstFragment = {};
+    firstFragment.pTextStart = firstText;
+    firstFragment.ulTextLen = static_cast<ULONG>(wcslen(firstText));
+    firstFragment.ulTextSrcOffset = 0;
+
+    SPVTEXTFRAG secondFragment = {};
+    secondFragment.pTextStart = secondText;
+    secondFragment.ulTextLen = static_cast<ULONG>(wcslen(secondText));
+    secondFragment.ulTextSrcOffset = 23;
+    firstFragment.pNext = &secondFragment;
+
+    EXPECT_EQ(engine->Speak(0, formatId, pWaveFormat, &firstFragment, mockSite.get()), S_OK);
+    CoTaskMemFree(pWaveFormat);
+
+    std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
+    ASSERT_EQ(mockSite->receivedEvents.size(), 2u);
+    EXPECT_EQ(mockSite->receivedEvents[0].eEventId, SPEI_WORD_BOUNDARY);
+    EXPECT_EQ(mockSite->receivedEvents[0].wParam, 0u);
+    EXPECT_EQ(mockSite->receivedEvents[1].eEventId, SPEI_WORD_BOUNDARY);
+    EXPECT_EQ(mockSite->receivedEvents[1].wParam, 23u);
 }
 
 TEST_F(SapiEngineTests, OutputSiteAbortCancelsTheActiveRequest) {
