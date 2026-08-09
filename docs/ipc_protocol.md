@@ -127,7 +127,8 @@ Requests speech synthesis for a collection of SAPI text, silence, or bookmark fr
   "voice_id": "voice_en_us_1",
   "fragments": [
     {
-      "text": "Hello world.",
+      "text": "Hello ",
+      "source_offset": 0,
       "volume": 100,
       "pitch": -5,
       "rate": 2
@@ -137,6 +138,13 @@ Requests speech synthesis for a collection of SAPI text, silence, or bookmark fr
     },
     {
       "bookmark": "section_2"
+    },
+    {
+      "text": "world",
+      "source_offset": 17,
+      "volume": 100,
+      "pitch": 0,
+      "rate": 0
     }
   ]
 }
@@ -147,6 +155,7 @@ Requests speech synthesis for a collection of SAPI text, silence, or bookmark fr
 | Property | Type | Description |
 | :--- | :--- | :--- |
 | `text` | String | Plain text string to be synthesized. |
+| `source_offset` | Number | Required for text fragments only. A non-negative UTF-16 character offset copied by CoreEngine from `SPVTEXTFRAG::ulTextSrcOffset`. |
 | `silence_ms` | Number | Silence duration in milliseconds to insert into the audio stream. |
 | `bookmark` | String | Bookmark identifier string emitted as a `bookmark_reached` event when audio reaches this position. |
 | `volume` | Number | SAPI volume adjustment (0 to 100). |
@@ -156,6 +165,10 @@ Requests speech synthesis for a collection of SAPI text, silence, or bookmark fr
 ---
 
 ### `ssml_speak` Command
+
+The source-coordinate guarantees for `sapi_speak` do not apply to `ssml_speak`:
+its source document belongs to the direct caller/provider path rather than SAPI
+fragment parsing.
 
 Allows direct SSML synthesis requests from modern clients, bypassing legacy SAPI 5 fragment conversion.
 
@@ -222,6 +235,11 @@ Fired when audio synthesis reaches a word boundary in the source text.
 }
 ```
 
+`text_offset` is an absolute UTF-16 offset into the original text passed to
+`ISpVoice::Speak`, and `text_length` is a UTF-16 character length. Providers
+own native SDK/SSML mapping and CoreEngine forwards these normalized values
+unchanged.
+
 `CoreEngine` maps this payload directly to SAPI event `SPEI_WORD_BOUNDARY`.
 
 ---
@@ -240,7 +258,21 @@ Fired when audio synthesis reaches a sentence boundary.
 }
 ```
 
+`text_offset` is an absolute UTF-16 offset into the original text passed to
+`ISpVoice::Speak`, and `text_length` is a UTF-16 character length. Providers
+own native SDK/SSML mapping and CoreEngine forwards these normalized values
+unchanged.
+
 `CoreEngine` maps this payload directly to SAPI event `SPEI_SENTENCE_BOUNDARY`.
+
+#### Unmappable Boundary Coordinates
+
+If a provider cannot confidently map a native word or sentence boundary, it
+must suppress only that boundary. It must continue PCM, terminal events, and
+later mappable events. Providers must not use guessed fallback coordinates,
+including zero. For every suppressed boundary, the provider must send a `log`
+event with `severity: "warning"`, the affected `speak_id`, and a message that
+contains the native callback offset.
 
 ---
 
