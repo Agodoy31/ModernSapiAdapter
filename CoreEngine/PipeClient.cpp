@@ -39,81 +39,107 @@ PipeClient::~PipeClient()
     Cancel();
     m_controlPipe.reset();
     m_audioPipe.reset();
-
-    if (m_providerProcess.hProcess)
-    {
-        TerminateProcess(m_providerProcess.hProcess, 0);
-        WaitForSingleObject(m_providerProcess.hProcess, 1000);
-    }
 }
 
 HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& exePath)
 {
+    constexpr ULONGLONG pipeReadyTimeoutMs = 1000;
+    constexpr DWORD pipeProbeIntervalMs = 10;
+
     m_controlInputBuffer.clear();
 
     std::wstring sid = GetCurrentUserSid();
     std::wstring controlPipePath = L"\\\\.\\pipe\\" + pipeName + L"\\" + sid + L"\\control";
     std::wstring audioPipePath = L"\\\\.\\pipe\\" + pipeName + L"\\" + sid + L"\\audio";
 
-    // Try to connect directly first (retry briefly in case provider is re-initializing pipes).
-    HRESULT hr = E_FAIL;
-    for (int i = 0; i < 30; ++i)
+    bool controlPipeOpened = false;
+    HRESULT hr = TryConnectPipes(controlPipePath, audioPipePath, controlPipeOpened);
+    if (SUCCEEDED(hr))
     {
-        hr = TryConnectPipes(controlPipePath, audioPipePath);
+        return S_OK;
+    }
+
+    if (HRESULT_CODE(hr) == ERROR_ACCESS_DENIED)
+    {
+        return hr;
+    }
+
+    // A missing control pipe cannot become available without its provider. In contrast,
+    // a control pipe that is already open means the provider is starting and its audio
+    // pipe must be given the bounded readiness window rather than launching a duplicate.
+    if (!controlPipeOpened && HRESULT_CODE(hr) == ERROR_FILE_NOT_FOUND)
+    {
+        wil::unique_process_information processInfo;
+        STARTUPINFOW si = { sizeof(si) };
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE;
+
+        std::wstring fullCmdLine = L"\"" + exePath + L"\"";
+        std::vector<wchar_t> cmdLine(fullCmdLine.begin(), fullCmdLine.end());
+        cmdLine.push_back(L'\0');
+
+        std::wstring exeDir = exePath.substr(0, exePath.find_last_of(L"\\/"));
+
+        if (!CreateProcessW(
+            nullptr,
+            cmdLine.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            CREATE_NO_WINDOW,
+            nullptr,
+            exeDir.c_str(),
+            &si,
+            &processInfo))
+        {
+            return HRESULT_FROM_WIN32(GetLastError());
+        }
+
+        m_providerProcess = std::move(processInfo);
+    }
+
+    const ULONGLONG deadline = GetTickCount64() + pipeReadyTimeoutMs;
+    while (GetTickCount64() < deadline)
+    {
+        if (m_providerProcess.hProcess && WaitForSingleObject(m_providerProcess.hProcess, 0) == WAIT_OBJECT_0)
+        {
+            return HRESULT_FROM_WIN32(ERROR_PROCESS_ABORTED);
+        }
+
+        const ULONGLONG remaining = deadline - GetTickCount64();
+        const DWORD waitMs = static_cast<DWORD>(remaining < pipeProbeIntervalMs ? remaining : pipeProbeIntervalMs);
+        if (HRESULT_CODE(hr) == ERROR_PIPE_BUSY)
+        {
+            const std::wstring& busyPipePath = controlPipeOpened ? audioPipePath : controlPipePath;
+            WaitNamedPipeW(busyPipePath.c_str(), waitMs);
+        }
+        else
+        {
+            Sleep(waitMs);
+        }
+
+        controlPipeOpened = false;
+        hr = TryConnectPipes(controlPipePath, audioPipePath, controlPipeOpened);
         if (SUCCEEDED(hr))
         {
             return S_OK;
         }
-        Sleep(50);
-    }
 
-    // If WaitNamedPipe or CreateFile fails, invoke CreateProcessW to launch the provider
-    wil::unique_process_information processInfo;
-    STARTUPINFOW si = { sizeof(si) };
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE; // hidden/in-background
-
-    // Create a mutable copy of the command line for CreateProcessW
-    std::wstring fullCmdLine = L"\"" + exePath + L"\"";
-    std::vector<wchar_t> cmdLine(fullCmdLine.begin(), fullCmdLine.end());
-    cmdLine.push_back(L'\0');
-
-    std::wstring exeDir = exePath.substr(0, exePath.find_last_of(L"\\/"));
-
-    if (!CreateProcessW(
-        nullptr,
-        cmdLine.data(),
-        nullptr,
-        nullptr,
-        FALSE,
-        CREATE_NO_WINDOW,
-        nullptr,
-        exeDir.c_str(),
-        &si,
-        &processInfo))
-    {
-        return HRESULT_FROM_WIN32(GetLastError());
-    }
-
-    m_providerProcess = std::move(processInfo);
-
-    // Wait and retry connection
-    const int maxRetries = 50;
-    for (int i = 0; i < maxRetries; ++i)
-    {
-        Sleep(100); // Wait for the provider to start and create pipes
-        hr = TryConnectPipes(controlPipePath, audioPipePath);
-        if (SUCCEEDED(hr))
+        if (HRESULT_CODE(hr) == ERROR_ACCESS_DENIED)
         {
-            return S_OK;
+            return hr;
         }
     }
 
     return hr;
 }
 
-HRESULT PipeClient::TryConnectPipes(const std::wstring& controlPipePath, const std::wstring& audioPipePath)
+HRESULT PipeClient::TryConnectPipes(
+    const std::wstring& controlPipePath,
+    const std::wstring& audioPipePath,
+    bool& controlPipeOpened)
 {
+    controlPipeOpened = false;
     wil::unique_handle controlPipe(CreateFileW(
         controlPipePath.c_str(), 
         GENERIC_READ | GENERIC_WRITE, 
@@ -127,22 +153,16 @@ HRESULT PipeClient::TryConnectPipes(const std::wstring& controlPipePath, const s
     {
         return HRESULT_FROM_WIN32(GetLastError());
     }
+    controlPipeOpened = true;
 
-    wil::unique_handle audioPipe;
-    for (int retry = 0; retry < 20; ++retry)
-    {
-        audioPipe.reset(CreateFileW(
-            audioPipePath.c_str(), 
-            GENERIC_READ, 
-            0, 
-            nullptr, 
-            OPEN_EXISTING, 
-            FILE_FLAG_OVERLAPPED, 
-            nullptr));
-
-        if (audioPipe) break;
-        Sleep(50);
-    }
+    wil::unique_handle audioPipe(CreateFileW(
+        audioPipePath.c_str(),
+        GENERIC_READ,
+        0,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OVERLAPPED,
+        nullptr));
 
     if (!audioPipe)
     {

@@ -19,7 +19,7 @@ public:
     PipeClient();
 
     /**
-     * @brief Cleans up pipe handles and terminates the underlying provider process.
+     * @brief Cleans up pipe handles. Provider lifetime is managed by the provider's idle policy.
      */
     ~PipeClient();
 
@@ -76,7 +76,11 @@ private:
      * @brief Internal helper to attempt connection to Control and Audio pipes.
      * @param controlPipePath Full pipe path for control channel.
      * @param audioPipePath Full pipe path for audio channel.
+     * @param[out] controlPipeOpened True when the control pipe opened before a later failure.
      * @return S_OK on success, or HRESULT error code on failure.
      */
-    HRESULT TryConnectPipes(const std::wstring& controlPipePath, const std::wstring& audioPipePath);
+    HRESULT TryConnectPipes(
+        const std::wstring& controlPipePath,
+        const std::wstring& audioPipePath,
+        bool& controlPipeOpened);
 };

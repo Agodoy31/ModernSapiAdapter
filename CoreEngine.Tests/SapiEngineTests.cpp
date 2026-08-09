@@ -146,38 +146,15 @@ class ScopedFaultEventLog
 public:
     ScopedFaultEventLog()
     {
-        wchar_t tempDirectory[MAX_PATH] = {};
-        const DWORD tempDirectoryLength = GetTempPathW(ARRAYSIZE(tempDirectory), tempDirectory);
-        if (tempDirectoryLength == 0 || tempDirectoryLength >= ARRAYSIZE(tempDirectory))
-        {
-            return;
-        }
-
-        m_path = std::filesystem::path(tempDirectory) /
-            (L"ModernSapiAdapterFaultTrace_" + std::to_wstring(GetCurrentProcessId()) + L"_" +
-             std::to_wstring(++s_nextTraceId) + L".log");
         std::error_code error;
         std::filesystem::remove(m_path, error);
 
-        const DWORD savedLength = GetEnvironmentVariableW(k_environmentVariable, nullptr, 0);
-        if (savedLength != 0)
-        {
-            m_previousValue.resize(savedLength);
-            GetEnvironmentVariableW(k_environmentVariable, m_previousValue.data(), savedLength);
-            m_previousValue.resize(savedLength - 1);
-            m_hadPreviousValue = true;
-        }
-
-        m_isActive = SetEnvironmentVariableW(k_environmentVariable, m_path.c_str()) != FALSE;
+        std::ofstream stream(m_path, std::ios::binary | std::ios::trunc);
+        m_isActive = stream.good();
     }
 
     ~ScopedFaultEventLog()
     {
-        if (m_isActive)
-        {
-            SetEnvironmentVariableW(k_environmentVariable, m_hadPreviousValue ? m_previousValue.c_str() : nullptr);
-        }
-
         std::error_code error;
         std::filesystem::remove(m_path, error);
     }
@@ -208,11 +185,7 @@ public:
     }
 
 private:
-    static constexpr const wchar_t* k_environmentVariable = L"MODERN_SAPI_ADAPTER_TEST_FAULT_EVENT_LOG";
-    inline static std::atomic_uint64_t s_nextTraceId{0};
-    std::filesystem::path m_path;
-    std::wstring m_previousValue;
-    bool m_hadPreviousValue{false};
+    std::filesystem::path m_path{std::filesystem::temp_directory_path() / L"ModernSapiAdapterMockProviderFaultTrace.log"};
     bool m_isActive{false};
 };
 
@@ -402,8 +375,13 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsBookmarkStringEventToSite) {
 TEST_F(SapiEngineTests, SetObjectTokenConnectsToPipeAndQueriesInfo) {
     auto engine = winrt::make_self<CSapiEngine>();
     auto mockToken = winrt::make_self<MockSpObjectToken>();
+
+    const auto start = std::chrono::steady_clock::now();
     HRESULT hr = engine->SetObjectToken(mockToken.get());
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
     EXPECT_EQ(hr, S_OK);
+    EXPECT_LT(elapsed, std::chrono::seconds(1));
 
     GUID formatId = {};
     WAVEFORMATEX* pWaveFormat = nullptr;
@@ -418,6 +396,38 @@ TEST_F(SapiEngineTests, SetObjectTokenConnectsToPipeAndQueriesInfo) {
     EXPECT_EQ(pWaveFormat->wBitsPerSample, 16);
 
     CoTaskMemFree(pWaveFormat);
+}
+
+TEST_F(SapiEngineTests, PipeClientFailsImmediatelyWhenControlPipeAccessIsDenied) {
+    static std::atomic_uint64_t nextPipeId{0};
+    const std::wstring pipeName = L"CoreEngineDenied_" + std::to_wstring(GetCurrentProcessId()) + L"_" +
+        std::to_wstring(++nextPipeId);
+    const std::wstring controlPipePath = L"\\\\.\\pipe\\" + pipeName + L"\\" + GetCurrentUserSidForTest() + L"\\control";
+
+    PSECURITY_DESCRIPTOR securityDescriptor = nullptr;
+    ASSERT_TRUE(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        L"D:(D;;GA;;;WD)", SDDL_REVISION_1, &securityDescriptor, nullptr));
+    wil::unique_hlocal securityDescriptorHandle(securityDescriptor);
+
+    SECURITY_ATTRIBUTES securityAttributes = {};
+    securityAttributes.nLength = sizeof(securityAttributes);
+    securityAttributes.lpSecurityDescriptor = securityDescriptor;
+
+    wil::unique_handle deniedControlPipe(CreateNamedPipeW(
+        controlPipePath.c_str(),
+        PIPE_ACCESS_DUPLEX,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+        1,
+        4096,
+        4096,
+        0,
+        &securityAttributes));
+    ASSERT_TRUE(deniedControlPipe);
+
+    PipeClient client;
+    const auto start = std::chrono::steady_clock::now();
+    EXPECT_EQ(client.Connect(pipeName, L"definitely-not-a-provider.exe"), HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED));
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(100));
 }
 
 TEST_F(SapiEngineTests, SpeakWaitsForSynthesisCompleteByteBoundary) {

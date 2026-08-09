@@ -12,11 +12,10 @@ namespace MockProvider;
 /// </summary>
 public class SynthesisEngine
 {
-    private const string FaultEventLogEnvironmentVariable = "MODERN_SAPI_ADAPTER_TEST_FAULT_EVENT_LOG";
+    private static readonly string FaultEventLogPath = Path.Combine(Path.GetTempPath(), "ModernSapiAdapterMockProviderFaultTrace.log");
 
     private readonly Stream _controlPipe;
     private readonly Stream _audioPipe;
-    private readonly string? _faultEventLogPath;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SynthesisEngine"/> class.
@@ -27,7 +26,6 @@ public class SynthesisEngine
     {
         _controlPipe = controlPipe;
         _audioPipe = audioPipe;
-        _faultEventLogPath = Environment.GetEnvironmentVariable(FaultEventLogEnvironmentVariable);
     }
 
     /// <summary>
@@ -192,14 +190,9 @@ public class SynthesisEngine
 
     private void RecordProviderActivityForTest(ulong speakId, string activityName)
     {
-        if (string.IsNullOrWhiteSpace(_faultEventLogPath))
-        {
-            return;
-        }
-
         try
         {
-            File.AppendAllText(_faultEventLogPath, $"{speakId}:{activityName}{Environment.NewLine}");
+            File.AppendAllText(FaultEventLogPath, $"{speakId}:{activityName}{Environment.NewLine}");
         }
         catch
         {

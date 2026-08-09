@@ -40,7 +40,12 @@ class Program
             {
                 try
                 {
-                    await pipeServer.ListenAsync(cts.Token);
+                    Task listenTask = pipeServer.ListenAsync(cts.Token);
+                    if (await Task.WhenAny(listenTask, Task.Delay(TimeSpan.FromSeconds(1), cts.Token)) != listenTask)
+                    {
+                        break;
+                    }
+                    await listenTask;
                     Console.WriteLine("Client connected.");
 
                     if (pipeServer.ControlPipe == null || pipeServer.AudioPipe == null)
