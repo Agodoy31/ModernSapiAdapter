@@ -1,6 +1,113 @@
 #include "pch.h"
 #include "MockSapiInterfaces.h"
+#include "../CoreEngine/PipeClient.h"
 #include "../CoreEngine/SapiEngine.h"
+#include <sddl.h>
+
+namespace
+{
+std::wstring GetCurrentUserSidForTest()
+{
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return L"DefaultUser";
+
+    wil::unique_handle tokenHandle(token);
+    DWORD bytesRequired = 0;
+    GetTokenInformation(tokenHandle.get(), TokenUser, nullptr, 0, &bytesRequired);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) return L"DefaultUser";
+
+    std::vector<BYTE> tokenBuffer(bytesRequired);
+    if (!GetTokenInformation(tokenHandle.get(), TokenUser, tokenBuffer.data(), bytesRequired, &bytesRequired)) return L"DefaultUser";
+
+    auto tokenUser = reinterpret_cast<TOKEN_USER*>(tokenBuffer.data());
+    LPWSTR sidText = nullptr;
+    if (!ConvertSidToStringSidW(tokenUser->User.Sid, &sidText)) return L"DefaultUser";
+
+    wil::unique_hlocal_string sid(sidText);
+    return sid.get();
+}
+
+class ControlPipeTestServer
+{
+public:
+    ControlPipeTestServer()
+    {
+        static std::atomic_uint64_t nextPipeId{0};
+        m_pipeName = L"CoreEngineTests_" + std::to_wstring(GetCurrentProcessId()) + L"_" + std::to_wstring(++nextPipeId);
+
+        const std::wstring basePath = L"\\\\.\\pipe\\" + m_pipeName + L"\\" + GetCurrentUserSidForTest();
+        m_controlPipe.reset(CreateNamedPipeW(
+            (basePath + L"\\control").c_str(),
+            PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            1,
+            4096,
+            4096,
+            0,
+            nullptr));
+        m_audioPipe.reset(CreateNamedPipeW(
+            (basePath + L"\\audio").c_str(),
+            PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            1,
+            4096,
+            4096,
+            0,
+            nullptr));
+
+        if (!m_controlPipe || !m_audioPipe)
+        {
+            m_createError = GetLastError();
+            return;
+        }
+
+        m_connectThread = std::thread([this] {
+            ConnectPipe(m_controlPipe.get());
+            ConnectPipe(m_audioPipe.get());
+        });
+    }
+
+    ~ControlPipeTestServer()
+    {
+        if (m_controlPipe) CancelIoEx(m_controlPipe.get(), nullptr);
+        if (m_audioPipe) CancelIoEx(m_audioPipe.get(), nullptr);
+        m_controlPipe.reset();
+        m_audioPipe.reset();
+        if (m_connectThread.joinable()) m_connectThread.join();
+    }
+
+    const std::wstring& PipeName() const { return m_pipeName; }
+    DWORD CreateError() const { return m_createError; }
+
+    bool WriteControl(const std::string& text)
+    {
+        if (m_connectThread.joinable()) m_connectThread.join();
+        if (m_connectError != ERROR_SUCCESS) return false;
+
+        DWORD bytesWritten = 0;
+        return WriteFile(m_controlPipe.get(), text.data(), static_cast<DWORD>(text.size()), &bytesWritten, nullptr) && bytesWritten == text.size();
+    }
+
+private:
+    void ConnectPipe(HANDLE pipe)
+    {
+        if (m_connectError != ERROR_SUCCESS) return;
+
+        if (!ConnectNamedPipe(pipe, nullptr))
+        {
+            const DWORD error = GetLastError();
+            if (error != ERROR_PIPE_CONNECTED) m_connectError = error;
+        }
+    }
+
+    std::wstring m_pipeName;
+    wil::unique_handle m_controlPipe;
+    wil::unique_handle m_audioPipe;
+    std::thread m_connectThread;
+    std::atomic<DWORD> m_createError{ERROR_SUCCESS};
+    std::atomic<DWORD> m_connectError{ERROR_SUCCESS};
+};
+}
 
 class SapiEngineTests : public ::testing::Test {
 protected:
@@ -13,6 +120,46 @@ protected:
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 };
+
+TEST_F(SapiEngineTests, ReadControlMessageRetainsSecondJsonLineFromOnePipeRead) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    ASSERT_TRUE(server.WriteControl("{\"event\":\"first\"}\n{\"event\":\"second\"}\n"));
+
+    winrt::Windows::Data::Json::JsonObject first = nullptr;
+    winrt::Windows::Data::Json::JsonObject second = nullptr;
+    ASSERT_EQ(client.ReadControlMessage(first), S_OK);
+    ASSERT_EQ(client.ReadControlMessage(second), S_OK);
+
+    EXPECT_EQ(first.GetNamedString(L"event"), L"first");
+    EXPECT_EQ(second.GetNamedString(L"event"), L"second");
+}
+
+TEST_F(SapiEngineTests, ReadControlMessageReassemblesFragmentedJsonLine) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+
+    std::atomic_bool writesSucceeded{true};
+    std::thread writer([&server, &writesSucceeded] {
+        Sleep(20);
+        writesSucceeded = server.WriteControl("{\"event\":\"");
+        Sleep(20);
+        writesSucceeded = server.WriteControl("fragmented\"}\n") && writesSucceeded.load();
+    });
+
+    winrt::Windows::Data::Json::JsonObject message = nullptr;
+    EXPECT_EQ(client.ReadControlMessage(message), S_OK);
+    writer.join();
+
+    ASSERT_TRUE(writesSucceeded);
+    EXPECT_EQ(message.GetNamedString(L"event"), L"fragmented");
+}
 
 TEST_F(SapiEngineTests, GetOutputFormatFailsWhenNoProviderLoaded) {
     auto engine = winrt::make_self<CSapiEngine>();
@@ -46,7 +193,7 @@ TEST_F(SapiEngineTests, SetObjectTokenConnectsToPipeAndQueriesInfo) {
     CoTaskMemFree(pWaveFormat);
 }
 
-TEST_F(SapiEngineTests, SpeakStreamsAudioAndEventsFromMockProvider) {
+TEST_F(SapiEngineTests, SpeakWaitsForSynthesisCompleteByteBoundary) {
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     auto engine = winrt::make_self<CSapiEngine>();
     auto mockToken = winrt::make_self<MockSpObjectToken>();
@@ -68,11 +215,8 @@ TEST_F(SapiEngineTests, SpeakStreamsAudioAndEventsFromMockProvider) {
     CoTaskMemFree(pWaveFormat);
 
     EXPECT_EQ(hr, S_OK);
-
-    // Give worker time to complete streaming
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
-
     EXPECT_GT(mockSite->writeCallCount.load(), 0u);
+    EXPECT_EQ(mockSite->totalBytesWritten.load(), 48000u);
 
     std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
     EXPECT_GT(mockSite->receivedEvents.size(), 0u);
@@ -85,4 +229,57 @@ TEST_F(SapiEngineTests, SpeakStreamsAudioAndEventsFromMockProvider) {
         }
     }
     EXPECT_TRUE(foundWordBoundary);
+}
+
+TEST_F(SapiEngineTests, OutputSiteAbortCancelsTheActiveRequest) {
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockToken = winrt::make_self<MockSpObjectToken>();
+
+    ASSERT_EQ(engine->SetObjectToken(mockToken.get()), S_OK);
+
+    GUID formatId = {};
+    WAVEFORMATEX* pWaveFormat = nullptr;
+    ASSERT_EQ(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat), S_OK);
+    ASSERT_NE(pWaveFormat, nullptr);
+
+    std::wstring firstText;
+    for (int word = 0; word < 80; ++word)
+    {
+        firstText += L"pending ";
+    }
+    SPVTEXTFRAG firstFragment = {};
+    firstFragment.pTextStart = firstText.c_str();
+    firstFragment.ulTextLen = static_cast<ULONG>(firstText.length());
+
+    HRESULT speakResult = E_FAIL;
+    std::atomic<bool> returned = false;
+    std::thread speakThread([&] {
+        speakResult = engine->Speak(0, formatId, pWaveFormat, &firstFragment, mockSite.get());
+        returned = true;
+    });
+
+    for (int attempt = 0; attempt < 50 && mockSite->totalBytesWritten.load() == 0; ++attempt)
+    {
+        Sleep(20);
+    }
+    ASSERT_EQ(mockSite->totalBytesWritten.load(), 9600u);
+
+    mockSite->actions = SPVES_ABORT;
+    for (int attempt = 0; attempt < 25 && !returned.load(); ++attempt)
+    {
+        Sleep(20);
+    }
+
+    EXPECT_TRUE(returned.load());
+    speakThread.join();
+    CoTaskMemFree(pWaveFormat);
+    EXPECT_EQ(speakResult, S_OK);
+
+    std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
+    const bool forwardedLateSentenceBoundary = std::any_of(
+        mockSite->receivedEvents.begin(),
+        mockSite->receivedEvents.end(),
+        [](const SPEVENT& event) { return event.eEventId == SPEI_SENTENCE_BOUNDARY; });
+    EXPECT_FALSE(forwardedLateSentenceBoundary);
 }

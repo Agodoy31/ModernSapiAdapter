@@ -49,6 +49,8 @@ PipeClient::~PipeClient()
 
 HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& exePath)
 {
+    m_controlInputBuffer.clear();
+
     std::wstring sid = GetCurrentUserSid();
     std::wstring controlPipePath = L"\\\\.\\pipe\\" + pipeName + L"\\" + sid + L"\\control";
     std::wstring audioPipePath = L"\\\\.\\pipe\\" + pipeName + L"\\" + sid + L"\\audio";
@@ -147,8 +149,11 @@ HRESULT PipeClient::TryConnectPipes(const std::wstring& controlPipePath, const s
         return HRESULT_FROM_WIN32(GetLastError());
     }
 
-    DWORD mode = PIPE_READMODE_MESSAGE;
-    SetNamedPipeHandleState(controlPipe.get(), &mode, nullptr, nullptr);
+    DWORD mode = PIPE_READMODE_BYTE;
+    if (!SetNamedPipeHandleState(controlPipe.get(), &mode, nullptr, nullptr))
+    {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
 
     m_controlPipe = std::move(controlPipe);
     m_audioPipe = std::move(audioPipe);
@@ -158,6 +163,7 @@ HRESULT PipeClient::TryConnectPipes(const std::wstring& controlPipePath, const s
 
 HRESULT PipeClient::SendControlMessage(const winrt::Windows::Data::Json::JsonObject& json)
 {
+    std::lock_guard<std::mutex> lock(m_controlWriteMutex);
     if (!m_controlPipe) return E_UNEXPECTED;
 
     winrt::hstring jsonHString = json.Stringify();
@@ -194,14 +200,21 @@ HRESULT PipeClient::SendControlMessage(const winrt::Windows::Data::Json::JsonObj
 
 HRESULT PipeClient::ReadControlMessage(winrt::Windows::Data::Json::JsonObject& outJson)
 {
+    // Keeps long screen-reader Read All requests valid without allowing unbounded buffering.
+    constexpr size_t maxControlRecordBytes = 16 * 1024 * 1024;
+
     outJson = nullptr;
     if (!m_controlPipe) return E_UNEXPECTED;
 
-    std::vector<char> buffer;
-    char chunk[256];
+    char chunk[4096];
 
-    while (true)
+    while (m_controlInputBuffer.find('\n') == std::string::npos)
     {
+        if (m_controlInputBuffer.size() > maxControlRecordBytes)
+        {
+            return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
+        }
+
         wil::unique_event overlappedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
         if (!overlappedEvent) return HRESULT_FROM_WIN32(GetLastError());
 
@@ -215,10 +228,6 @@ HRESULT PipeClient::ReadControlMessage(winrt::Windows::Data::Json::JsonObject& o
             DWORD err = GetLastError();
             if (err == ERROR_IO_PENDING)
             {
-                if (!GetOverlappedResult(m_controlPipe.get(), &overlapped, &bytesRead, TRUE))
-                {
-                    return HRESULT_FROM_WIN32(GetLastError());
-                }
             }
             else
             {
@@ -226,13 +235,14 @@ HRESULT PipeClient::ReadControlMessage(winrt::Windows::Data::Json::JsonObject& o
             }
         }
 
+        if (!GetOverlappedResult(m_controlPipe.get(), &overlapped, &bytesRead, TRUE))
+        {
+            return HRESULT_FROM_WIN32(GetLastError());
+        }
+
         if (bytesRead > 0)
         {
-            buffer.insert(buffer.end(), chunk, chunk + bytesRead);
-            if (buffer.back() == '\n')
-            {
-                break;
-            }
+            m_controlInputBuffer.append(chunk, bytesRead);
         }
         else
         {
@@ -240,16 +250,32 @@ HRESULT PipeClient::ReadControlMessage(winrt::Windows::Data::Json::JsonObject& o
         }
     }
 
-    std::string utf8String(buffer.begin(), buffer.end());
-    int wideLen = MultiByteToWideChar(CP_UTF8, 0, utf8String.c_str(), static_cast<int>(utf8String.size()), nullptr, 0);
+    const size_t newlinePos = m_controlInputBuffer.find('\n');
+    if (newlinePos > maxControlRecordBytes)
+    {
+        return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
+    }
+
+    std::string utf8String = m_controlInputBuffer.substr(0, newlinePos);
+    m_controlInputBuffer.erase(0, newlinePos + 1);
+
+    if (!utf8String.empty() && utf8String.back() == '\r')
+    {
+        utf8String.pop_back();
+    }
+
+    if (utf8String.empty())
+    {
+        return S_FALSE;
+    }
+
+    int wideLen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8String.data(), static_cast<int>(utf8String.size()), nullptr, 0);
     if (wideLen == 0) return HRESULT_FROM_WIN32(GetLastError());
 
     std::wstring wideString(wideLen, 0);
-    MultiByteToWideChar(CP_UTF8, 0, utf8String.c_str(), static_cast<int>(utf8String.size()), wideString.data(), wideLen);
-
-    while (!wideString.empty() && (wideString.back() == L'\r' || wideString.back() == L'\n' || wideString.back() == L'\0' || wideString.back() == L' '))
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8String.data(), static_cast<int>(utf8String.size()), wideString.data(), wideLen) == 0)
     {
-        wideString.pop_back();
+        return HRESULT_FROM_WIN32(GetLastError());
     }
 
     try

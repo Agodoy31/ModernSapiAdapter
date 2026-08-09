@@ -51,7 +51,7 @@ public class PipeServer : IDisposable
             controlPipeName,
             PipeDirection.InOut,
             1,
-            PipeTransmissionMode.Message,
+            PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous);
 
         AudioPipe = new NamedPipeServerStream(

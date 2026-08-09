@@ -94,19 +94,30 @@ class Program
                             }
                             else if (command == "sapi_speak")
                             {
+                                ulong speakId = root.GetProperty("speak_id").GetUInt64();
                                 if (speakTask != null && !speakTask.IsCompleted)
                                 {
-                                    speakCts?.Cancel();
-                                    try { await speakTask; } catch { /* ignore */ }
+                                    await writer.WriteLineAsync(JsonSerializer.Serialize(new
+                                    {
+                                        @event = "log",
+                                        speak_id = speakId,
+                                        severity = "error",
+                                        message = "Another synthesis request is still active."
+                                    }));
+                                    continue;
                                 }
 
                                 speakCts = new CancellationTokenSource();
                                 var fragments = root.GetProperty("fragments");
-                                speakTask = synthesisEngine.HandleSpeakAsync(fragments.Clone(), speakCts.Token);
+                                speakTask = synthesisEngine.HandleSpeakAsync(fragments.Clone(), speakId, speakCts.Token);
                             }
                             else if (command == "cancel")
                             {
                                 speakCts?.Cancel();
+                                if (speakTask != null)
+                                {
+                                    try { await speakTask; } catch { /* cancellation is acknowledged by the event. */ }
+                                }
                             }
                             else
                             {

@@ -3,7 +3,7 @@
 #include "SapiEngine.h"
 
 SpeechWorker::SpeechWorker(CSapiEngine* pEngine, std::shared_ptr<PipeClient> pClient)
-    : m_pEngine(pEngine), m_pClient(pClient), m_exit(false), m_isSpeaking(false)
+    : m_pEngine(pEngine), m_pClient(pClient), m_exit(false)
 {
     m_audioThread = std::thread(&SpeechWorker::AudioThreadProc, this);
     m_controlThread = std::thread(&SpeechWorker::ControlThreadProc, this);
@@ -25,45 +25,174 @@ SpeechWorker::~SpeechWorker()
 
 void SpeechWorker::Start(void* /*pSite*/, uint64_t speakId)
 {
+    std::lock_guard<std::mutex> lock(m_requestMutex);
     m_activeSpeakId = speakId;
-    m_isSpeaking = true;
+    m_deliveredAudioBytes = 0;
+    m_rawAudioBytesRead = 0;
+    m_expectedAudioBytes = 0;
+    m_cancelledAudioBytes = 0;
+    m_synthesisComplete = false;
+    m_cancellationComplete = false;
+    m_cancellationFailed = false;
+    m_requestState = RequestState::Speaking;
 }
 
 void SpeechWorker::Stop()
 {
-    if (m_isSpeaking.exchange(false))
+    uint64_t speakId = 0;
     {
-        try
+        std::lock_guard<std::mutex> lock(m_requestMutex);
+        if (m_requestState == RequestState::Idle)
         {
-            using namespace winrt::Windows::Data::Json;
-            JsonObject req;
-            req.SetNamedValue(L"command", JsonValue::CreateStringValue(L"cancel"));
-            req.SetNamedValue(L"speak_id", JsonValue::CreateNumberValue(static_cast<double>(m_activeSpeakId.load())));
-            if (m_pClient)
-            {
-                m_pClient->SendControlMessage(req);
-            }
+            return;
         }
-        catch (const winrt::hresult_error& e)
+
+        speakId = m_activeSpeakId;
+        m_requestState = RequestState::Idle;
+        m_requestChanged.notify_all();
+    }
+
+    SendCancellation(speakId);
+}
+
+HRESULT SpeechWorker::CancelAndDrain()
+{
+    uint64_t speakId = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_requestMutex);
+        if (m_requestState == RequestState::Idle)
         {
-            CoreLog(L"[SpeechWorker] WinRT exception in Stop: 0x%08x - %s", e.code().value, e.message().c_str());
+            return S_OK;
         }
-        catch (const std::exception& e)
+
+        if (m_requestState == RequestState::Cancelling)
         {
-            CoreLog(L"[SpeechWorker] Exception in Stop: %hs", e.what());
+            return E_UNEXPECTED;
         }
-        catch (...)
-        {
-            CoreLog(L"[SpeechWorker] Unknown exception in Stop.");
-        }
+
+        speakId = m_activeSpeakId;
+        m_cancellationComplete = false;
+        m_cancellationFailed = false;
+        m_requestState = RequestState::Cancelling;
+    }
+
+    HRESULT hr = SendCancellation(speakId);
+    if (FAILED(hr))
+    {
+        std::lock_guard<std::mutex> lock(m_requestMutex);
+        m_cancellationFailed = true;
+        m_requestState = RequestState::Idle;
+        m_requestChanged.notify_all();
+        return hr;
+    }
+
+    std::unique_lock<std::mutex> lock(m_requestMutex);
+    m_requestChanged.wait(lock, [this] {
+        return m_requestState != RequestState::Cancelling || m_exit.load();
+    });
+
+    return m_cancellationFailed ? E_FAIL : S_OK;
+}
+
+HRESULT SpeechWorker::SendCancellation(uint64_t speakId)
+{
+    try
+    {
+        using namespace winrt::Windows::Data::Json;
+        JsonObject req;
+        req.SetNamedValue(L"command", JsonValue::CreateStringValue(L"cancel"));
+        req.SetNamedValue(L"speak_id", JsonValue::CreateNumberValue(static_cast<double>(speakId)));
+        return m_pClient ? m_pClient->SendControlMessage(req) : E_UNEXPECTED;
+    }
+    catch (const winrt::hresult_error& e)
+    {
+        CoreLog(L"[SpeechWorker] WinRT exception while cancelling speak_id %llu: 0x%08x - %s", speakId, e.code().value, e.message().c_str());
+        return e.code();
+    }
+    catch (const std::exception& e)
+    {
+        CoreLog(L"[SpeechWorker] Exception while cancelling speak_id %llu: %hs", speakId, e.what());
+        return E_FAIL;
+    }
+    catch (...)
+    {
+        CoreLog(L"[SpeechWorker] Unknown exception while cancelling speak_id %llu.", speakId);
+        return E_FAIL;
     }
 }
 
-void SpeechWorker::WaitUntilFinished()
+HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
 {
-    while (m_isSpeaking && !m_exit)
+    std::unique_lock<std::mutex> lock(m_requestMutex);
+    while (m_requestState != RequestState::Idle && !m_exit)
     {
-        Sleep(10);
+        if (m_requestChanged.wait_for(lock, std::chrono::milliseconds(10), [this] {
+            return m_requestState == RequestState::Idle || m_exit.load();
+        }))
+        {
+            break;
+        }
+
+        if (!pOutputSite)
+        {
+            continue;
+        }
+
+        lock.unlock();
+        const DWORD actions = pOutputSite->GetActions();
+        lock.lock();
+
+        if ((actions & SPVES_ABORT) != 0 && m_requestState != RequestState::Idle)
+        {
+            lock.unlock();
+            CoreLog(L"[SpeechWorker] SAPI requested SPVES_ABORT; cancelling active synthesis.");
+            return CancelAndDrain();
+        }
+    }
+
+    return m_exit ? E_ABORT : S_OK;
+}
+
+void SpeechWorker::CompleteIfAudioBoundaryReached()
+{
+    if (!m_synthesisComplete || m_requestState != RequestState::Speaking)
+    {
+        return;
+    }
+
+    if (m_deliveredAudioBytes == m_expectedAudioBytes)
+    {
+        m_requestState = RequestState::Idle;
+        m_requestChanged.notify_all();
+    }
+    else if (m_deliveredAudioBytes > m_expectedAudioBytes)
+    {
+        CoreLog(L"[SpeechWorker] Provider declared %llu audio bytes after %llu bytes were already delivered.",
+            m_expectedAudioBytes, m_deliveredAudioBytes);
+        m_requestState = RequestState::Idle;
+        m_requestChanged.notify_all();
+    }
+}
+
+void SpeechWorker::CompleteCancellationIfAudioBoundaryReached()
+{
+    if (!m_cancellationComplete || m_requestState != RequestState::Cancelling)
+    {
+        return;
+    }
+
+    if (m_rawAudioBytesRead == m_cancelledAudioBytes)
+    {
+        m_requestState = RequestState::Idle;
+        m_requestChanged.notify_all();
+    }
+    else if (m_rawAudioBytesRead > m_cancelledAudioBytes)
+    {
+        CoreLog(L"[SpeechWorker] Provider declared %llu cancellation bytes after %llu bytes were already read.",
+            m_cancelledAudioBytes, m_rawAudioBytesRead);
+        m_cancellationFailed = true;
+        m_requestState = RequestState::Idle;
+        m_requestChanged.notify_all();
     }
 }
 
@@ -81,10 +210,41 @@ void SpeechWorker::AudioThreadProc()
             Sleep(50);
             continue;
         }
-        
-        if (m_isSpeaking && bytesRead > 0)
+
+        if (bytesRead == 0)
         {
-            m_pEngine->OnAudioData(buffer.data(), bytesRead);
+            continue;
+        }
+
+        uint64_t cancellationToSend = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_requestMutex);
+            if (m_requestState == RequestState::Speaking)
+            {
+                m_rawAudioBytesRead += bytesRead;
+                if (!m_pEngine->OnAudioData(buffer.data(), bytesRead))
+                {
+                    CoreLog(L"[SpeechWorker] SAPI rejected an audio write; cancelling active synthesis.");
+                    cancellationToSend = m_activeSpeakId;
+                    m_requestState = RequestState::Idle;
+                    m_requestChanged.notify_all();
+                }
+                else
+                {
+                    m_deliveredAudioBytes += bytesRead;
+                    CompleteIfAudioBoundaryReached();
+                }
+            }
+            else if (m_requestState == RequestState::Cancelling)
+            {
+                m_rawAudioBytesRead += bytesRead;
+                CompleteCancellationIfAudioBoundaryReached();
+            }
+        }
+
+        if (cancellationToSend != 0)
+        {
+            SendCancellation(cancellationToSend);
         }
     }
     winrt::uninit_apartment();
@@ -106,6 +266,7 @@ void SpeechWorker::ControlThreadProc()
 
         try
         {
+            bool forwardToSapi = true;
             if (json.HasKey(L"event") && json.HasKey(L"speak_id"))
             {
                 if (json.GetNamedValue(L"event").ValueType() == winrt::Windows::Data::Json::JsonValueType::String &&
@@ -113,33 +274,107 @@ void SpeechWorker::ControlThreadProc()
                 {
                     auto eventStr = json.GetNamedString(L"event");
                     uint64_t eventSpeakId = static_cast<uint64_t>(json.GetNamedNumber(L"speak_id"));
-                    
-                    if (eventSpeakId == m_activeSpeakId.load())
+
+                    std::lock_guard<std::mutex> lock(m_requestMutex);
+                    if (eventSpeakId == m_activeSpeakId)
                     {
-                        if (eventStr == L"completed")
+                        constexpr double maxExactJsonInteger = 9007199254740991.0;
+                        const bool isSpeechEvent = eventStr == L"word_boundary" ||
+                            eventStr == L"sentence_boundary" || eventStr == L"bookmark_reached";
+                        if (isSpeechEvent && m_requestState != RequestState::Speaking)
                         {
-                            m_isSpeaking = false;
+                            // SAPI has aborted this request, so delayed provider callbacks must not move focus.
+                            forwardToSapi = false;
                         }
-                        else if (eventStr == L"log")
+
+                        if (eventStr == L"synthesis_complete" && m_requestState == RequestState::Speaking)
                         {
-                            if (json.HasKey(L"severity") && json.GetNamedValue(L"severity").ValueType() == winrt::Windows::Data::Json::JsonValueType::String)
+                            if (!json.HasKey(L"total_audio_bytes") ||
+                                json.GetNamedValue(L"total_audio_bytes").ValueType() != winrt::Windows::Data::Json::JsonValueType::Number)
                             {
-                                auto severity = json.GetNamedString(L"severity");
-                                if (severity == L"error" || severity == L"fatal")
-                                {
-                                    m_isSpeaking = false;
-                                }
+                                CoreLog(L"[SpeechWorker] synthesis_complete for speak_id %llu omitted total_audio_bytes.", eventSpeakId);
+                                m_requestState = RequestState::Idle;
+                                m_requestChanged.notify_all();
                             }
                             else
                             {
-                                m_isSpeaking = false; // Default to fatal if no severity specified or invalid type
+                                const double totalAudioBytesValue = json.GetNamedNumber(L"total_audio_bytes");
+                                if (!std::isfinite(totalAudioBytesValue) || totalAudioBytesValue < 0 ||
+                                    totalAudioBytesValue > maxExactJsonInteger ||
+                                    totalAudioBytesValue != static_cast<double>(static_cast<uint64_t>(totalAudioBytesValue)) ||
+                                    m_synthesisComplete)
+                                {
+                                    CoreLog(L"[SpeechWorker] synthesis_complete for speak_id %llu has an invalid or duplicate total_audio_bytes value.", eventSpeakId);
+                                    m_requestState = RequestState::Idle;
+                                    m_requestChanged.notify_all();
+                                }
+                                else
+                                {
+                                    m_expectedAudioBytes = static_cast<uint64_t>(totalAudioBytesValue);
+                                    m_synthesisComplete = true;
+                                    CompleteIfAudioBoundaryReached();
+                                }
+                            }
+                        }
+                        else if (eventStr == L"synthesis_cancelled" && m_requestState == RequestState::Cancelling)
+                        {
+                            if (!json.HasKey(L"audio_bytes_written") ||
+                                json.GetNamedValue(L"audio_bytes_written").ValueType() != winrt::Windows::Data::Json::JsonValueType::Number)
+                            {
+                                CoreLog(L"[SpeechWorker] synthesis_cancelled for speak_id %llu omitted audio_bytes_written.", eventSpeakId);
+                                m_cancellationFailed = true;
+                                m_requestState = RequestState::Idle;
+                                m_requestChanged.notify_all();
+                            }
+                            else
+                            {
+                                const double cancelledAudioBytesValue = json.GetNamedNumber(L"audio_bytes_written");
+                                if (!std::isfinite(cancelledAudioBytesValue) || cancelledAudioBytesValue < 0 ||
+                                    cancelledAudioBytesValue > maxExactJsonInteger ||
+                                    cancelledAudioBytesValue != static_cast<double>(static_cast<uint64_t>(cancelledAudioBytesValue)) ||
+                                    m_cancellationComplete)
+                                {
+                                    CoreLog(L"[SpeechWorker] synthesis_cancelled for speak_id %llu has an invalid or duplicate audio_bytes_written value.", eventSpeakId);
+                                    m_cancellationFailed = true;
+                                    m_requestState = RequestState::Idle;
+                                    m_requestChanged.notify_all();
+                                }
+                                else
+                                {
+                                    m_cancelledAudioBytes = static_cast<uint64_t>(cancelledAudioBytesValue);
+                                    m_cancellationComplete = true;
+                                    CompleteCancellationIfAudioBoundaryReached();
+                                }
+                            }
+                        }
+                        else if (eventStr == L"completed")
+                        {
+                            CoreLog(L"[SpeechWorker] Ignoring legacy completed event for speak_id %llu.", eventSpeakId);
+                        }
+                        else if (eventStr == L"log")
+                        {
+                            const bool fatal = !json.HasKey(L"severity") ||
+                                json.GetNamedValue(L"severity").ValueType() != winrt::Windows::Data::Json::JsonValueType::String ||
+                                json.GetNamedString(L"severity") == L"error" ||
+                                json.GetNamedString(L"severity") == L"fatal";
+                            if (fatal)
+                            {
+                                if (m_requestState == RequestState::Cancelling)
+                                {
+                                    m_cancellationFailed = true;
+                                }
+                                m_requestState = RequestState::Idle;
+                                m_requestChanged.notify_all();
                             }
                         }
                     }
                 }
             }
 
-            m_pEngine->OnSpeechEvent(json);
+            if (forwardToSapi)
+            {
+                m_pEngine->OnSpeechEvent(json);
+            }
         }
         catch (const winrt::hresult_error& e)
         {

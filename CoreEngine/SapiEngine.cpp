@@ -15,7 +15,7 @@ CSapiEngine::~CSapiEngine()
             std::lock_guard<std::mutex> lock(m_siteMutex);
             m_cpSite = nullptr;
         }
-        m_pWorker->WaitUntilFinished();
+        m_pWorker->WaitUntilFinished(nullptr);
     }
     m_pWorker.reset();
     
@@ -88,7 +88,7 @@ IFACEMETHODIMP CSapiEngine::GetOutputFormat(const GUID* pTargetFmtId,
     return S_OK;
 }
 
-IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
+IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
                                   REFGUID rguidFormatId,
                                   const WAVEFORMATEX* pWaveFormatEx,
                                   const SPVTEXTFRAG* pTextFragList,
@@ -159,12 +159,7 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD dwSpeakFlags,
         return hr;
     }
 
-    if ((dwSpeakFlags & SPF_ASYNC) == 0)
-    {
-        m_pWorker->WaitUntilFinished();
-    }
-
-    return S_OK;
+    return m_pWorker->WaitUntilFinished(pOutputSite);
 }
 catch (const std::exception& e) { CoreLog(L"[CoreEngine] Speak exception: %hs", e.what()); return winrt::to_hresult(); }
 catch (...) { CoreLog(L"[CoreEngine] Speak unknown exception."); return winrt::to_hresult(); }

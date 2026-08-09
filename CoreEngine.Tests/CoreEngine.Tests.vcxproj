@@ -67,9 +67,6 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
     </Link>
-    <PostBuildEvent>
-      <Command>xcopy /Y /D "$(SolutionDir)bin\MockProvider\$(Platform)\$(Configuration)\MockProvider.dll" "$(OutDir)"</Command>
-    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <ClCompile>
@@ -136,6 +133,12 @@
 
   <ItemGroup>
     <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MockProvider\MockProvider.csproj">
+      <Project>{2578A7FD-2984-45D1-83FE-B3745871D685}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

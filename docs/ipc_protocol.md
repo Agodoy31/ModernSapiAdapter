@@ -11,7 +11,7 @@ This specification details the pipe path security model, control message schemas
 | Requirement | Value |
 | :--- | :--- |
 | **Target Platform** | Windows 11 (x64, ARM64) |
-| **Control Pipe Format** | Bi-directional, newline-delimited UTF-8 JSON (`PIPE_READMODE_MESSAGE`) |
+| **Control Pipe Format** | Bi-directional, newline-delimited UTF-8 JSON (`PIPE_READMODE_BYTE`) |
 | **Audio Pipe Format** | Inbound, raw 16-bit Mono PCM streaming (`PIPE_READMODE_BYTE`) |
 | **Security Isolation** | Dynamic Windows User SID path injection |
 | **Default Audio Format** | 24,000 Hz, 16-bit Mono PCM |
@@ -173,7 +173,13 @@ Allows direct SSML synthesis requests from modern clients, bypassing legacy SAPI
 
 ### `cancel` Command
 
-Instructs the provider to immediately halt active speech synthesis for a specific request ID and purge queued audio.
+Instructs the provider to halt active synthesis for a specific request ID. The
+provider confirms its completed cleanup with `synthesis_cancelled` before it
+accepts a replacement request.
+
+A request remains cancellable until its final PCM byte has been committed to
+the audio pipe. This includes the interval after the provider has sent
+`synthesis_complete` but while its audio-output writer is still draining.
 
 #### Request (Proxy -> Provider)
 ```json
@@ -255,18 +261,86 @@ Fired when audio synthesis reaches a requested bookmark fragment.
 
 ---
 
-### `completed` Event
+### `synthesis_complete` Event
 
-Fired by the provider when all audio fragments for a speech request have been written to the Audio Pipe.
+The required completion declaration for a `sapi_speak` request. It means:
+
+> Synthesis for `speak_id` is complete. The complete raw PCM stream produced for
+> that request contains exactly `total_audio_bytes` bytes.
 
 ```json
 {
-  "event": "completed",
-  "speak_id": 1
+  "event": "synthesis_complete",
+  "speak_id": 1,
+  "total_audio_bytes": 62400
 }
 ```
 
-Signals `CoreEngine` worker threads that speech synthesis for `speak_id` is finished.
+#### Provider requirements
+
+- Send exactly one `synthesis_complete` event for a successfully completed request.
+- Preserve the `speak_id` from the corresponding `sapi_speak` command.
+- `total_audio_bytes` is a non-negative integer equal to the sum of all raw PCM
+  buffers produced for this request, in the `audio_format` returned by `info`.
+  It includes silence and must be a multiple of the format's block alignment
+  (`channels * bits_per_sample / 8`).
+- Count a buffer when it is accepted by the provider's final audio-output queue.
+  A provider may send `synthesis_complete` before a background named-pipe writer
+  has drained that queue; it must not add latency by waiting for the drain.
+- Continue to accept `cancel` for the request until that writer has committed
+  the final declared byte. If cancellation arrives in that interval, stop the
+  writer and send `synthesis_cancelled`; the cancellation event supersedes
+  normal completion for CoreEngine.
+- Send all word-boundary and bookmark events for the request before this event on
+  the Control Pipe. Do not send normal speech events after it for the same
+  `speak_id`.
+- Do not send the legacy `completed` event. Cancellation uses
+  `synthesis_cancelled`; failures use the `log` event.
+
+#### CoreEngine requirements
+
+`synthesis_complete` declares the final byte boundary; it does not mean that all
+audio has arrived at CoreEngine yet. CoreEngine continues forwarding audio to SAPI
+immediately and considers the request finished only after it has successfully
+passed exactly `total_audio_bytes` to `ISpTTSEngineSite::Write`. A different byte
+count is a protocol error.
+
+---
+
+### `synthesis_cancelled` Event
+
+The required terminal event after CoreEngine sends `cancel` for an active
+`speak_id`. It confirms that the provider has stopped synthesis, discarded
+uncommitted audio for that request, and can accept another `sapi_speak`.
+
+```json
+{
+  "event": "synthesis_cancelled",
+  "speak_id": 1,
+  "audio_bytes_written": 18432
+}
+```
+
+#### Provider requirements
+
+- Send exactly one `synthesis_cancelled` event for a successfully handled
+  `cancel` command.
+- Preserve the `speak_id` from the cancelled request.
+- `audio_bytes_written` is a non-negative integer equal to the number of raw
+  PCM bytes from that request that have been committed to the audio named pipe.
+  It is not the number of bytes merely accepted into an internal queue.
+- Before sending the event, discard any uncommitted audio and wait for any
+  in-flight audio-pipe write to finish. After the event, write no more PCM or
+  normal speech events for that `speak_id`.
+- After sending the event, the provider is ready to accept a replacement
+  `sapi_speak` command.
+
+#### CoreEngine requirements
+
+CoreEngine does not forward cancelled PCM to SAPI. It drains bytes from the
+audio pipe until it has consumed exactly `audio_bytes_written` bytes for the
+cancelled request, then may submit the replacement request. A different byte
+count is a protocol error.
 
 ---
 

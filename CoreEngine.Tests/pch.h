@@ -29,5 +29,6 @@
 #include <memory>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 
 #include "gtest/gtest.h"
