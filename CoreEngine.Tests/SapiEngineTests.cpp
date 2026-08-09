@@ -505,6 +505,7 @@ TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak) {
     EXPECT_EQ(mockSite->totalBytesWritten.load(), 9600u);
 }
 
+#if defined(_DEBUG)
 TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorker) {
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     auto engine = winrt::make_self<CSapiEngine>();
@@ -521,6 +522,13 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
     SPVTEXTFRAG firstFragment = {};
     firstFragment.pTextStart = firstText;
     firstFragment.ulTextLen = static_cast<ULONG>(wcslen(firstText));
+
+    wchar_t faultedBookmark[] = L"faulted bookmark";
+    SPVTEXTFRAG bookmarkFragment = {};
+    bookmarkFragment.State.eAction = SPVA_Bookmark;
+    bookmarkFragment.pTextStart = faultedBookmark;
+    bookmarkFragment.ulTextLen = static_cast<ULONG>(wcslen(faultedBookmark));
+    firstFragment.pNext = &bookmarkFragment;
 
     mockSite->rejectNextWrite = true;
     engine->FailNextCancellationControlSendForTest();
@@ -559,9 +567,20 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
     EXPECT_LT(std::chrono::steady_clock::now() - firstSpeakStart, std::chrono::seconds(1));
 
     // The provider continues producing old PCM because the injected cancel control write failed.
-    // Those bytes must be drained but never reach the SAPI site.
+    // Discard events accepted before the rejected write; only late faulted-session output matters below.
+    {
+        std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
+        mockSite->receivedEvents.clear();
+    }
+
+    // Those bytes and all subsequent control events must be drained but never reach the SAPI site.
     Sleep(250);
     EXPECT_EQ(mockSite->BytesAcceptedAfterRejectedWrite(), 0u);
+    {
+        std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
+        EXPECT_TRUE(mockSite->receivedEvents.empty())
+            << "Faulted provider output reached the SAPI event sink.";
+    }
 
     const ULONG writesBeforeNextSpeak = mockSite->writeCallCount.load();
     const ULONG bytesBeforeNextSpeak = mockSite->totalBytesWritten.load();
@@ -576,3 +595,4 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
     EXPECT_EQ(mockSite->writeCallCount.load(), writesBeforeNextSpeak);
     EXPECT_EQ(mockSite->totalBytesWritten.load(), bytesBeforeNextSpeak);
 }
+#endif
