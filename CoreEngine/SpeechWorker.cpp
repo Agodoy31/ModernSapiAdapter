@@ -226,8 +226,10 @@ void SpeechWorker::AudioThreadProc()
                 {
                     CoreLog(L"[SpeechWorker] SAPI rejected an audio write; cancelling active synthesis.");
                     cancellationToSend = m_activeSpeakId;
-                    m_requestState = RequestState::Idle;
-                    m_requestChanged.notify_all();
+                    m_cancelledAudioBytes = 0;
+                    m_cancellationComplete = false;
+                    m_cancellationFailed = false;
+                    m_requestState = RequestState::Cancelling;
                 }
                 else
                 {

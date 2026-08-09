@@ -437,3 +437,52 @@ TEST_F(SapiEngineTests, OutputSiteAbortCancelsTheActiveRequest) {
         [](const SPEVENT& event) { return event.eEventId == SPEI_SENTENCE_BOUNDARY; });
     EXPECT_FALSE(forwardedLateSentenceBoundary);
 }
+
+TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak) {
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockToken = winrt::make_self<MockSpObjectToken>();
+
+    ASSERT_EQ(engine->SetObjectToken(mockToken.get()), S_OK);
+
+    GUID formatId = {};
+    WAVEFORMATEX* pWaveFormat = nullptr;
+    ASSERT_EQ(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat), S_OK);
+    ASSERT_NE(pWaveFormat, nullptr);
+
+    wchar_t firstText[] = L"[delay-cancelled-event] rejected write remains pending";
+    SPVTEXTFRAG firstFragment = {};
+    firstFragment.pTextStart = firstText;
+    firstFragment.ulTextLen = static_cast<ULONG>(wcslen(firstText));
+
+    mockSite->rejectNextWrite = true;
+    HRESULT firstSpeakResult = E_FAIL;
+    std::atomic_bool firstSpeakReturned = false;
+    std::thread firstSpeakThread([&] {
+        firstSpeakResult = engine->Speak(0, formatId, pWaveFormat, &firstFragment, mockSite.get());
+        firstSpeakReturned = true;
+    });
+
+    for (int attempt = 0; attempt < 50 && mockSite->writeCallCount.load() == 0; ++attempt)
+    {
+        Sleep(10);
+    }
+    ASSERT_EQ(mockSite->writeCallCount.load(), 1u);
+
+    Sleep(10);
+    EXPECT_FALSE(firstSpeakReturned.load());
+
+    firstSpeakThread.join();
+    EXPECT_EQ(firstSpeakResult, S_OK);
+    EXPECT_EQ(mockSite->totalBytesWritten.load(), 0u);
+
+    wchar_t secondText[] = L"fresh";
+    SPVTEXTFRAG secondFragment = {};
+    secondFragment.pTextStart = secondText;
+    secondFragment.ulTextLen = static_cast<ULONG>(wcslen(secondText));
+
+    EXPECT_EQ(engine->Speak(0, formatId, pWaveFormat, &secondFragment, mockSite.get()), S_OK);
+    CoTaskMemFree(pWaveFormat);
+
+    EXPECT_EQ(mockSite->totalBytesWritten.load(), 9600u);
+}

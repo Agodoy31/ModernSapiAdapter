@@ -60,6 +60,7 @@ public class SynthesisEngine
     public async Task HandleSpeakAsync(JsonElement fragments, ulong speakId, CancellationToken cancellationToken)
     {
         long audioBytesWritten = 0;
+        bool delayCancelledEvent = false;
         try
         {
             int totalAudioMs = 0;
@@ -73,6 +74,7 @@ public class SynthesisEngine
                 if (fragment.TryGetProperty("text", out var textProp))
                 {
                     string text = textProp.GetString() ?? "";
+                    delayCancelledEvent |= text.StartsWith("[delay-cancelled-event]", StringComparison.Ordinal);
                     string[] words = text.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
                     uint charOffset = fragment.TryGetProperty("source_offset", out var sourceOffsetProp)
                         ? sourceOffsetProp.GetUInt32()
@@ -141,6 +143,11 @@ public class SynthesisEngine
         }
         catch (OperationCanceledException)
         {
+            if (delayCancelledEvent)
+            {
+                await Task.Delay(100, CancellationToken.None);
+            }
+
             // Providers can have event callbacks already queued when cancellation arrives.
             // The CoreEngine regression test verifies these cannot reach SAPI after abort.
             var lateSentenceBoundary = new
