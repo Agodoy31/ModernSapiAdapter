@@ -40,6 +40,7 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
     std::atomic<ULONG> bytesAcceptedAfterRejectedWrite = 0;
     std::atomic_bool rejectNextWrite = false;
     std::atomic<DWORD> actions = SPVES_CONTINUE;
+    std::function<DWORD()> getActionsCallback;
     std::mutex eventsMutex;
     std::vector<SPEVENT> receivedEvents;
 
@@ -54,7 +55,9 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
     }
     IFACEMETHODIMP GetEventInterest(ULONGLONG*) noexcept override { return S_OK; }
 
-    IFACEMETHODIMP_(DWORD) GetActions() noexcept override { return actions.load(); }
+    IFACEMETHODIMP_(DWORD) GetActions() noexcept override {
+        return getActionsCallback ? getActionsCallback() : actions.load();
+    }
     IFACEMETHODIMP Write(const void*, ULONG cb, ULONG* pcbWritten) noexcept override {
         writeCallCount++;
         if (rejectNextWrite.exchange(false)) {

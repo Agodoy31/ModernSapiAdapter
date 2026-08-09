@@ -8,6 +8,7 @@ CSapiEngine::CSapiEngine()
 
 CSapiEngine::~CSapiEngine()
 {
+    std::lock_guard<std::mutex> speakLock(m_speakMutex);
     {
         std::lock_guard<std::mutex> lock(m_siteMutex);
         m_cpSite = nullptr;
@@ -49,6 +50,7 @@ IFACEMETHODIMP CSapiEngine::SetObjectToken(ISpObjectToken* pToken) noexcept try
 {
     CoreLog(L"[CoreEngine] SetObjectToken called.");
     if (!pToken) return E_POINTER;
+    std::lock_guard<std::mutex> speakLock(m_speakMutex);
     m_cpToken.copy_from(pToken);
     return LoadProviderFromToken(pToken);
 }
@@ -95,19 +97,30 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
     CoreLog(L"[CoreEngine] Speak called.");
     if (!pOutputSite || !pTextFragList) return E_INVALIDARG;
 
+    std::lock_guard<std::mutex> speakLock(m_speakMutex);
+
     {
         std::lock_guard<std::mutex> lock(m_siteMutex);
         m_cpSite.copy_from(pOutputSite);
     }
 
-    std::unique_lock<std::mutex> sessionLock(m_sessionMutex);
-    if (!m_pClient || !m_pWorker || m_pWorker->IsFaulted())
+    SpeechWorker* worker = nullptr;
+    PipeClient* client = nullptr;
+    std::wstring voiceId;
     {
-        RetireFaultedSessionLocked();
-        if (FAILED(CreateProviderSessionLocked()))
+        std::lock_guard<std::mutex> sessionLock(m_sessionMutex);
+        if (!m_pClient || !m_pWorker || m_pWorker->IsFaulted())
         {
-            return E_FAIL;
+            RetireFaultedSessionLocked();
+            if (FAILED(CreateProviderSessionLocked()))
+            {
+                return E_FAIL;
+            }
         }
+
+        worker = m_pWorker.get();
+        client = m_pClient.get();
+        voiceId = m_voiceId;
     }
 
     using namespace winrt::Windows::Data::Json;
@@ -115,9 +128,9 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
     JsonObject speakReq;
     speakReq.SetNamedValue(L"command", JsonValue::CreateStringValue(L"sapi_speak"));
     speakReq.SetNamedValue(L"speak_id", JsonValue::CreateNumberValue(static_cast<double>(speakId)));
-    if (!m_voiceId.empty())
+    if (!voiceId.empty())
     {
-        speakReq.SetNamedValue(L"voice_id", JsonValue::CreateStringValue(m_voiceId));
+        speakReq.SetNamedValue(L"voice_id", JsonValue::CreateStringValue(voiceId));
     }
 
     JsonArray fragments;
@@ -157,26 +170,28 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
 
     speakReq.SetNamedValue(L"fragments", fragments);
 
-    if (!m_pWorker->Start(pOutputSite, speakId))
+    if (!worker->Start(pOutputSite, speakId))
     {
         return E_FAIL;
     }
 
-    HRESULT hr = m_pClient->SendControlMessage(speakReq);
+    HRESULT hr = client->SendControlMessage(speakReq);
     if (FAILED(hr))
     {
-        m_pWorker->Stop();
+        worker->Stop();
         return hr;
     }
 
-    const HRESULT waitHr = m_pWorker->WaitUntilFinished(pOutputSite);
-    if (m_pWorker->IsFaulted())
     {
-        RetireFaultedSessionLocked();
-        return E_FAIL;
+        const HRESULT waitHr = worker->WaitUntilFinished(pOutputSite);
+        std::lock_guard<std::mutex> sessionLock(m_sessionMutex);
+        if (m_pWorker.get() == worker && worker->IsFaulted())
+        {
+            RetireFaultedSessionLocked();
+            return E_FAIL;
+        }
+        return waitHr;
     }
-
-    return waitHr;
 }
 catch (const std::exception& e) { CoreLog(L"[CoreEngine] Speak exception: %hs", e.what()); return winrt::to_hresult(); }
 catch (...) { CoreLog(L"[CoreEngine] Speak unknown exception."); return winrt::to_hresult(); }
@@ -363,6 +378,9 @@ HRESULT CSapiEngine::CreateProviderSessionLocked()
 
         JsonObject infoResponse = nullptr;
         if (FAILED(candidateClient->ReadControlMessage(infoResponse)) || !infoResponse ||
+            !infoResponse.HasKey(L"response") ||
+            infoResponse.GetNamedValue(L"response").ValueType() != JsonValueType::String ||
+            infoResponse.GetNamedString(L"response") != L"info" ||
             !infoResponse.HasKey(L"audio_format") ||
             infoResponse.GetNamedValue(L"audio_format").ValueType() != JsonValueType::Object)
         {

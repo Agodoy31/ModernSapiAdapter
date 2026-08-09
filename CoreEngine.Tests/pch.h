@@ -30,5 +30,6 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 
 #include "gtest/gtest.h"

@@ -68,6 +68,13 @@ public:
      */
     bool IsFaulted() const;
 
+#if defined(_DEBUG)
+    void PauseNextEventForwardForTest();
+    bool WaitForEventForwardPauseForTest(DWORD timeoutMs);
+    void ReleaseEventForwardForTest();
+    bool WaitForFaultForTest(DWORD timeoutMs);
+#endif
+
 private:
     /**
      * @brief Thread procedure for reading PCM audio bytes and dispatching to engine.
@@ -87,7 +94,7 @@ private:
     /**
      * @brief Completes cancellation only after all provider-committed old PCM has been discarded.
      */
-    void CompleteCancellationIfAudioBoundaryReached();
+    bool CompleteCancellationIfAudioBoundaryReached();
 
     /**
      * @brief Sends a cancellation command for a specific request without changing worker state.
@@ -98,6 +105,8 @@ private:
      * @brief Records a terminal cancellation transport failure without touching pipe or thread ownership.
      */
     void EnterFaultedState();
+
+    void ForwardEventToSapi(const winrt::Windows::Data::Json::JsonObject& json);
 
     enum class RequestState
     {
@@ -114,6 +123,8 @@ private:
     std::thread m_controlThread;             /**< Control event worker thread. */
     std::atomic_bool m_exit;                 /**< Flag indicating worker shutdown. */
     mutable std::mutex m_requestMutex;       /**< Serializes request lifecycle state across audio and control threads. */
+    std::recursive_mutex m_eventForwardMutex;/**< Serializes event callbacks with Faulted publication; recursive for COM re-entrancy. */
+    std::atomic_bool m_faultVisible{false};  /**< Prevents new SAPI event callbacks once a fault is visible. */
     std::condition_variable m_requestChanged;/**< Wakes synchronous Speak and purge callers at terminal boundaries. */
     RequestState m_requestState{RequestState::Idle}; /**< Active request lifecycle state. */
     uint64_t m_activeSpeakId{0};             /**< Identifier for the active request. */
@@ -124,4 +135,10 @@ private:
     uint64_t m_cancelledAudioBytes{0};       /**< Raw PCM bytes committed before cancellation. */
     uint64_t m_rawAudioBytesRead{0};         /**< Raw bytes consumed from the audio pipe for the active request. */
     uint64_t m_deliveredAudioBytes{0};       /**< Bytes successfully written to ISpTTSEngineSite. */
+#if defined(_DEBUG)
+    std::mutex m_eventForwardTestMutex;
+    std::condition_variable m_eventForwardTestChanged;
+    bool m_pauseNextEventForwardForTest{false};
+    bool m_eventForwardPausedForTest{false};
+#endif
 };

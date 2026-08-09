@@ -19,6 +19,7 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_OnSpeechEventPreservesLongAudioOffsets_Test;
     friend class SapiEngineTests_RejectedAudioWriteWithFailedCancellationQuarantinesWorker_Test;
     friend class SapiEngineTests_CreateProviderSessionDoesNotPublishAnInvalidInfoResponse_Test;
+    friend class SapiEngineTests_FaultedSessionDoesNotForwardAnEventPausedBeforeItsSapiCallback_Test;
     friend class SapiEngineTests_OnSpeechEventAlignsOffsetsToPcmFrames_Test;
 public:
     /**
@@ -100,6 +101,7 @@ private:
     std::mutex m_siteMutex;
 
     std::mutex m_sessionMutex;
+    std::mutex m_speakMutex;
     std::unique_ptr<PipeClient> m_pClient;
     std::unique_ptr<SpeechWorker> m_pWorker;
     std::wstring m_providerExecutablePath;

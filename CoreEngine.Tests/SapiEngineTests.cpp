@@ -485,7 +485,7 @@ TEST_F(SapiEngineTests, CreateProviderSessionDoesNotPublishAnInvalidInfoResponse
         std::string request;
         infoResponseSent = server.ReadControl(request) &&
             request == "{\"command\":\"info\"}\n" &&
-            server.WriteControl("{\"audio_format\":{\"sample_rate\":24000,\"bits_per_sample\":16}}\n");
+            server.WriteControl("{\"response\":\"not_info\",\"audio_format\":{\"sample_rate\":24000,\"bits_per_sample\":16,\"channels\":1}}\n");
     });
 
     EXPECT_EQ(engine->CreateProviderSessionLocked(), E_FAIL);
@@ -493,6 +493,33 @@ TEST_F(SapiEngineTests, CreateProviderSessionDoesNotPublishAnInvalidInfoResponse
     EXPECT_TRUE(infoResponseSent.load());
     EXPECT_EQ(engine->m_pClient, nullptr);
     EXPECT_EQ(engine->m_pWorker, nullptr);
+}
+
+TEST_F(SapiEngineTests, InvalidCancellationBoundaryFaultsTheWorker) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+
+    auto engine = winrt::make_self<CSapiEngine>();
+    SpeechWorker worker(engine.get(), &client);
+    ASSERT_TRUE(worker.Start(nullptr, 7));
+
+    HRESULT cancellationResult = S_OK;
+    std::thread cancellationThread([&] {
+        cancellationResult = worker.CancelAndDrain();
+    });
+    ThreadJoinGuard cancellationJoin(cancellationThread);
+
+    std::string cancellationRequest;
+    ASSERT_TRUE(server.ReadControl(cancellationRequest));
+    ASSERT_NE(cancellationRequest.find("\"command\":\"cancel\""), std::string::npos);
+    ASSERT_TRUE(server.WriteControl("{\"event\":\"synthesis_cancelled\",\"speak_id\":7}\n"));
+
+    cancellationThread.join();
+    EXPECT_EQ(cancellationResult, E_FAIL);
+    EXPECT_TRUE(worker.IsFaulted());
 }
 
 TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak) {
@@ -546,6 +573,57 @@ TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak) {
 }
 
 #if defined(_DEBUG)
+TEST_F(SapiEngineTests, FaultedSessionDoesNotForwardAnEventPausedBeforeItsSapiCallback) {
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockToken = winrt::make_self<MockSpObjectToken>();
+    ASSERT_EQ(engine->SetObjectToken(mockToken.get()), S_OK);
+
+    GUID formatId = {};
+    WAVEFORMATEX* pWaveFormat = nullptr;
+    ASSERT_EQ(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat), S_OK);
+    ASSERT_NE(pWaveFormat, nullptr);
+
+    SpeechWorker* worker = engine->m_pWorker.get();
+    ASSERT_NE(worker, nullptr);
+    worker->PauseNextEventForwardForTest();
+
+    wchar_t text[] = L"event is paused before its SAPI callback";
+    SPVTEXTFRAG fragment = {};
+    fragment.pTextStart = text;
+    fragment.ulTextLen = static_cast<ULONG>(wcslen(text));
+
+    mockSite->rejectNextWrite = true;
+    engine->FailNextCancellationControlSendForTest();
+    HRESULT speakResult = S_OK;
+    std::thread speakThread([&] {
+        speakResult = engine->Speak(0, formatId, pWaveFormat, &fragment, mockSite.get());
+    });
+    ThreadJoinGuard speakJoin(speakThread);
+
+    const bool pausedBeforeSapiCallback = worker->WaitForEventForwardPauseForTest(1000);
+    std::unique_lock<std::mutex> sessionLock(engine->m_sessionMutex);
+    for (int attempt = 0; attempt < 100 && mockSite->writeCallCount.load() == 0; ++attempt)
+    {
+        Sleep(10);
+    }
+    const ULONG writeCallCount = mockSite->writeCallCount.load();
+    const bool faulted = worker->WaitForFaultForTest(1000);
+
+    worker->ReleaseEventForwardForTest();
+    sessionLock.unlock();
+    speakThread.join();
+    CoTaskMemFree(pWaveFormat);
+
+    ASSERT_TRUE(pausedBeforeSapiCallback);
+    ASSERT_EQ(writeCallCount, 1u);
+    ASSERT_TRUE(faulted);
+    EXPECT_EQ(speakResult, E_FAIL);
+    std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
+    EXPECT_TRUE(mockSite->receivedEvents.empty())
+        << "An event authorized before fault reached SAPI after fault became visible.";
+}
+
 TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorker) {
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     auto engine = winrt::make_self<CSapiEngine>();
@@ -626,3 +704,62 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
     EXPECT_EQ(mockSite->totalBytesWritten.load(), bytesBeforeNextSpeak + 9600u);
 }
 #endif
+
+TEST_F(SapiEngineTests, SpeakDoesNotHoldTheSessionLockAcrossReentrantGetActions) {
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockToken = winrt::make_self<MockSpObjectToken>();
+    ASSERT_EQ(engine->SetObjectToken(mockToken.get()), S_OK);
+
+    GUID formatId = {};
+    WAVEFORMATEX* pWaveFormat = nullptr;
+    ASSERT_EQ(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat), S_OK);
+    ASSERT_NE(pWaveFormat, nullptr);
+
+    std::atomic_bool reentrantGetActionsRan{false};
+    std::atomic_bool reentrantGetOutputCompleted{false};
+    std::atomic_bool reentrantGetOutputCompletedBeforeReturn{false};
+    HRESULT reentrantGetOutputResult = E_FAIL;
+    std::thread reentrantGetOutputThread;
+    mockSite->getActionsCallback = [&] {
+        bool expected = false;
+        if (reentrantGetActionsRan.compare_exchange_strong(expected, true))
+        {
+            reentrantGetOutputThread = std::thread([&] {
+                GUID nestedFormatId = {};
+                WAVEFORMATEX* nestedFormat = nullptr;
+                reentrantGetOutputResult = engine->GetOutputFormat(nullptr, nullptr, &nestedFormatId, &nestedFormat);
+                CoTaskMemFree(nestedFormat);
+                reentrantGetOutputCompleted = true;
+            });
+
+            for (int attempt = 0; attempt < 40 && !reentrantGetOutputCompleted.load(); ++attempt)
+            {
+                Sleep(5);
+            }
+            reentrantGetOutputCompletedBeforeReturn = reentrantGetOutputCompleted.load();
+        }
+        return SPVES_CONTINUE;
+    };
+
+    wchar_t text[] = L"reentrant get actions";
+    SPVTEXTFRAG fragment = {};
+    fragment.pTextStart = text;
+    fragment.ulTextLen = static_cast<ULONG>(wcslen(text));
+
+    const auto speakStart = std::chrono::steady_clock::now();
+    const HRESULT speakResult = engine->Speak(0, formatId, pWaveFormat, &fragment, mockSite.get());
+    CoTaskMemFree(pWaveFormat);
+    if (reentrantGetOutputThread.joinable())
+    {
+        reentrantGetOutputThread.join();
+    }
+
+    EXPECT_TRUE(reentrantGetActionsRan.load());
+    EXPECT_TRUE(reentrantGetOutputCompletedBeforeReturn.load())
+        << "GetOutputFormat was blocked by Speak's session lock during GetActions.";
+    EXPECT_TRUE(reentrantGetOutputCompleted.load());
+    EXPECT_EQ(reentrantGetOutputResult, S_OK);
+    EXPECT_EQ(speakResult, S_OK);
+    EXPECT_LT(std::chrono::steady_clock::now() - speakStart, std::chrono::seconds(2));
+}

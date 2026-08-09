@@ -71,6 +71,7 @@ class Program
                             {
                                 var response = new
                                 {
+                                    response = "info",
                                     audio_format = new
                                     {
                                         sample_rate = 24000,
