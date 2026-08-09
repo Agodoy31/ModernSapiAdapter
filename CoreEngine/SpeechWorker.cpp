@@ -2,7 +2,7 @@
 #include "SpeechWorker.h"
 #include "SapiEngine.h"
 
-SpeechWorker::SpeechWorker(CSapiEngine* pEngine, std::shared_ptr<PipeClient> pClient)
+SpeechWorker::SpeechWorker(CSapiEngine* pEngine, PipeClient* pClient)
     : m_pEngine(pEngine), m_pClient(pClient), m_exit(false)
 {
     m_audioThread = std::thread(&SpeechWorker::AudioThreadProc, this);
@@ -228,7 +228,7 @@ void SpeechWorker::CompleteCancellationIfAudioBoundaryReached()
         CoreLog(L"[SpeechWorker] Provider declared %llu cancellation bytes after %llu bytes were already read.",
             m_cancelledAudioBytes, m_rawAudioBytesRead);
         m_cancellationFailed = true;
-        m_requestState = RequestState::Idle;
+        m_requestState = RequestState::Faulted;
         m_requestChanged.notify_all();
     }
 }
@@ -376,7 +376,7 @@ void SpeechWorker::ControlThreadProc()
                             {
                                 CoreLog(L"[SpeechWorker] synthesis_cancelled for speak_id %llu omitted audio_bytes_written.", eventSpeakId);
                                 m_cancellationFailed = true;
-                                m_requestState = RequestState::Idle;
+                                m_requestState = RequestState::Faulted;
                                 m_requestChanged.notify_all();
                             }
                             else
@@ -389,7 +389,7 @@ void SpeechWorker::ControlThreadProc()
                                 {
                                     CoreLog(L"[SpeechWorker] synthesis_cancelled for speak_id %llu has an invalid or duplicate audio_bytes_written value.", eventSpeakId);
                                     m_cancellationFailed = true;
-                                    m_requestState = RequestState::Idle;
+                                    m_requestState = RequestState::Faulted;
                                     m_requestChanged.notify_all();
                                 }
                                 else
@@ -415,9 +415,14 @@ void SpeechWorker::ControlThreadProc()
                                 if (m_requestState == RequestState::Cancelling)
                                 {
                                     m_cancellationFailed = true;
+                                    m_requestState = RequestState::Faulted;
+                                    m_requestChanged.notify_all();
                                 }
-                                m_requestState = RequestState::Idle;
-                                m_requestChanged.notify_all();
+                                else
+                                {
+                                    m_requestState = RequestState::Idle;
+                                    m_requestChanged.notify_all();
+                                }
                             }
                         }
                     }

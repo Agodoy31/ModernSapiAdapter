@@ -8,17 +8,14 @@ CSapiEngine::CSapiEngine()
 
 CSapiEngine::~CSapiEngine()
 {
-    if (m_pWorker)
     {
-        m_pWorker->Stop();
-        {
-            std::lock_guard<std::mutex> lock(m_siteMutex);
-            m_cpSite = nullptr;
-        }
-        m_pWorker->WaitUntilFinished(nullptr);
+        std::lock_guard<std::mutex> lock(m_siteMutex);
+        m_cpSite = nullptr;
     }
+
+    std::lock_guard<std::mutex> sessionLock(m_sessionMutex);
     m_pWorker.reset();
-    
+
     if (m_pClient)
     {
         try
@@ -71,7 +68,8 @@ IFACEMETHODIMP CSapiEngine::GetOutputFormat(const GUID* pTargetFmtId,
                                             WAVEFORMATEX** ppCoMemOutputWaveFormatEx) noexcept
 {
     CoreLog(L"[CoreEngine] GetOutputFormat called.");
-    if (!m_pClient)
+    std::lock_guard<std::mutex> sessionLock(m_sessionMutex);
+    if (!m_hasOutputFormat)
     {
         CoreLog(L"[CoreEngine] GetOutputFormat failed: Client not initialized.");
         return SPERR_UNINITIALIZED;
@@ -102,7 +100,15 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
         m_cpSite.copy_from(pOutputSite);
     }
 
-    if (!m_pClient) return E_FAIL;
+    std::unique_lock<std::mutex> sessionLock(m_sessionMutex);
+    if (!m_pClient || !m_pWorker || m_pWorker->IsFaulted())
+    {
+        RetireFaultedSessionLocked();
+        if (FAILED(CreateProviderSessionLocked()))
+        {
+            return E_FAIL;
+        }
+    }
 
     using namespace winrt::Windows::Data::Json;
     uint64_t speakId = ++m_speakIdCounter;
@@ -163,7 +169,14 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
         return hr;
     }
 
-    return m_pWorker->WaitUntilFinished(pOutputSite);
+    const HRESULT waitHr = m_pWorker->WaitUntilFinished(pOutputSite);
+    if (m_pWorker->IsFaulted())
+    {
+        RetireFaultedSessionLocked();
+        return E_FAIL;
+    }
+
+    return waitHr;
 }
 catch (const std::exception& e) { CoreLog(L"[CoreEngine] Speak exception: %hs", e.what()); return winrt::to_hresult(); }
 catch (...) { CoreLog(L"[CoreEngine] Speak unknown exception."); return winrt::to_hresult(); }
@@ -181,6 +194,7 @@ bool CSapiEngine::OnAudioData(const uint8_t* pAudioBytes, uint32_t byteCount)
 #if defined(_DEBUG)
 void CSapiEngine::FailNextCancellationControlSendForTest()
 {
+    std::lock_guard<std::mutex> sessionLock(m_sessionMutex);
     if (m_pClient)
     {
         m_pClient->FailNextCancellationMessageForTest();
@@ -306,46 +320,138 @@ HRESULT CSapiEngine::LoadProviderFromToken(ISpObjectToken* pToken)
     if (FAILED(hrPipe)) return hrPipe;
 
     wil::unique_cotaskmem_string pszVoice;
+    std::wstring voiceId;
     if (SUCCEEDED(pToken->GetStringValue(L"VoiceId", &pszVoice)))
     {
-        m_voiceId = pszVoice.get();
+        voiceId = pszVoice.get();
     }
 
-    std::wstring exePath(pszExe.get());
-    std::wstring pipeName(pszPipe.get());
-
-    m_pClient = std::make_shared<PipeClient>();
-    hr = m_pClient->Connect(pipeName, exePath);
-    if (FAILED(hr)) return hr;
-
-    using namespace winrt::Windows::Data::Json;
-    JsonObject infoReq;
-    infoReq.SetNamedValue(L"command", JsonValue::CreateStringValue(L"info"));
-    
-    if (SUCCEEDED(m_pClient->SendControlMessage(infoReq)))
+    std::lock_guard<std::mutex> sessionLock(m_sessionMutex);
+    if (m_pClient || m_pWorker)
     {
-        JsonObject infoRes = nullptr;
-        if (SUCCEEDED(m_pClient->ReadControlMessage(infoRes)))
-        {
-            std::wstring pName = infoRes.HasKey(L"provider_name") ? std::wstring(infoRes.GetNamedString(L"provider_name").c_str()) : L"Unknown";
-            std::wstring pVer = infoRes.HasKey(L"version") ? std::wstring(infoRes.GetNamedString(L"version").c_str()) : L"Unknown";
-            CoreLog(L"[CoreEngine] Connected to provider: %s v%s", pName.c_str(), pVer.c_str());
-
-            if (infoRes.HasKey(L"audio_format"))
-            {
-                auto fmtJson = infoRes.GetNamedObject(L"audio_format");
-                m_audioFormat.wFormatTag = WAVE_FORMAT_PCM;
-                m_audioFormat.nSamplesPerSec = static_cast<DWORD>(fmtJson.GetNamedNumber(L"sample_rate"));
-                m_audioFormat.wBitsPerSample = static_cast<WORD>(fmtJson.GetNamedNumber(L"bits_per_sample"));
-                m_audioFormat.nChannels = static_cast<WORD>(fmtJson.GetNamedNumber(L"channels"));
-                m_audioFormat.nBlockAlign = (m_audioFormat.nChannels * m_audioFormat.wBitsPerSample) / 8;
-                m_audioFormat.nAvgBytesPerSec = m_audioFormat.nSamplesPerSec * m_audioFormat.nBlockAlign;
-                m_audioFormat.cbSize = 0;
-            }
-        }
+        return E_UNEXPECTED;
     }
 
-    m_pWorker = std::make_unique<SpeechWorker>(this, m_pClient);
+    m_providerExecutablePath = pszExe.get();
+    m_providerPipeName = pszPipe.get();
+    m_voiceId = std::move(voiceId);
+    return CreateProviderSessionLocked();
+}
 
-    return S_OK;
+HRESULT CSapiEngine::CreateProviderSessionLocked()
+{
+    if (m_providerExecutablePath.empty() || m_providerPipeName.empty() || m_pClient || m_pWorker)
+    {
+        return E_FAIL;
+    }
+
+    try
+    {
+        auto candidateClient = std::make_unique<PipeClient>();
+        if (FAILED(candidateClient->Connect(m_providerPipeName, m_providerExecutablePath)))
+        {
+            return E_FAIL;
+        }
+
+        using namespace winrt::Windows::Data::Json;
+        JsonObject infoRequest;
+        infoRequest.SetNamedValue(L"command", JsonValue::CreateStringValue(L"info"));
+        if (FAILED(candidateClient->SendControlMessage(infoRequest)))
+        {
+            return E_FAIL;
+        }
+
+        JsonObject infoResponse = nullptr;
+        if (FAILED(candidateClient->ReadControlMessage(infoResponse)) || !infoResponse ||
+            !infoResponse.HasKey(L"audio_format") ||
+            infoResponse.GetNamedValue(L"audio_format").ValueType() != JsonValueType::Object)
+        {
+            return E_FAIL;
+        }
+
+        const JsonObject format = infoResponse.GetNamedObject(L"audio_format");
+        const auto isPositiveInteger = [&format](const wchar_t* name, uint64_t maximum, uint64_t& value) {
+            if (!format.HasKey(name) || format.GetNamedValue(name).ValueType() != JsonValueType::Number)
+            {
+                return false;
+            }
+
+            const double number = format.GetNamedNumber(name);
+            if (!std::isfinite(number) || number <= 0 || number > static_cast<double>(maximum) ||
+                number != static_cast<double>(static_cast<uint64_t>(number)))
+            {
+                return false;
+            }
+
+            value = static_cast<uint64_t>(number);
+            return true;
+        };
+
+        uint64_t sampleRate = 0;
+        uint64_t bitsPerSample = 0;
+        uint64_t channels = 0;
+        if (!isPositiveInteger(L"sample_rate", (std::numeric_limits<DWORD>::max)(), sampleRate) ||
+            !isPositiveInteger(L"bits_per_sample", (std::numeric_limits<WORD>::max)(), bitsPerSample) ||
+            !isPositiveInteger(L"channels", (std::numeric_limits<WORD>::max)(), channels))
+        {
+            return E_FAIL;
+        }
+
+        const uint64_t blockAlignment = (channels * bitsPerSample) / 8;
+        if (blockAlignment == 0 || blockAlignment > (std::numeric_limits<WORD>::max)() ||
+            channels * bitsPerSample != blockAlignment * 8 ||
+            sampleRate > (std::numeric_limits<DWORD>::max)() / blockAlignment)
+        {
+            return E_FAIL;
+        }
+
+        WAVEFORMATEX candidateFormat = {};
+        candidateFormat.wFormatTag = WAVE_FORMAT_PCM;
+        candidateFormat.nSamplesPerSec = static_cast<DWORD>(sampleRate);
+        candidateFormat.wBitsPerSample = static_cast<WORD>(bitsPerSample);
+        candidateFormat.nChannels = static_cast<WORD>(channels);
+        candidateFormat.nBlockAlign = static_cast<WORD>(blockAlignment);
+        candidateFormat.nAvgBytesPerSec = candidateFormat.nSamplesPerSec * candidateFormat.nBlockAlign;
+        candidateFormat.cbSize = 0;
+
+        if (m_hasOutputFormat &&
+            (candidateFormat.nSamplesPerSec != m_audioFormat.nSamplesPerSec ||
+             candidateFormat.wBitsPerSample != m_audioFormat.wBitsPerSample ||
+             candidateFormat.nChannels != m_audioFormat.nChannels ||
+             candidateFormat.nBlockAlign != m_audioFormat.nBlockAlign))
+        {
+            CoreLog(L"[CoreEngine] Provider reconnect returned a different PCM format.");
+            return E_FAIL;
+        }
+
+        auto candidateWorker = std::make_unique<SpeechWorker>(this, candidateClient.get());
+        m_pClient = std::move(candidateClient);
+        m_pWorker = std::move(candidateWorker);
+        if (!m_hasOutputFormat)
+        {
+            m_audioFormat = candidateFormat;
+            m_hasOutputFormat = true;
+        }
+        return S_OK;
+    }
+    catch (const winrt::hresult_error& error)
+    {
+        CoreLog(L"[CoreEngine] Provider session initialization failed: 0x%08x", error.code().value);
+    }
+    catch (const std::exception& error)
+    {
+        CoreLog(L"[CoreEngine] Provider session initialization failed: %hs", error.what());
+    }
+    catch (...)
+    {
+        CoreLog(L"[CoreEngine] Provider session initialization failed.");
+    }
+
+    return E_FAIL;
+}
+
+void CSapiEngine::RetireFaultedSessionLocked()
+{
+    m_pWorker.reset();
+    m_pClient.reset();
 }

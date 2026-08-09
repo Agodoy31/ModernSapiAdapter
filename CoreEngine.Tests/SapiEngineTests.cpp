@@ -3,7 +3,6 @@
 #include "../CoreEngine/PipeClient.h"
 #include "../CoreEngine/SapiEngine.h"
 #include <sddl.h>
-#include <fstream>
 
 namespace
 {
@@ -89,6 +88,22 @@ public:
         return WriteFile(m_controlPipe.get(), text.data(), static_cast<DWORD>(text.size()), &bytesWritten, nullptr) && bytesWritten == text.size();
     }
 
+    bool ReadControl(std::string& text)
+    {
+        if (m_connectThread.joinable()) m_connectThread.join();
+        if (m_connectError != ERROR_SUCCESS) return false;
+
+        char buffer[512] = {};
+        DWORD bytesRead = 0;
+        if (!ReadFile(m_controlPipe.get(), buffer, sizeof(buffer), &bytesRead, nullptr) || bytesRead == 0)
+        {
+            return false;
+        }
+
+        text.assign(buffer, bytesRead);
+        return true;
+    }
+
 private:
     void ConnectPipe(HANDLE pipe)
     {
@@ -126,51 +141,6 @@ private:
     std::thread& m_thread;
 };
 
-constexpr wchar_t faultEventLogEnvironmentVariable[] = L"MODERN_SAPI_ADAPTER_TEST_FAULT_EVENT_LOG";
-
-class ScopedFaultEventLog
-{
-public:
-    ScopedFaultEventLog()
-    {
-        std::error_code error;
-        const auto temporaryDirectory = std::filesystem::temp_directory_path(error);
-        if (error)
-        {
-            return;
-        }
-
-        m_path = temporaryDirectory / (L"ModernSapiAdapterFaultEvents_" + std::to_wstring(GetCurrentProcessId()) + L".log");
-        std::filesystem::remove(m_path, error);
-        m_isConfigured = SetEnvironmentVariableW(faultEventLogEnvironmentVariable, m_path.c_str()) != FALSE;
-    }
-
-    ~ScopedFaultEventLog()
-    {
-        SetEnvironmentVariableW(faultEventLogEnvironmentVariable, nullptr);
-        std::error_code error;
-        std::filesystem::remove(m_path, error);
-    }
-
-    bool IsConfigured() const noexcept { return m_isConfigured; }
-    const std::filesystem::path& Path() const noexcept { return m_path; }
-
-private:
-    std::filesystem::path m_path;
-    bool m_isConfigured{false};
-};
-
-std::vector<std::string> ReadFaultEventLog(const std::filesystem::path& path)
-{
-    std::ifstream input(path);
-    std::vector<std::string> records;
-    std::string record;
-    while (std::getline(input, record))
-    {
-        records.push_back(std::move(record));
-    }
-    return records;
-}
 }
 
 class SapiEngineTests : public ::testing::Test {
@@ -502,6 +472,29 @@ TEST_F(SapiEngineTests, OutputSiteAbortCancelsTheActiveRequest) {
     EXPECT_FALSE(forwardedLateSentenceBoundary);
 }
 
+TEST_F(SapiEngineTests, CreateProviderSessionDoesNotPublishAnInvalidInfoResponse) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    auto engine = winrt::make_self<CSapiEngine>();
+    engine->m_providerExecutablePath = L"ignored.exe";
+    engine->m_providerPipeName = server.PipeName();
+
+    std::atomic_bool infoResponseSent{false};
+    std::thread infoResponder([&server, &infoResponseSent] {
+        std::string request;
+        infoResponseSent = server.ReadControl(request) &&
+            request == "{\"command\":\"info\"}\n" &&
+            server.WriteControl("{\"audio_format\":{\"sample_rate\":24000,\"bits_per_sample\":16}}\n");
+    });
+
+    EXPECT_EQ(engine->CreateProviderSessionLocked(), E_FAIL);
+    infoResponder.join();
+    EXPECT_TRUE(infoResponseSent.load());
+    EXPECT_EQ(engine->m_pClient, nullptr);
+    EXPECT_EQ(engine->m_pWorker, nullptr);
+}
+
 TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak) {
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     auto engine = winrt::make_self<CSapiEngine>();
@@ -554,9 +547,6 @@ TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak) {
 
 #if defined(_DEBUG)
 TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorker) {
-    ScopedFaultEventLog faultEventLog;
-    ASSERT_TRUE(faultEventLog.IsConfigured());
-
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     auto engine = winrt::make_self<CSapiEngine>();
     auto mockToken = winrt::make_self<MockSpObjectToken>();
@@ -601,15 +591,6 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
     {
         Sleep(10);
     }
-    if (!firstSpeakReturned.load())
-    {
-        // Keep the one-second regression timeout self-cleaning when run against a broken worker.
-        engine->m_pWorker->Stop();
-        for (int attempt = 0; attempt < 100 && !firstSpeakReturned.load(); ++attempt)
-        {
-            Sleep(10);
-        }
-    }
     ASSERT_TRUE(firstSpeakReturned.load());
 
     firstSpeakThread.join();
@@ -623,28 +604,7 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
         mockSite->receivedEvents.clear();
     }
 
-    const size_t faultEventRecordCount = ReadFaultEventLog(faultEventLog.Path()).size();
-    bool lateFaultedWordBoundaryEmitted = false;
-    for (int attempt = 0; attempt < 100 && !lateFaultedWordBoundaryEmitted; ++attempt)
-    {
-        const auto records = ReadFaultEventLog(faultEventLog.Path());
-        for (size_t recordIndex = faultEventRecordCount; recordIndex < records.size(); ++recordIndex)
-        {
-            if (records[recordIndex] == "1:word_boundary")
-            {
-                lateFaultedWordBoundaryEmitted = true;
-                break;
-            }
-        }
-
-        if (!lateFaultedWordBoundaryEmitted)
-        {
-            Sleep(10);
-        }
-    }
-    ASSERT_TRUE(lateFaultedWordBoundaryEmitted);
-
-    // The provider wrote a late word-boundary event after Faulted; it and its PCM must never reach SAPI.
+    // A faulted provider must not deliver more PCM or events before the session is retired.
     EXPECT_EQ(mockSite->BytesAcceptedAfterRejectedWrite(), 0u);
     {
         std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
@@ -654,15 +614,15 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
 
     const ULONG writesBeforeNextSpeak = mockSite->writeCallCount.load();
     const ULONG bytesBeforeNextSpeak = mockSite->totalBytesWritten.load();
-    wchar_t secondText[] = L"must not be sent";
+    wchar_t secondText[] = L"fresh";
     SPVTEXTFRAG secondFragment = {};
     secondFragment.pTextStart = secondText;
     secondFragment.ulTextLen = static_cast<ULONG>(wcslen(secondText));
 
-    EXPECT_EQ(engine->Speak(0, formatId, pWaveFormat, &secondFragment, mockSite.get()), E_FAIL);
+    EXPECT_EQ(engine->Speak(0, formatId, pWaveFormat, &secondFragment, mockSite.get()), S_OK);
     CoTaskMemFree(pWaveFormat);
 
-    EXPECT_EQ(mockSite->writeCallCount.load(), writesBeforeNextSpeak);
-    EXPECT_EQ(mockSite->totalBytesWritten.load(), bytesBeforeNextSpeak);
+    EXPECT_GT(mockSite->writeCallCount.load(), writesBeforeNextSpeak);
+    EXPECT_EQ(mockSite->totalBytesWritten.load(), bytesBeforeNextSpeak + 9600u);
 }
 #endif

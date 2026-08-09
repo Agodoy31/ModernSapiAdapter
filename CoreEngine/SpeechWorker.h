@@ -25,9 +25,9 @@ public:
     /**
      * @brief Constructs a new SpeechWorker associated with a CSapiEngine and PipeClient.
      * @param pEngine Pointer to parent CSapiEngine instance.
-     * @param pClient Shared pointer to PipeClient IPC transport.
+     * @param pClient Raw PipeClient IPC transport owned by CSapiEngine.
      */
-    SpeechWorker(CSapiEngine* pEngine, std::shared_ptr<PipeClient> pClient);
+    SpeechWorker(CSapiEngine* pEngine, PipeClient* pClient);
 
     /**
      * @brief Destructs SpeechWorker, stopping and joining background worker threads.
@@ -108,7 +108,7 @@ private:
     };
 
     CSapiEngine* m_pEngine;                  /**< Pointer to parent SAPI engine. */
-    std::shared_ptr<PipeClient> m_pClient;   /**< Shared IPC PipeClient. */
+    PipeClient* m_pClient;                   /**< Engine-owned IPC PipeClient. */
 
     std::thread m_audioThread;               /**< Audio streaming worker thread. */
     std::thread m_controlThread;             /**< Control event worker thread. */

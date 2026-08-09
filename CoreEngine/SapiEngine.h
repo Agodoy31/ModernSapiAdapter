@@ -18,6 +18,7 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_OnSpeechEventMapsBookmarkStringEventToSite_Test;
     friend class SapiEngineTests_OnSpeechEventPreservesLongAudioOffsets_Test;
     friend class SapiEngineTests_RejectedAudioWriteWithFailedCancellationQuarantinesWorker_Test;
+    friend class SapiEngineTests_CreateProviderSessionDoesNotPublishAnInvalidInfoResponse_Test;
     friend class SapiEngineTests_OnSpeechEventAlignsOffsetsToPcmFrames_Test;
 public:
     /**
@@ -98,13 +99,19 @@ private:
     winrt::com_ptr<ISpTTSEngineSite> m_cpSite;
     std::mutex m_siteMutex;
 
-    std::shared_ptr<PipeClient> m_pClient;
+    std::mutex m_sessionMutex;
+    std::unique_ptr<PipeClient> m_pClient;
     std::unique_ptr<SpeechWorker> m_pWorker;
+    std::wstring m_providerExecutablePath;
+    std::wstring m_providerPipeName;
     std::wstring m_voiceId;
     WAVEFORMATEX m_audioFormat;
+    bool m_hasOutputFormat{false};
     std::atomic<uint64_t> m_speakIdCounter{0};
 
     uint64_t AudioOffsetMsToBytes(uint32_t audioMs) const;
     HRESULT LoadProviderFromToken(ISpObjectToken* pToken);
+    HRESULT CreateProviderSessionLocked();
+    void RetireFaultedSessionLocked();
 };
 
