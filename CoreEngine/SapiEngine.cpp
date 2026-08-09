@@ -151,7 +151,10 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
 
     speakReq.SetNamedValue(L"fragments", fragments);
 
-    m_pWorker->Start(pOutputSite, speakId);
+    if (!m_pWorker->Start(pOutputSite, speakId))
+    {
+        return E_FAIL;
+    }
 
     HRESULT hr = m_pClient->SendControlMessage(speakReq);
     if (FAILED(hr))

@@ -107,6 +107,23 @@ private:
     std::atomic<DWORD> m_createError{ERROR_SUCCESS};
     std::atomic<DWORD> m_connectError{ERROR_SUCCESS};
 };
+
+class ThreadJoinGuard
+{
+public:
+    explicit ThreadJoinGuard(std::thread& thread) : m_thread(thread) {}
+
+    ~ThreadJoinGuard()
+    {
+        if (m_thread.joinable())
+        {
+            m_thread.join();
+        }
+    }
+
+private:
+    std::thread& m_thread;
+};
 }
 
 class SapiEngineTests : public ::testing::Test {
@@ -462,6 +479,7 @@ TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak) {
         firstSpeakResult = engine->Speak(0, formatId, pWaveFormat, &firstFragment, mockSite.get());
         firstSpeakReturned = true;
     });
+    ThreadJoinGuard firstSpeakJoin(firstSpeakThread);
 
     for (int attempt = 0; attempt < 50 && mockSite->writeCallCount.load() == 0; ++attempt)
     {

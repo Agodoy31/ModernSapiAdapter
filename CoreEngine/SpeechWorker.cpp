@@ -23,9 +23,14 @@ SpeechWorker::~SpeechWorker()
     if (m_controlThread.joinable()) m_controlThread.join();
 }
 
-void SpeechWorker::Start(void* /*pSite*/, uint64_t speakId)
+bool SpeechWorker::Start(void* /*pSite*/, uint64_t speakId)
 {
     std::lock_guard<std::mutex> lock(m_requestMutex);
+    if (m_transportFaulted)
+    {
+        return false;
+    }
+
     m_activeSpeakId = speakId;
     m_deliveredAudioBytes = 0;
     m_rawAudioBytesRead = 0;
@@ -35,6 +40,7 @@ void SpeechWorker::Start(void* /*pSite*/, uint64_t speakId)
     m_cancellationComplete = false;
     m_cancellationFailed = false;
     m_requestState = RequestState::Speaking;
+    return true;
 }
 
 void SpeechWorker::Stop()
@@ -150,7 +156,12 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
         }
     }
 
-    return m_exit ? E_ABORT : S_OK;
+    if (m_exit)
+    {
+        return E_ABORT;
+    }
+
+    return m_cancellationFailed ? E_FAIL : S_OK;
 }
 
 void SpeechWorker::CompleteIfAudioBoundaryReached()
@@ -246,7 +257,25 @@ void SpeechWorker::AudioThreadProc()
 
         if (cancellationToSend != 0)
         {
-            SendCancellation(cancellationToSend);
+            const HRESULT cancellationHr = SendCancellation(cancellationToSend);
+            if (FAILED(cancellationHr))
+            {
+                CoreLog(L"[SpeechWorker] Failed to cancel speak_id %llu after SAPI rejected audio: 0x%08x.",
+                    cancellationToSend, cancellationHr);
+
+                // A failed control write means there is no reliable terminal boundary; quarantine this pipe session
+                // before waking Speak so stale PCM cannot be associated with another request.
+                if (m_pClient)
+                {
+                    m_pClient->Cancel();
+                }
+
+                std::lock_guard<std::mutex> lock(m_requestMutex);
+                m_cancellationFailed = true;
+                m_transportFaulted = true;
+                m_requestState = RequestState::Idle;
+                m_requestChanged.notify_all();
+            }
         }
     }
     winrt::uninit_apartment();

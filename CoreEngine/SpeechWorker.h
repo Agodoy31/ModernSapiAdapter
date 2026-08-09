@@ -38,11 +38,12 @@ public:
     SpeechWorker& operator=(const SpeechWorker&) = delete;
 
     /**
-     * @brief Starts background worker thread operations for a speech synthesis request.
+     * @brief Starts background worker thread operations for a speech synthesis request when the pipe session is usable.
      * @param pSite Opaque output site pointer (tracked internally by engine).
      * @param speakId The unique identifier for this speech request.
+     * @return True when the request entered the speaking state; false when the pipe session is quarantined.
      */
-    void Start(void* pSite, uint64_t speakId);
+    bool Start(void* pSite, uint64_t speakId);
 
     /**
      * @brief Signals worker threads to stop and cancels pending I/O.
@@ -108,6 +109,7 @@ private:
     bool m_synthesisComplete{false};         /**< Provider has declared the final PCM byte count. */
     bool m_cancellationComplete{false};      /**< Provider has declared the final cancellation byte count. */
     bool m_cancellationFailed{false};        /**< Cancellation could not reach a valid terminal boundary. */
+    bool m_transportFaulted{false};          /**< Pipe session cannot safely accept another request. */
     uint64_t m_expectedAudioBytes{0};        /**< Declared raw PCM byte count for normal completion. */
     uint64_t m_cancelledAudioBytes{0};       /**< Raw PCM bytes committed before cancellation. */
     uint64_t m_rawAudioBytesRead{0};         /**< Raw bytes consumed from the audio pipe for the active request. */
