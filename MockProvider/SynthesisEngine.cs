@@ -12,8 +12,11 @@ namespace MockProvider;
 /// </summary>
 public class SynthesisEngine
 {
+    private const string FaultEventLogEnvironmentVariable = "MODERN_SAPI_ADAPTER_TEST_FAULT_EVENT_LOG";
+
     private readonly Stream _controlPipe;
     private readonly Stream _audioPipe;
+    private readonly string? _faultEventLogPath;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SynthesisEngine"/> class.
@@ -24,6 +27,7 @@ public class SynthesisEngine
     {
         _controlPipe = controlPipe;
         _audioPipe = audioPipe;
+        _faultEventLogPath = Environment.GetEnvironmentVariable(FaultEventLogEnvironmentVariable);
     }
 
     /// <summary>
@@ -91,7 +95,7 @@ public class SynthesisEngine
                             text_length = word.Length,
                             audio_offset_ms = totalAudioMs
                         };
-                        await WriteControlEventAsync(wordBoundary, cancellationToken);
+                        await WriteControlEventAsync(wordBoundary, cancellationToken, speakId, "word_boundary");
 
                         await Task.Delay(50, cancellationToken);
 
@@ -122,7 +126,7 @@ public class SynthesisEngine
                         bookmark_name = bookmarkProp.GetString() ?? "",
                         audio_offset_ms = totalAudioMs
                     };
-                    await WriteControlEventAsync(bookmarkEvent, cancellationToken);
+                    await WriteControlEventAsync(bookmarkEvent, cancellationToken, speakId, "bookmark_reached");
                 }
             }
 
@@ -132,7 +136,7 @@ public class SynthesisEngine
                 speak_id = speakId,
                 total_audio_bytes = totalAudioBytes
             };
-            await WriteControlEventAsync(completionEvent, cancellationToken);
+            await WriteControlEventAsync(completionEvent, cancellationToken, speakId, "synthesis_complete");
 
             foreach (byte[] audioData in audioBuffers)
             {
@@ -158,7 +162,7 @@ public class SynthesisEngine
                 text_length = 1,
                 audio_offset_ms = 0
             };
-            await WriteControlEventAsync(lateSentenceBoundary, CancellationToken.None);
+            await WriteControlEventAsync(lateSentenceBoundary, CancellationToken.None, speakId, "sentence_boundary");
 
             var cancelledEvent = new
             {
@@ -166,20 +170,38 @@ public class SynthesisEngine
                 speak_id = speakId,
                 audio_bytes_written = audioBytesWritten
             };
-            await WriteControlEventAsync(cancelledEvent, CancellationToken.None);
+            await WriteControlEventAsync(cancelledEvent, CancellationToken.None, speakId, "synthesis_cancelled");
         }
         catch (Exception ex)
         {
             var logEvent = new { @event = "log", speak_id = speakId, severity = "error", message = ex.Message };
-            await WriteControlEventAsync(logEvent, CancellationToken.None);
+            await WriteControlEventAsync(logEvent, CancellationToken.None, speakId, "log");
         }
     }
 
-    private async Task WriteControlEventAsync(object evt, CancellationToken cancellationToken)
+    private async Task WriteControlEventAsync(object evt, CancellationToken cancellationToken, ulong speakId, string eventName)
     {
         string json = JsonSerializer.Serialize(evt);
         byte[] bytes = Encoding.UTF8.GetBytes(json + "\n");
         await _controlPipe.WriteAsync(bytes, cancellationToken);
         await _controlPipe.FlushAsync(cancellationToken);
+        RecordControlEventForTest(speakId, eventName);
+    }
+
+    private void RecordControlEventForTest(ulong speakId, string eventName)
+    {
+        if (string.IsNullOrWhiteSpace(_faultEventLogPath))
+        {
+            return;
+        }
+
+        try
+        {
+            File.AppendAllText(_faultEventLogPath, $"{speakId}:{eventName}{Environment.NewLine}");
+        }
+        catch
+        {
+            // This optional test trace must never affect synthesis.
+        }
     }
 }

@@ -3,6 +3,7 @@
 #include "../CoreEngine/PipeClient.h"
 #include "../CoreEngine/SapiEngine.h"
 #include <sddl.h>
+#include <fstream>
 
 namespace
 {
@@ -124,6 +125,52 @@ public:
 private:
     std::thread& m_thread;
 };
+
+constexpr wchar_t faultEventLogEnvironmentVariable[] = L"MODERN_SAPI_ADAPTER_TEST_FAULT_EVENT_LOG";
+
+class ScopedFaultEventLog
+{
+public:
+    ScopedFaultEventLog()
+    {
+        std::error_code error;
+        const auto temporaryDirectory = std::filesystem::temp_directory_path(error);
+        if (error)
+        {
+            return;
+        }
+
+        m_path = temporaryDirectory / (L"ModernSapiAdapterFaultEvents_" + std::to_wstring(GetCurrentProcessId()) + L".log");
+        std::filesystem::remove(m_path, error);
+        m_isConfigured = SetEnvironmentVariableW(faultEventLogEnvironmentVariable, m_path.c_str()) != FALSE;
+    }
+
+    ~ScopedFaultEventLog()
+    {
+        SetEnvironmentVariableW(faultEventLogEnvironmentVariable, nullptr);
+        std::error_code error;
+        std::filesystem::remove(m_path, error);
+    }
+
+    bool IsConfigured() const noexcept { return m_isConfigured; }
+    const std::filesystem::path& Path() const noexcept { return m_path; }
+
+private:
+    std::filesystem::path m_path;
+    bool m_isConfigured{false};
+};
+
+std::vector<std::string> ReadFaultEventLog(const std::filesystem::path& path)
+{
+    std::ifstream input(path);
+    std::vector<std::string> records;
+    std::string record;
+    while (std::getline(input, record))
+    {
+        records.push_back(std::move(record));
+    }
+    return records;
+}
 }
 
 class SapiEngineTests : public ::testing::Test {
@@ -507,6 +554,9 @@ TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak) {
 
 #if defined(_DEBUG)
 TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorker) {
+    ScopedFaultEventLog faultEventLog;
+    ASSERT_TRUE(faultEventLog.IsConfigured());
+
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     auto engine = winrt::make_self<CSapiEngine>();
     auto mockToken = winrt::make_self<MockSpObjectToken>();
@@ -573,8 +623,28 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
         mockSite->receivedEvents.clear();
     }
 
-    // Those bytes and all subsequent control events must be drained but never reach the SAPI site.
-    Sleep(250);
+    const size_t faultEventRecordCount = ReadFaultEventLog(faultEventLog.Path()).size();
+    bool lateFaultedWordBoundaryEmitted = false;
+    for (int attempt = 0; attempt < 100 && !lateFaultedWordBoundaryEmitted; ++attempt)
+    {
+        const auto records = ReadFaultEventLog(faultEventLog.Path());
+        for (size_t recordIndex = faultEventRecordCount; recordIndex < records.size(); ++recordIndex)
+        {
+            if (records[recordIndex] == "1:word_boundary")
+            {
+                lateFaultedWordBoundaryEmitted = true;
+                break;
+            }
+        }
+
+        if (!lateFaultedWordBoundaryEmitted)
+        {
+            Sleep(10);
+        }
+    }
+    ASSERT_TRUE(lateFaultedWordBoundaryEmitted);
+
+    // The provider wrote a late word-boundary event after Faulted; it and its PCM must never reach SAPI.
     EXPECT_EQ(mockSite->BytesAcceptedAfterRejectedWrite(), 0u);
     {
         std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
