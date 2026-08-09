@@ -178,6 +178,16 @@ bool CSapiEngine::OnAudioData(const uint8_t* pAudioBytes, uint32_t byteCount)
     return SUCCEEDED(hr) && (bytesWritten == byteCount);
 }
 
+#if defined(_DEBUG)
+void CSapiEngine::FailNextCancellationControlSendForTest()
+{
+    if (m_pClient)
+    {
+        m_pClient->FailNextCancellationMessageForTest();
+    }
+}
+#endif
+
 uint64_t CSapiEngine::AudioOffsetMsToBytes(uint32_t audioMs) const
 {
     if (m_audioFormat.nSamplesPerSec == 0 || m_audioFormat.nBlockAlign == 0)

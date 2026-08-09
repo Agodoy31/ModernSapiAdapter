@@ -11,7 +11,7 @@ SpeechWorker::SpeechWorker(CSapiEngine* pEngine, std::shared_ptr<PipeClient> pCl
 
 SpeechWorker::~SpeechWorker()
 {
-    m_exit = true;
+    m_exit.store(true);
     
     // Cancel I/O so blocking ReadFile/GetOverlappedResult returns immediately
     if (m_pClient)
@@ -26,7 +26,7 @@ SpeechWorker::~SpeechWorker()
 bool SpeechWorker::Start(void* /*pSite*/, uint64_t speakId)
 {
     std::lock_guard<std::mutex> lock(m_requestMutex);
-    if (m_transportFaulted)
+    if (m_requestState == RequestState::Faulted)
     {
         return false;
     }
@@ -43,12 +43,23 @@ bool SpeechWorker::Start(void* /*pSite*/, uint64_t speakId)
     return true;
 }
 
+bool SpeechWorker::IsFaulted() const
+{
+    std::lock_guard<std::mutex> lock(m_requestMutex);
+    return m_requestState == RequestState::Faulted;
+}
+
 void SpeechWorker::Stop()
 {
     uint64_t speakId = 0;
     {
         std::lock_guard<std::mutex> lock(m_requestMutex);
         if (m_requestState == RequestState::Idle)
+        {
+            return;
+        }
+
+        if (m_requestState == RequestState::Faulted)
         {
             return;
         }
@@ -71,6 +82,11 @@ HRESULT SpeechWorker::CancelAndDrain()
             return S_OK;
         }
 
+        if (m_requestState == RequestState::Faulted)
+        {
+            return E_FAIL;
+        }
+
         if (m_requestState == RequestState::Cancelling)
         {
             return E_UNEXPECTED;
@@ -85,11 +101,8 @@ HRESULT SpeechWorker::CancelAndDrain()
     HRESULT hr = SendCancellation(speakId);
     if (FAILED(hr))
     {
-        std::lock_guard<std::mutex> lock(m_requestMutex);
-        m_cancellationFailed = true;
-        m_requestState = RequestState::Idle;
-        m_requestChanged.notify_all();
-        return hr;
+        EnterFaultedState();
+        return E_FAIL;
     }
 
     std::unique_lock<std::mutex> lock(m_requestMutex);
@@ -98,6 +111,14 @@ HRESULT SpeechWorker::CancelAndDrain()
     });
 
     return m_cancellationFailed ? E_FAIL : S_OK;
+}
+
+void SpeechWorker::EnterFaultedState()
+{
+    std::lock_guard<std::mutex> lock(m_requestMutex);
+    m_cancellationFailed = true;
+    m_requestState = RequestState::Faulted;
+    m_requestChanged.notify_all();
 }
 
 HRESULT SpeechWorker::SendCancellation(uint64_t speakId)
@@ -130,10 +151,10 @@ HRESULT SpeechWorker::SendCancellation(uint64_t speakId)
 HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
 {
     std::unique_lock<std::mutex> lock(m_requestMutex);
-    while (m_requestState != RequestState::Idle && !m_exit)
+    while (m_requestState != RequestState::Idle && m_requestState != RequestState::Faulted && !m_exit.load())
     {
         if (m_requestChanged.wait_for(lock, std::chrono::milliseconds(10), [this] {
-            return m_requestState == RequestState::Idle || m_exit.load();
+            return m_requestState == RequestState::Idle || m_requestState == RequestState::Faulted || m_exit.load();
         }))
         {
             break;
@@ -148,7 +169,7 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
         const DWORD actions = pOutputSite->GetActions();
         lock.lock();
 
-        if ((actions & SPVES_ABORT) != 0 && m_requestState != RequestState::Idle)
+        if ((actions & SPVES_ABORT) != 0 && m_requestState != RequestState::Idle && m_requestState != RequestState::Faulted)
         {
             lock.unlock();
             CoreLog(L"[SpeechWorker] SAPI requested SPVES_ABORT; cancelling active synthesis.");
@@ -156,12 +177,17 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
         }
     }
 
-    if (m_exit)
+    if (m_cancellationFailed)
+    {
+        return E_FAIL;
+    }
+
+    if (m_exit.load())
     {
         return E_ABORT;
     }
 
-    return m_cancellationFailed ? E_FAIL : S_OK;
+    return S_OK;
 }
 
 void SpeechWorker::CompleteIfAudioBoundaryReached()
@@ -211,14 +237,15 @@ void SpeechWorker::AudioThreadProc()
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
     std::vector<uint8_t> buffer(4096);
-    while (!m_exit)
+    while (!m_exit.load())
     {
         DWORD bytesRead = 0;
         HRESULT hr = m_pClient->ReadAudioChunk(buffer, bytesRead);
         if (FAILED(hr))
         {
-            if (m_exit) break;
+            if (m_exit.load()) break;
             Sleep(50);
+            if (m_exit.load()) break;
             continue;
         }
 
@@ -253,6 +280,10 @@ void SpeechWorker::AudioThreadProc()
                 m_rawAudioBytesRead += bytesRead;
                 CompleteCancellationIfAudioBoundaryReached();
             }
+            else if (m_requestState == RequestState::Faulted)
+            {
+                // Continue draining provider PCM so its audio pipe cannot fill, but never call SAPI.
+            }
         }
 
         if (cancellationToSend != 0)
@@ -263,18 +294,7 @@ void SpeechWorker::AudioThreadProc()
                 CoreLog(L"[SpeechWorker] Failed to cancel speak_id %llu after SAPI rejected audio: 0x%08x.",
                     cancellationToSend, cancellationHr);
 
-                // A failed control write means there is no reliable terminal boundary; quarantine this pipe session
-                // before waking Speak so stale PCM cannot be associated with another request.
-                if (m_pClient)
-                {
-                    m_pClient->Cancel();
-                }
-
-                std::lock_guard<std::mutex> lock(m_requestMutex);
-                m_cancellationFailed = true;
-                m_transportFaulted = true;
-                m_requestState = RequestState::Idle;
-                m_requestChanged.notify_all();
+                EnterFaultedState();
             }
         }
     }
@@ -284,20 +304,21 @@ void SpeechWorker::AudioThreadProc()
 void SpeechWorker::ControlThreadProc()
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
-    while (!m_exit)
+    while (!m_exit.load())
     {
         winrt::Windows::Data::Json::JsonObject json = nullptr;
         HRESULT hr = m_pClient->ReadControlMessage(json);
         if (FAILED(hr) || !json)
         {
-            if (m_exit) break;
+            if (m_exit.load()) break;
             Sleep(50);
+            if (m_exit.load()) break;
             continue;
         }
 
         try
         {
-            bool forwardToSapi = true;
+            bool forwardToSapi = false;
             if (json.HasKey(L"event") && json.HasKey(L"speak_id"))
             {
                 if (json.GetNamedValue(L"event").ValueType() == winrt::Windows::Data::Json::JsonValueType::String &&
@@ -307,6 +328,7 @@ void SpeechWorker::ControlThreadProc()
                     uint64_t eventSpeakId = static_cast<uint64_t>(json.GetNamedNumber(L"speak_id"));
 
                     std::lock_guard<std::mutex> lock(m_requestMutex);
+                    forwardToSapi = m_requestState != RequestState::Faulted;
                     if (eventSpeakId == m_activeSpeakId)
                     {
                         constexpr double maxExactJsonInteger = 9007199254740991.0;

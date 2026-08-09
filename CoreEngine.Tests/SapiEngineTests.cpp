@@ -504,3 +504,75 @@ TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak) {
 
     EXPECT_EQ(mockSite->totalBytesWritten.load(), 9600u);
 }
+
+TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorker) {
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockToken = winrt::make_self<MockSpObjectToken>();
+
+    ASSERT_EQ(engine->SetObjectToken(mockToken.get()), S_OK);
+
+    GUID formatId = {};
+    WAVEFORMATEX* pWaveFormat = nullptr;
+    ASSERT_EQ(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat), S_OK);
+    ASSERT_NE(pWaveFormat, nullptr);
+
+    wchar_t firstText[] = L"[delay-cancelled-event] old request";
+    SPVTEXTFRAG firstFragment = {};
+    firstFragment.pTextStart = firstText;
+    firstFragment.ulTextLen = static_cast<ULONG>(wcslen(firstText));
+
+    mockSite->rejectNextWrite = true;
+    engine->FailNextCancellationControlSendForTest();
+    HRESULT firstSpeakResult = S_OK;
+    std::atomic_bool firstSpeakReturned = false;
+    const auto firstSpeakStart = std::chrono::steady_clock::now();
+    std::thread firstSpeakThread([&] {
+        firstSpeakResult = engine->Speak(0, formatId, pWaveFormat, &firstFragment, mockSite.get());
+        firstSpeakReturned = true;
+    });
+    ThreadJoinGuard firstSpeakJoin(firstSpeakThread);
+
+    for (int attempt = 0; attempt < 50 && mockSite->writeCallCount.load() == 0; ++attempt)
+    {
+        Sleep(10);
+    }
+    ASSERT_EQ(mockSite->writeCallCount.load(), 1u);
+
+    for (int attempt = 0; attempt < 100 && !firstSpeakReturned.load(); ++attempt)
+    {
+        Sleep(10);
+    }
+    if (!firstSpeakReturned.load())
+    {
+        // Keep the one-second regression timeout self-cleaning when run against a broken worker.
+        engine->m_pWorker->Stop();
+        for (int attempt = 0; attempt < 100 && !firstSpeakReturned.load(); ++attempt)
+        {
+            Sleep(10);
+        }
+    }
+    ASSERT_TRUE(firstSpeakReturned.load());
+
+    firstSpeakThread.join();
+    EXPECT_EQ(firstSpeakResult, E_FAIL);
+    EXPECT_LT(std::chrono::steady_clock::now() - firstSpeakStart, std::chrono::seconds(1));
+
+    // The provider continues producing old PCM because the injected cancel control write failed.
+    // Those bytes must be drained but never reach the SAPI site.
+    Sleep(250);
+    EXPECT_EQ(mockSite->BytesAcceptedAfterRejectedWrite(), 0u);
+
+    const ULONG writesBeforeNextSpeak = mockSite->writeCallCount.load();
+    const ULONG bytesBeforeNextSpeak = mockSite->totalBytesWritten.load();
+    wchar_t secondText[] = L"must not be sent";
+    SPVTEXTFRAG secondFragment = {};
+    secondFragment.pTextStart = secondText;
+    secondFragment.ulTextLen = static_cast<ULONG>(wcslen(secondText));
+
+    EXPECT_EQ(engine->Speak(0, formatId, pWaveFormat, &secondFragment, mockSite.get()), E_FAIL);
+    CoTaskMemFree(pWaveFormat);
+
+    EXPECT_EQ(mockSite->writeCallCount.load(), writesBeforeNextSpeak);
+    EXPECT_EQ(mockSite->totalBytesWritten.load(), bytesBeforeNextSpeak);
+}

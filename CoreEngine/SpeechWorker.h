@@ -63,6 +63,11 @@ public:
      */
     HRESULT WaitUntilFinished(ISpTTSEngineSite* pOutputSite);
 
+    /**
+     * @brief Reports whether cancellation transport failed and this worker has quarantined its pipe session.
+     */
+    bool IsFaulted() const;
+
 private:
     /**
      * @brief Thread procedure for reading PCM audio bytes and dispatching to engine.
@@ -89,11 +94,17 @@ private:
      */
     HRESULT SendCancellation(uint64_t speakId);
 
+    /**
+     * @brief Records a terminal cancellation transport failure without touching pipe or thread ownership.
+     */
+    void EnterFaultedState();
+
     enum class RequestState
     {
         Idle,
         Speaking,
-        Cancelling
+        Cancelling,
+        Faulted
     };
 
     CSapiEngine* m_pEngine;                  /**< Pointer to parent SAPI engine. */
@@ -101,15 +112,14 @@ private:
 
     std::thread m_audioThread;               /**< Audio streaming worker thread. */
     std::thread m_controlThread;             /**< Control event worker thread. */
-    std::atomic<bool> m_exit;                /**< Flag indicating worker shutdown. */
-    std::mutex m_requestMutex;               /**< Serializes request lifecycle state across audio and control threads. */
+    std::atomic_bool m_exit;                 /**< Flag indicating worker shutdown. */
+    mutable std::mutex m_requestMutex;       /**< Serializes request lifecycle state across audio and control threads. */
     std::condition_variable m_requestChanged;/**< Wakes synchronous Speak and purge callers at terminal boundaries. */
     RequestState m_requestState{RequestState::Idle}; /**< Active request lifecycle state. */
     uint64_t m_activeSpeakId{0};             /**< Identifier for the active request. */
     bool m_synthesisComplete{false};         /**< Provider has declared the final PCM byte count. */
     bool m_cancellationComplete{false};      /**< Provider has declared the final cancellation byte count. */
     bool m_cancellationFailed{false};        /**< Cancellation could not reach a valid terminal boundary. */
-    bool m_transportFaulted{false};          /**< Pipe session cannot safely accept another request. */
     uint64_t m_expectedAudioBytes{0};        /**< Declared raw PCM byte count for normal completion. */
     uint64_t m_cancelledAudioBytes{0};       /**< Raw PCM bytes committed before cancellation. */
     uint64_t m_rawAudioBytesRead{0};         /**< Raw bytes consumed from the audio pipe for the active request. */

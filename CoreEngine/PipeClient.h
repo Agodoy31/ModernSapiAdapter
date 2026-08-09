@@ -58,12 +58,19 @@ public:
      */
     void Cancel();
 
+#if defined(_DEBUG)
+    void FailNextCancellationMessageForTest();
+#endif
+
 private:
     wil::unique_handle m_controlPipe;               /**< Overlapped handle to Control Pipe. */
     wil::unique_handle m_audioPipe;                 /**< Overlapped handle to Audio Pipe. */
     wil::unique_process_information m_providerProcess; /**< Process information handle of launched provider. */
     std::string m_controlInputBuffer;                /**< Retained bytes after the most recently extracted JSON line. */
     std::mutex m_controlWriteMutex;                  /**< Serializes newline-delimited JSON writes to the byte-mode control pipe. */
+#if defined(_DEBUG)
+    std::atomic_bool m_failNextCancellationMessageForTest{false}; /**< Test-only cancellation write failure injection. */
+#endif
 
     /**
      * @brief Internal helper to attempt connection to Control and Audio pipes.

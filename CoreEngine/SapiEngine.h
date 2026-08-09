@@ -17,6 +17,7 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_OnSpeechEventMapsSentenceBoundaryToSite_Test;
     friend class SapiEngineTests_OnSpeechEventMapsBookmarkStringEventToSite_Test;
     friend class SapiEngineTests_OnSpeechEventPreservesLongAudioOffsets_Test;
+    friend class SapiEngineTests_RejectedAudioWriteWithFailedCancellationQuarantinesWorker_Test;
     friend class SapiEngineTests_OnSpeechEventAlignsOffsetsToPcmFrames_Test;
 public:
     /**
@@ -84,6 +85,13 @@ public:
      * @param eventJson JsonObject event payload received from Control Pipe.
      */
     void OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& eventJson);
+
+#if defined(_DEBUG)
+    /**
+     * @brief Injects one cancellation-control send failure for the focused worker recovery regression.
+     */
+    void FailNextCancellationControlSendForTest();
+#endif
 
 private:
     winrt::com_ptr<ISpObjectToken> m_cpToken;

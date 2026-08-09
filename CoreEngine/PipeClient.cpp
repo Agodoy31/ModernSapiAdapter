@@ -166,6 +166,17 @@ HRESULT PipeClient::SendControlMessage(const winrt::Windows::Data::Json::JsonObj
     std::lock_guard<std::mutex> lock(m_controlWriteMutex);
     if (!m_controlPipe) return E_UNEXPECTED;
 
+#if defined(_DEBUG)
+    if (m_failNextCancellationMessageForTest &&
+        json.HasKey(L"command") &&
+        json.GetNamedValue(L"command").ValueType() == winrt::Windows::Data::Json::JsonValueType::String &&
+        json.GetNamedString(L"command") == L"cancel")
+    {
+        m_failNextCancellationMessageForTest = false;
+        return E_FAIL;
+    }
+#endif
+
     winrt::hstring jsonHString = json.Stringify();
     std::wstring jsonStringW(jsonHString.c_str(), jsonHString.size());
     int utf8Len = WideCharToMultiByte(CP_UTF8, 0, jsonStringW.c_str(), -1, nullptr, 0, nullptr, nullptr);
@@ -325,3 +336,10 @@ void PipeClient::Cancel()
     if (m_controlPipe) CancelIoEx(m_controlPipe.get(), nullptr);
     if (m_audioPipe) CancelIoEx(m_audioPipe.get(), nullptr);
 }
+
+#if defined(_DEBUG)
+void PipeClient::FailNextCancellationMessageForTest()
+{
+    m_failNextCancellationMessageForTest = true;
+}
+#endif

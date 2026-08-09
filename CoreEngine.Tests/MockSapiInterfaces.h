@@ -37,6 +37,7 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
 {
     std::atomic<ULONG> totalBytesWritten = 0;
     std::atomic<ULONG> writeCallCount = 0;
+    std::atomic<ULONG> bytesAcceptedAfterRejectedWrite = 0;
     std::atomic_bool rejectNextWrite = false;
     std::atomic<DWORD> actions = SPVES_CONTINUE;
     std::mutex eventsMutex;
@@ -57,17 +58,25 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
     IFACEMETHODIMP Write(const void*, ULONG cb, ULONG* pcbWritten) noexcept override {
         writeCallCount++;
         if (rejectNextWrite.exchange(false)) {
+            m_rejectedWriteObserved = true;
             if (pcbWritten) *pcbWritten = 0;
             return E_FAIL;
         }
         totalBytesWritten += cb;
+        if (m_rejectedWriteObserved.load()) {
+            bytesAcceptedAfterRejectedWrite += cb;
+        }
         if (pcbWritten) *pcbWritten = cb;
         return S_OK;
     }
+    ULONG BytesAcceptedAfterRejectedWrite() const noexcept { return bytesAcceptedAfterRejectedWrite.load(); }
     IFACEMETHODIMP GetRate(long*) noexcept override { return S_OK; }
     IFACEMETHODIMP GetVolume(USHORT*) noexcept override { return S_OK; }
     IFACEMETHODIMP GetSkipInfo(SPVSKIPTYPE*, long*) noexcept override { return S_OK; }
     IFACEMETHODIMP CompleteSkip(long) noexcept override { return S_OK; }
+
+private:
+    std::atomic_bool m_rejectedWriteObserved = false;
 };
 
 struct MockSpDataKey : winrt::implements<MockSpDataKey, ISpDataKey>
