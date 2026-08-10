@@ -37,9 +37,17 @@ AsyncLogger::~AsyncLogger()
 
 void AsyncLogger::Log(const std::wstring& message)
 {
+    SYSTEMTIME now = {};
+    GetLocalTime(&now);
+
+    wchar_t prefix[32] = {};
+    swprintf_s(prefix, L"[%04u-%02u-%02u %02u:%02u:%02u.%03u] ",
+        now.wYear, now.wMonth, now.wDay,
+        now.wHour, now.wMinute, now.wSecond, now.wMilliseconds);
+
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_queue.push(message);
+        m_queue.push(std::wstring(prefix) + message);
     }
     m_cv.notify_one();
 }
