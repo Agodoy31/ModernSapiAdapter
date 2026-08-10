@@ -271,8 +271,8 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsAndDispatchesToSite) {
     EXPECT_EQ(received.eEventId, SPEI_WORD_BOUNDARY);
     EXPECT_EQ(received.elParamType, SPET_LPARAM_IS_UNDEFINED);
     EXPECT_EQ(received.ullAudioStreamOffset, 2400u);
-    EXPECT_EQ(received.wParam, 17u);
-    EXPECT_EQ(received.lParam, 5);
+    EXPECT_EQ(received.wParam, 5u);
+    EXPECT_EQ(received.lParam, 17);
 }
 
 TEST_F(SapiEngineTests, OnSpeechEventPreservesLongAudioOffsets) {
@@ -338,8 +338,8 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsSentenceBoundaryToSite) {
     EXPECT_EQ(received.eEventId, SPEI_SENTENCE_BOUNDARY);
     EXPECT_EQ(received.elParamType, SPET_LPARAM_IS_UNDEFINED);
     EXPECT_EQ(received.ullAudioStreamOffset, 3600u);
-    EXPECT_EQ(received.wParam, 22u);
-    EXPECT_EQ(received.lParam, 9);
+    EXPECT_EQ(received.wParam, 9u);
+    EXPECT_EQ(received.lParam, 22);
 }
 
 TEST_F(SapiEngineTests, OnSpeechEventMapsBookmarkStringEventToSite) {
@@ -495,9 +495,11 @@ TEST_F(SapiEngineTests, SpeakPreservesNonContiguousSapiSourceOffsets) {
     std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
     ASSERT_EQ(mockSite->receivedEvents.size(), 2u);
     EXPECT_EQ(mockSite->receivedEvents[0].eEventId, SPEI_WORD_BOUNDARY);
-    EXPECT_EQ(mockSite->receivedEvents[0].wParam, 0u);
+    EXPECT_EQ(mockSite->receivedEvents[0].wParam, 5u);
+    EXPECT_EQ(mockSite->receivedEvents[0].lParam, 0);
     EXPECT_EQ(mockSite->receivedEvents[1].eEventId, SPEI_WORD_BOUNDARY);
-    EXPECT_EQ(mockSite->receivedEvents[1].wParam, 23u);
+    EXPECT_EQ(mockSite->receivedEvents[1].wParam, 6u);
+    EXPECT_EQ(mockSite->receivedEvents[1].lParam, 23);
 }
 
 TEST_F(SapiEngineTests, OutputSiteAbortCancelsTheActiveRequest) {

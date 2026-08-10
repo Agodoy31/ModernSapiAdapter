@@ -225,8 +225,8 @@ void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& ev
 
         uint32_t textOffset = eventJson.HasKey(L"text_offset") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_offset")) : 0;
         uint32_t textLength = eventJson.HasKey(L"text_length") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_length")) : 0;
-        spEvent.wParam = textOffset;
-        spEvent.lParam = textLength;
+        spEvent.wParam = static_cast<WPARAM>(textLength);
+        spEvent.lParam = static_cast<LPARAM>(textOffset);
         
         m_cpSite->AddEvents(&spEvent, 1);
     }
@@ -241,8 +241,8 @@ void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& ev
 
         uint32_t textOffset = eventJson.HasKey(L"text_offset") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_offset")) : 0;
         uint32_t textLength = eventJson.HasKey(L"text_length") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_length")) : 0;
-        spEvent.wParam = textOffset;
-        spEvent.lParam = textLength;
+        spEvent.wParam = static_cast<WPARAM>(textLength);
+        spEvent.lParam = static_cast<LPARAM>(textOffset);
         
         m_cpSite->AddEvents(&spEvent, 1);
     }
