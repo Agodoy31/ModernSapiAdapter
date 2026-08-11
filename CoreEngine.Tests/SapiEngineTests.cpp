@@ -46,6 +46,14 @@ public:
         }
     }
 
+    ~CoreEngineDll()
+    {
+        if (m_module && m_dllCanUnloadNow && m_dllCanUnloadNow() != S_OK)
+        {
+            m_module.release();
+        }
+    }
+
     bool IsLoaded() const noexcept
     {
         return m_module && m_dllGetClassObject && m_dllCanUnloadNow;
@@ -311,6 +319,40 @@ TEST_F(SapiEngineTests, LockServerKeepsDllResidentUntilBalancedUnlock) {
     ASSERT_EQ(unlockingFactory->LockServer(FALSE), S_OK);
     unlockingFactory = nullptr;
     EXPECT_EQ(module.CanUnloadNow(), S_OK);
+}
+
+TEST_F(SapiEngineTests, CoreEngineDllDoesNotUnloadWhileServerLockIsActive) {
+    HMODULE lockedModule = nullptr;
+    {
+        CoreEngineDll module;
+        ASSERT_TRUE(module.IsLoaded()) << "Load error: " << module.LoadError();
+
+        winrt::com_ptr<IClassFactory> factory;
+        ASSERT_EQ(module.GetClassFactory(factory.put()), S_OK);
+        ASSERT_EQ(factory->LockServer(TRUE), S_OK);
+        factory = nullptr;
+        ASSERT_EQ(module.CanUnloadNow(), S_FALSE);
+
+        lockedModule = GetModuleHandleW(L"CoreEngine.dll");
+        ASSERT_NE(lockedModule, nullptr);
+    }
+
+    ASSERT_EQ(GetModuleHandleW(L"CoreEngine.dll"), lockedModule);
+    auto dllGetClassObject = reinterpret_cast<CoreEngineDll::DllGetClassObjectFunction>(
+        GetProcAddress(lockedModule, "DllGetClassObject"));
+    auto dllCanUnloadNow = reinterpret_cast<CoreEngineDll::DllCanUnloadNowFunction>(
+        GetProcAddress(lockedModule, "DllCanUnloadNow"));
+    ASSERT_NE(dllGetClassObject, nullptr);
+    ASSERT_NE(dllCanUnloadNow, nullptr);
+
+    static constexpr CLSID sapiEngineClsid = {
+        0x91cd243c, 0x63f7, 0x441f, { 0xae, 0x2f, 0x45, 0x05, 0x70, 0x05, 0xcb, 0x6d }
+    };
+    winrt::com_ptr<IClassFactory> factory;
+    ASSERT_EQ(dllGetClassObject(sapiEngineClsid, IID_IClassFactory, factory.put_void()), S_OK);
+    ASSERT_EQ(factory->LockServer(FALSE), S_OK);
+    factory = nullptr;
+    EXPECT_EQ(dllCanUnloadNow(), S_OK);
 }
 
 TEST_F(SapiEngineTests, ReadControlMessageRetainsSecondJsonLineFromOnePipeRead) {
