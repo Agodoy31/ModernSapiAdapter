@@ -25,6 +25,8 @@ public:
     IFACEMETHODIMP CreateInstance(IUnknown* pUnkOuter, REFIID riid, void** ppvObject) noexcept override
     {
         CoreLog(L"[CoreEngine] CreateInstance called.");
+        if (ppvObject == nullptr) return E_POINTER;
+        *ppvObject = nullptr;
         if (pUnkOuter != nullptr) return CLASS_E_NOAGGREGATION;
         try
         {
@@ -56,6 +58,8 @@ public:
 STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
 {
     CoreLog(L"[CoreEngine] DllGetClassObject called.");
+    if (ppv == nullptr) return E_POINTER;
+    *ppv = nullptr;
     if (rclsid == CLSID_SapiEngine)
     {
         try
