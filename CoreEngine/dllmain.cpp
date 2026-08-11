@@ -43,8 +43,10 @@ public:
         }
     }
 
-    IFACEMETHODIMP LockServer(BOOL /*fLock*/) noexcept override
+    IFACEMETHODIMP LockServer(BOOL fLock) noexcept override
     {
+        if (fLock) { ++winrt::get_module_lock(); }
+        else { --winrt::get_module_lock(); }
         return S_OK;
     }
 };
@@ -69,7 +71,7 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
 
 STDAPI DllCanUnloadNow(void)
 {
-    return S_FALSE; 
+    return winrt::get_module_lock() ? S_FALSE : S_OK;
 }
 
 STDAPI DllRegisterServer(void)

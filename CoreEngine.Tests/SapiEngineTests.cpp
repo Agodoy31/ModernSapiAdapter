@@ -6,6 +6,73 @@
 
 namespace
 {
+class CoreEngineDll
+{
+public:
+    using DllGetClassObjectFunction = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
+    using DllCanUnloadNowFunction = HRESULT(STDAPICALLTYPE*)();
+
+    CoreEngineDll()
+    {
+        wchar_t executablePath[MAX_PATH] = {};
+        const DWORD pathLength = GetModuleFileNameW(nullptr, executablePath, ARRAYSIZE(executablePath));
+        if (pathLength == 0 || pathLength == ARRAYSIZE(executablePath))
+        {
+            m_loadError = pathLength == 0 ? GetLastError() : ERROR_INSUFFICIENT_BUFFER;
+            return;
+        }
+
+        const std::filesystem::path dllPath = std::filesystem::path(executablePath)
+            .parent_path()
+            .parent_path()
+            .parent_path()
+            .parent_path() /
+            L"CoreEngine" / L"x64" / L"Debug" / L"CoreEngine.dll";
+
+        m_module.reset(LoadLibraryW(dllPath.c_str()));
+        if (!m_module)
+        {
+            m_loadError = GetLastError();
+            return;
+        }
+
+        m_dllGetClassObject = reinterpret_cast<DllGetClassObjectFunction>(
+            GetProcAddress(m_module.get(), "DllGetClassObject"));
+        m_dllCanUnloadNow = reinterpret_cast<DllCanUnloadNowFunction>(
+            GetProcAddress(m_module.get(), "DllCanUnloadNow"));
+        if (!m_dllGetClassObject || !m_dllCanUnloadNow)
+        {
+            m_loadError = GetLastError();
+        }
+    }
+
+    bool IsLoaded() const noexcept
+    {
+        return m_module && m_dllGetClassObject && m_dllCanUnloadNow;
+    }
+
+    DWORD LoadError() const noexcept { return m_loadError; }
+
+    HRESULT GetClassFactory(IClassFactory** factory) const
+    {
+        static constexpr CLSID sapiEngineClsid = {
+            0x91cd243c, 0x63f7, 0x441f, { 0xae, 0x2f, 0x45, 0x05, 0x70, 0x05, 0xcb, 0x6d }
+        };
+        return m_dllGetClassObject(sapiEngineClsid, IID_IClassFactory, reinterpret_cast<void**>(factory));
+    }
+
+    HRESULT CanUnloadNow() const
+    {
+        return m_dllCanUnloadNow();
+    }
+
+private:
+    wil::unique_hmodule m_module;
+    DllGetClassObjectFunction m_dllGetClassObject = nullptr;
+    DllCanUnloadNowFunction m_dllCanUnloadNow = nullptr;
+    DWORD m_loadError = ERROR_SUCCESS;
+};
+
 std::wstring GetCurrentUserSidForTest()
 {
     HANDLE token = nullptr;
@@ -198,6 +265,53 @@ protected:
     }
 
 };
+
+TEST_F(SapiEngineTests, DllCanUnloadNowTracksFactoryLifetime) {
+    CoreEngineDll module;
+    ASSERT_TRUE(module.IsLoaded()) << "Load error: " << module.LoadError();
+
+    EXPECT_EQ(module.CanUnloadNow(), S_OK);
+
+    winrt::com_ptr<IClassFactory> factory;
+    ASSERT_EQ(module.GetClassFactory(factory.put()), S_OK);
+    EXPECT_EQ(module.CanUnloadNow(), S_FALSE);
+
+    factory = nullptr;
+    EXPECT_EQ(module.CanUnloadNow(), S_OK);
+}
+
+TEST_F(SapiEngineTests, DllCanUnloadNowTracksEngineLifetimeAfterFactoryRelease) {
+    CoreEngineDll module;
+    ASSERT_TRUE(module.IsLoaded()) << "Load error: " << module.LoadError();
+
+    winrt::com_ptr<IClassFactory> factory;
+    ASSERT_EQ(module.GetClassFactory(factory.put()), S_OK);
+
+    winrt::com_ptr<ISpTTSEngine> engine;
+    ASSERT_EQ(factory->CreateInstance(nullptr, __uuidof(ISpTTSEngine), engine.put_void()), S_OK);
+    factory = nullptr;
+    EXPECT_EQ(module.CanUnloadNow(), S_FALSE);
+
+    engine = nullptr;
+    EXPECT_EQ(module.CanUnloadNow(), S_OK);
+}
+
+TEST_F(SapiEngineTests, LockServerKeepsDllResidentUntilBalancedUnlock) {
+    CoreEngineDll module;
+    ASSERT_TRUE(module.IsLoaded()) << "Load error: " << module.LoadError();
+
+    winrt::com_ptr<IClassFactory> lockingFactory;
+    ASSERT_EQ(module.GetClassFactory(lockingFactory.put()), S_OK);
+    ASSERT_EQ(lockingFactory->LockServer(TRUE), S_OK);
+    lockingFactory = nullptr;
+    EXPECT_EQ(module.CanUnloadNow(), S_FALSE);
+
+    winrt::com_ptr<IClassFactory> unlockingFactory;
+    ASSERT_EQ(module.GetClassFactory(unlockingFactory.put()), S_OK);
+    ASSERT_EQ(unlockingFactory->LockServer(FALSE), S_OK);
+    unlockingFactory = nullptr;
+    EXPECT_EQ(module.CanUnloadNow(), S_OK);
+}
 
 TEST_F(SapiEngineTests, ReadControlMessageRetainsSecondJsonLineFromOnePipeRead) {
     ControlPipeTestServer server;
