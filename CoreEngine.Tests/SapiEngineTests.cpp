@@ -352,7 +352,8 @@ TEST_F(SapiEngineTests, CoreEngineDllDoesNotUnloadWhileServerLockIsActive) {
     ASSERT_EQ(dllGetClassObject(sapiEngineClsid, IID_IClassFactory, factory.put_void()), S_OK);
     ASSERT_EQ(factory->LockServer(FALSE), S_OK);
     factory = nullptr;
-    EXPECT_EQ(dllCanUnloadNow(), S_OK);
+    ASSERT_EQ(dllCanUnloadNow(), S_OK);
+    ASSERT_TRUE(FreeLibrary(lockedModule));
 }
 
 TEST_F(SapiEngineTests, ReadControlMessageRetainsSecondJsonLineFromOnePipeRead) {
