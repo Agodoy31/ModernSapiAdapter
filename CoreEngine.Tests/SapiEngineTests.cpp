@@ -22,12 +22,18 @@ public:
             return;
         }
 
+#if defined(_M_ARM64)
+        constexpr auto platformDirectory = L"ARM64";
+#else
+        constexpr auto platformDirectory = L"x64";
+#endif
+
         const std::filesystem::path dllPath = std::filesystem::path(executablePath)
             .parent_path()
             .parent_path()
             .parent_path()
             .parent_path() /
-            L"CoreEngine" / L"x64" / L"Debug" / L"CoreEngine.dll";
+            L"CoreEngine" / platformDirectory / L"Debug" / L"CoreEngine.dll";
 
         m_module.reset(LoadLibraryW(dllPath.c_str()));
         if (!m_module)
