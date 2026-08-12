@@ -5,7 +5,22 @@
 SpeechWorker::SpeechWorker(CSapiEngine* pEngine, PipeClient* pClient, WORD blockAlign)
     : m_pEngine(pEngine), m_pClient(pClient), m_exit(false), m_frameAssembler(blockAlign)
 {
-    m_audioThread = std::thread(&SpeechWorker::AudioThreadProc, this);
+    m_audioThread = std::thread([this] {
+        try
+        {
+            AudioThreadProc();
+        }
+        catch (const std::exception& error)
+        {
+            CoreLog(L"[SpeechWorker] Unhandled audio worker exception: %hs", error.what());
+            EnterFaultedState();
+        }
+        catch (...)
+        {
+            CoreLog(L"[SpeechWorker] Unhandled unknown audio worker exception.");
+            EnterFaultedState();
+        }
+    });
     m_controlThread = std::thread(&SpeechWorker::ControlThreadProc, this);
 }
 
@@ -14,6 +29,7 @@ SpeechWorker::~SpeechWorker()
     m_exit.store(true);
 #if defined(_DEBUG)
     ReleaseEventForwardForTest();
+    ReleaseFaultPublicationForTest();
 #endif
     
     // Cancel I/O so blocking ReadFile/GetOverlappedResult returns immediately
@@ -29,7 +45,7 @@ SpeechWorker::~SpeechWorker()
 bool SpeechWorker::Start(void* /*pSite*/, uint64_t speakId)
 {
     std::lock_guard<std::mutex> lock(m_requestMutex);
-    if (m_requestState != RequestState::Idle)
+    if (m_requestState != RequestState::Idle || m_faultPending)
     {
         return false;
     }
@@ -50,7 +66,7 @@ bool SpeechWorker::Start(void* /*pSite*/, uint64_t speakId)
 bool SpeechWorker::IsFaulted() const
 {
     std::lock_guard<std::mutex> lock(m_requestMutex);
-    return m_requestState == RequestState::Faulted;
+    return m_requestState == RequestState::Faulted || m_faultPending;
 }
 
 #if defined(_DEBUG)
@@ -95,6 +111,35 @@ uint64_t SpeechWorker::RawAudioBytesForTest() const
 {
     std::lock_guard<std::mutex> lock(m_requestMutex);
     return m_rawAudioBytesRead;
+}
+
+void SpeechWorker::PauseNextFaultPublicationForTest()
+{
+    std::lock_guard<std::mutex> lock(m_faultPublicationTestMutex);
+    m_pauseNextFaultPublicationForTest = true;
+    m_faultPublicationPausedForTest = false;
+}
+
+bool SpeechWorker::WaitForFaultPublicationPauseForTest(DWORD timeoutMs)
+{
+    std::unique_lock<std::mutex> lock(m_faultPublicationTestMutex);
+    return m_faultPublicationTestChanged.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
+        return m_faultPublicationPausedForTest || m_exit.load();
+    }) && m_faultPublicationPausedForTest;
+}
+
+void SpeechWorker::ReleaseFaultPublicationForTest()
+{
+    std::lock_guard<std::mutex> lock(m_faultPublicationTestMutex);
+    m_pauseNextFaultPublicationForTest = false;
+    m_faultPublicationPausedForTest = false;
+    m_faultPublicationTestChanged.notify_all();
+}
+
+void SpeechWorker::FailNextFrameAssemblyForTest()
+{
+    std::lock_guard<std::mutex> lock(m_requestMutex);
+    m_failNextFrameAssemblyForTest = true;
 }
 #endif
 
@@ -166,6 +211,26 @@ HRESULT SpeechWorker::CancelAndDrain()
 
 void SpeechWorker::EnterFaultedState()
 {
+    {
+        std::lock_guard<std::mutex> requestLock(m_requestMutex);
+        m_faultPending = true;
+    }
+
+#if defined(_DEBUG)
+    {
+        std::unique_lock<std::mutex> testLock(m_faultPublicationTestMutex);
+        if (m_pauseNextFaultPublicationForTest)
+        {
+            m_pauseNextFaultPublicationForTest = false;
+            m_faultPublicationPausedForTest = true;
+            m_faultPublicationTestChanged.notify_all();
+            m_faultPublicationTestChanged.wait(testLock, [this] {
+                return !m_faultPublicationPausedForTest || m_exit.load();
+            });
+        }
+    }
+#endif
+
     std::lock_guard<std::recursive_mutex> eventForwardLock(m_eventForwardMutex);
     m_faultVisible.store(true, std::memory_order_release);
 
@@ -173,6 +238,7 @@ void SpeechWorker::EnterFaultedState()
     m_cancellationFailed = true;
     m_frameAssembler.Reset();
     m_requestState = RequestState::Faulted;
+    m_faultPending = false;
     m_requestChanged.notify_all();
 }
 
@@ -332,13 +398,29 @@ void SpeechWorker::AudioThreadProc()
 
         uint64_t cancellationToSend = 0;
         bool protocolBoundaryFailed = false;
+        try
         {
             std::lock_guard<std::mutex> lock(m_requestMutex);
             if (m_requestState == RequestState::Speaking)
             {
+                size_t bytesToFrame = bytesRead;
+                if (m_synthesisComplete)
+                {
+                    const uint64_t remainingDeclaredBytes = m_expectedAudioBytes > m_rawAudioBytesRead
+                        ? m_expectedAudioBytes - m_rawAudioBytesRead
+                        : 0;
+                    bytesToFrame = static_cast<size_t>((std::min)(static_cast<uint64_t>(bytesRead), remainingDeclaredBytes));
+                }
                 m_rawAudioBytesRead += bytesRead;
                 bool writeAccepted = true;
-                const auto spans = m_frameAssembler.Process(buffer.data(), bytesRead);
+#if defined(_DEBUG)
+                if (m_failNextFrameAssemblyForTest)
+                {
+                    m_failNextFrameAssemblyForTest = false;
+                    throw std::bad_alloc();
+                }
+#endif
+                const auto spans = m_frameAssembler.Process(buffer.data(), bytesToFrame);
                 for (const auto& span : spans)
                 {
                     if (!m_pEngine->OnAudioData(span.data, static_cast<uint32_t>(span.size)))
@@ -378,6 +460,29 @@ void SpeechWorker::AudioThreadProc()
             {
                 // Continue draining provider PCM so its audio pipe cannot fill, but never call SAPI.
             }
+
+            if (protocolBoundaryFailed)
+            {
+                m_faultPending = true;
+            }
+        }
+        catch (const std::exception& error)
+        {
+            CoreLog(L"[SpeechWorker] Audio framing failed: %hs", error.what());
+            {
+                std::lock_guard<std::mutex> lock(m_requestMutex);
+                m_faultPending = true;
+            }
+            protocolBoundaryFailed = true;
+        }
+        catch (...)
+        {
+            CoreLog(L"[SpeechWorker] Audio framing failed with an unknown exception.");
+            {
+                std::lock_guard<std::mutex> lock(m_requestMutex);
+                m_faultPending = true;
+            }
+            protocolBoundaryFailed = true;
         }
 
         if (cancellationToSend != 0)
@@ -429,7 +534,7 @@ void SpeechWorker::ControlThreadProc()
 
                     {
                         std::lock_guard<std::mutex> lock(m_requestMutex);
-                        forwardToSapi = m_requestState != RequestState::Faulted;
+                        forwardToSapi = m_requestState != RequestState::Faulted && !m_faultPending;
                         if (eventSpeakId == m_activeSpeakId)
                         {
                             constexpr double maxExactJsonInteger = 9007199254740991.0;
@@ -441,7 +546,13 @@ void SpeechWorker::ControlThreadProc()
                                 forwardToSapi = false;
                             }
 
-                            if (eventStr == L"synthesis_complete" && m_requestState == RequestState::Speaking)
+                            if (eventStr == L"synthesis_complete" &&
+                                m_requestState == RequestState::Idle && m_synthesisComplete)
+                            {
+                                CoreLog(L"[SpeechWorker] Duplicate synthesis_complete for completed speak_id %llu.", eventSpeakId);
+                                faultAfterStateUpdate = true;
+                            }
+                            else if (eventStr == L"synthesis_complete" && m_requestState == RequestState::Speaking)
                             {
                                 if (!json.HasKey(L"total_audio_bytes") ||
                                     json.GetNamedValue(L"total_audio_bytes").ValueType() != winrt::Windows::Data::Json::JsonValueType::Number)
@@ -534,6 +645,11 @@ void SpeechWorker::ControlThreadProc()
                                         m_requestChanged.notify_all();
                                     }
                                 }
+                            }
+
+                            if (faultAfterStateUpdate)
+                            {
+                                m_faultPending = true;
                             }
                         }
                     }

@@ -75,6 +75,10 @@ public:
     void ReleaseEventForwardForTest();
     bool WaitForFaultForTest(DWORD timeoutMs);
     uint64_t RawAudioBytesForTest() const;
+    void PauseNextFaultPublicationForTest();
+    bool WaitForFaultPublicationPauseForTest(DWORD timeoutMs);
+    void ReleaseFaultPublicationForTest();
+    void FailNextFrameAssemblyForTest();
 #endif
 
 private:
@@ -129,6 +133,7 @@ private:
     std::atomic_bool m_faultVisible{false};  /**< Prevents new SAPI event callbacks once a fault is visible. */
     std::condition_variable m_requestChanged;/**< Wakes synchronous Speak and purge callers at terminal boundaries. */
     RequestState m_requestState{RequestState::Idle}; /**< Active request lifecycle state. */
+    bool m_faultPending{false};              /**< A protocol violation was detected before full Faulted publication. */
     uint64_t m_activeSpeakId{0};             /**< Identifier for the active request. */
     bool m_synthesisComplete{false};         /**< Provider has declared the final PCM byte count. */
     bool m_cancellationComplete{false};      /**< Provider has declared the final cancellation byte count. */
@@ -143,5 +148,10 @@ private:
     std::condition_variable m_eventForwardTestChanged;
     bool m_pauseNextEventForwardForTest{false};
     bool m_eventForwardPausedForTest{false};
+    std::mutex m_faultPublicationTestMutex;
+    std::condition_variable m_faultPublicationTestChanged;
+    bool m_pauseNextFaultPublicationForTest{false};
+    bool m_faultPublicationPausedForTest{false};
+    bool m_failNextFrameAssemblyForTest{false};
 #endif
 };

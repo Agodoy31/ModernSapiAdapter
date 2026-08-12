@@ -969,12 +969,101 @@ TEST_F(SapiEngineTests, DuplicateSynthesisCompleteTotalFaultsTheWorker) {
     ASSERT_TRUE(worker.Start(nullptr, 23));
 
     ASSERT_TRUE(server.WriteControl(
-        "{\"event\":\"synthesis_complete\",\"speak_id\":23,\"total_audio_bytes\":2}\n"));
+        "{\"event\":\"synthesis_complete\",\"speak_id\":23,\"total_audio_bytes\":0}\n"));
+    ASSERT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
     ASSERT_TRUE(server.WriteControl(
-        "{\"event\":\"synthesis_complete\",\"speak_id\":23,\"total_audio_bytes\":2}\n"));
+        "{\"event\":\"synthesis_complete\",\"speak_id\":23,\"total_audio_bytes\":0}\n"));
 
     EXPECT_TRUE(worker.WaitForFaultForTest(1000));
     EXPECT_TRUE(worker.IsFaulted());
+}
+
+TEST_F(SapiEngineTests, StaleSynthesisCompleteForDifferentSpeakIdDoesNotFaultIdleWorker) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 32));
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":32,\"total_audio_bytes\":0}\n"));
+    ASSERT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
+    worker.PauseNextEventForwardForTest();
+
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":31,\"total_audio_bytes\":0}\n"));
+    const bool eventPaused = worker.WaitForEventForwardPauseForTest(1000);
+    worker.ReleaseEventForwardForTest();
+
+    EXPECT_TRUE(eventPaused);
+    EXPECT_FALSE(worker.IsFaulted());
+    EXPECT_TRUE(worker.Start(nullptr, 33));
+    worker.Stop();
+}
+
+TEST_F(SapiEngineTests, TerminalBeforeOverrunAudioForwardsOnlyDeclaredFrames) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 26));
+    worker.PauseNextEventForwardForTest();
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":26,\"total_audio_bytes\":2}\n"));
+    ASSERT_TRUE(worker.WaitForEventForwardPauseForTest(1000));
+
+    ASSERT_TRUE(server.WriteAudio({ 0xC1, 0xC2, 0xD1, 0xD2 }));
+    worker.ReleaseEventForwardForTest();
+
+    ASSERT_TRUE(worker.WaitForFaultForTest(1000));
+    std::lock_guard<std::mutex> lock(mockSite->writesMutex);
+    EXPECT_EQ(mockSite->requestedWriteSizes, (std::vector<ULONG>{ 2 }));
+    EXPECT_EQ(mockSite->acceptedAudio, (std::vector<uint8_t>{ 0xC1, 0xC2 }));
+}
+
+TEST_F(SapiEngineTests, WorkerReassemblesAwkward24BitStereoPipeFragments) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+    SpeechWorker worker(engine.get(), &client, 6);
+    ASSERT_TRUE(worker.Start(nullptr, 27));
+
+    ASSERT_TRUE(server.WriteAudio({ 0x01 }));
+    for (int attempt = 0; attempt < 100 && worker.RawAudioBytesForTest() != 1; ++attempt) Sleep(1);
+    ASSERT_EQ(worker.RawAudioBytesForTest(), 1u);
+    ASSERT_TRUE(server.WriteAudio({ 0x02, 0x03, 0x04, 0x05 }));
+    for (int attempt = 0; attempt < 100 && worker.RawAudioBytesForTest() != 5; ++attempt) Sleep(1);
+    ASSERT_EQ(worker.RawAudioBytesForTest(), 5u);
+    ASSERT_TRUE(server.WriteAudio({ 0x06, 0x11, 0x12 }));
+    for (int attempt = 0; attempt < 100 && worker.RawAudioBytesForTest() != 8; ++attempt) Sleep(1);
+    ASSERT_EQ(worker.RawAudioBytesForTest(), 8u);
+    ASSERT_TRUE(server.WriteAudio({ 0x13, 0x14, 0x15, 0x16, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26 }));
+    for (int attempt = 0; attempt < 100 && worker.RawAudioBytesForTest() != 18; ++attempt) Sleep(1);
+    ASSERT_EQ(worker.RawAudioBytesForTest(), 18u);
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":27,\"total_audio_bytes\":18}\n"));
+    ASSERT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
+
+    std::lock_guard<std::mutex> lock(mockSite->writesMutex);
+    ASSERT_FALSE(mockSite->requestedWriteSizes.empty());
+    EXPECT_TRUE(std::all_of(mockSite->requestedWriteSizes.begin(), mockSite->requestedWriteSizes.end(),
+        [](ULONG requestedSize) { return requestedSize % 6 == 0; }));
+    EXPECT_EQ(mockSite->acceptedAudio, (std::vector<uint8_t>{
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+        0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+        0x21, 0x22, 0x23, 0x24, 0x25, 0x26 }));
 }
 
 TEST_F(SapiEngineTests, AudioAfterNormalCompletionFaultsIdleWorker) {
@@ -994,6 +1083,51 @@ TEST_F(SapiEngineTests, AudioAfterNormalCompletionFaultsIdleWorker) {
 
     EXPECT_TRUE(worker.WaitForFaultForTest(1000));
     EXPECT_TRUE(worker.IsFaulted());
+}
+
+TEST_F(SapiEngineTests, FaultPendingRejectsStartBeforeFaultPublicationCompletes) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 28));
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":28,\"total_audio_bytes\":0}\n"));
+    ASSERT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
+    worker.PauseNextFaultPublicationForTest();
+
+    ASSERT_TRUE(server.WriteAudio({ 0xE1, 0xE2 }));
+    const bool publicationPaused = worker.WaitForFaultPublicationPauseForTest(1000);
+    EXPECT_TRUE(publicationPaused);
+    EXPECT_TRUE(worker.IsFaulted());
+    EXPECT_FALSE(worker.Start(nullptr, 29));
+    worker.ReleaseFaultPublicationForTest();
+
+    EXPECT_TRUE(worker.WaitForFaultForTest(1000));
+    EXPECT_TRUE(worker.IsFaulted());
+}
+
+TEST_F(SapiEngineTests, FrameAssemblyFailureFaultsWorkerWithoutEscapingThread) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 30));
+    worker.FailNextFrameAssemblyForTest();
+
+    ASSERT_TRUE(server.WriteAudio({ 0xF1, 0xF2 }));
+
+    EXPECT_TRUE(worker.WaitForFaultForTest(1000));
+    EXPECT_TRUE(worker.IsFaulted());
+    EXPECT_EQ(mockSite->writeCallCount.load(), 0u);
 }
 
 TEST_F(SapiEngineTests, AudioAfterCancellationCompletionFaultsIdleWorker) {
