@@ -2,10 +2,28 @@
 #include "MockSapiInterfaces.h"
 #include "../CoreEngine/PipeClient.h"
 #include "../CoreEngine/SapiEngine.h"
+#include "../CoreEngine/PcmFrameAssembler.h"
 #include <sddl.h>
 
 namespace
 {
+std::vector<uint8_t> FeedPcmFragments(PcmFrameAssembler& assembler,
+    const std::vector<std::vector<uint8_t>>& fragments,
+    std::vector<size_t>& emittedSizes)
+{
+    std::vector<uint8_t> output;
+    for (const auto& fragment : fragments)
+    {
+        const auto spans = assembler.Process(fragment.data(), fragment.size());
+        for (const auto& span : spans)
+        {
+            emittedSizes.push_back(span.size);
+            output.insert(output.end(), span.data, span.data + span.size);
+        }
+    }
+    return output;
+}
+
 class CoreEngineDll
 {
 public:
@@ -174,6 +192,16 @@ public:
         return WriteFile(m_controlPipe.get(), text.data(), static_cast<DWORD>(text.size()), &bytesWritten, nullptr) && bytesWritten == text.size();
     }
 
+    bool WriteAudio(const std::vector<uint8_t>& bytes)
+    {
+        if (m_connectThread.joinable()) m_connectThread.join();
+        if (m_connectError != ERROR_SUCCESS) return false;
+
+        DWORD bytesWritten = 0;
+        return WriteFile(m_audioPipe.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &bytesWritten, nullptr) &&
+            bytesWritten == bytes.size();
+    }
+
     bool ReadControl(std::string& text)
     {
         if (m_connectThread.joinable()) m_connectThread.join();
@@ -284,6 +312,60 @@ protected:
     }
 
 };
+
+TEST(PcmFrameAssemblerTests, OneByteFragmentsDoNotProducePartial16BitMonoFrames) {
+    PcmFrameAssembler assembler(2);
+    std::vector<size_t> emittedSizes;
+
+    const auto output = FeedPcmFragments(assembler,
+        { { 0x10 }, { 0x11 }, { 0x20 }, { 0x21 } }, emittedSizes);
+
+    EXPECT_EQ(emittedSizes, (std::vector<size_t>{ 2, 2 }));
+    EXPECT_EQ(output, (std::vector<uint8_t>{ 0x10, 0x11, 0x20, 0x21 }));
+    EXPECT_FALSE(assembler.HasCarry());
+}
+
+TEST(PcmFrameAssemblerTests, Awkward24BitStereoBoundariesPreserveEveryProviderByte) {
+    PcmFrameAssembler assembler(6);
+    std::vector<size_t> emittedSizes;
+
+    const auto output = FeedPcmFragments(assembler,
+        { { 0x01 }, { 0x02, 0x03, 0x04, 0x05 }, { 0x06, 0x11, 0x12 },
+          { 0x13, 0x14, 0x15, 0x16, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26 } }, emittedSizes);
+
+    EXPECT_EQ(emittedSizes, (std::vector<size_t>{ 6, 6, 6 }));
+    EXPECT_EQ(output, (std::vector<uint8_t>{
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+        0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+        0x21, 0x22, 0x23, 0x24, 0x25, 0x26 }));
+    EXPECT_FALSE(assembler.HasCarry());
+}
+
+TEST(PcmFrameAssemblerTests, ResetPreventsPartialFrameBytesCrossingRequestBoundaries) {
+    PcmFrameAssembler assembler(6);
+    EXPECT_TRUE(assembler.Process(std::vector<uint8_t>{ 0xA1, 0xA2 }.data(), 2).empty());
+
+    assembler.Reset();
+    std::vector<size_t> emittedSizes;
+    const auto output = FeedPcmFragments(assembler,
+        { { 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6 } }, emittedSizes);
+
+    EXPECT_EQ(emittedSizes, (std::vector<size_t>{ 6 }));
+    EXPECT_EQ(output, (std::vector<uint8_t>{ 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6 }));
+    EXPECT_FALSE(assembler.HasCarry());
+}
+
+TEST(PcmFrameAssemblerTests, AlignedInputWithoutCarryUsesTheOriginalBuffer) {
+    PcmFrameAssembler assembler(6);
+    const std::vector<uint8_t> input{ 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+                                      0x11, 0x12, 0x13, 0x14, 0x15, 0x16 };
+
+    const auto spans = assembler.Process(input.data(), input.size());
+
+    ASSERT_EQ(spans.size(), 1u);
+    EXPECT_EQ(spans[0].data, input.data());
+    EXPECT_EQ(spans[0].size, 12u);
+}
 
 TEST_F(SapiEngineTests, DllCanUnloadNowTracksFactoryLifetime) {
     CoreEngineDll module;
@@ -664,6 +746,12 @@ TEST_F(SapiEngineTests, SpeakWaitsForSynthesisCompleteByteBoundary) {
     EXPECT_EQ(hr, S_OK);
     EXPECT_GT(mockSite->writeCallCount.load(), 0u);
     EXPECT_EQ(mockSite->totalBytesWritten.load(), 48000u);
+    {
+        std::lock_guard<std::mutex> lock(mockSite->writesMutex);
+        ASSERT_FALSE(mockSite->requestedWriteSizes.empty());
+        EXPECT_TRUE(std::all_of(mockSite->requestedWriteSizes.begin(), mockSite->requestedWriteSizes.end(),
+            [](ULONG requestedSize) { return requestedSize % 2 == 0; }));
+    }
 
     std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
     EXPECT_GT(mockSite->receivedEvents.size(), 0u);
@@ -800,7 +888,7 @@ TEST_F(SapiEngineTests, InvalidCancellationBoundaryFaultsTheWorker) {
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
 
     auto engine = winrt::make_self<CSapiEngine>();
-    SpeechWorker worker(engine.get(), &client);
+    SpeechWorker worker(engine.get(), &client, 2);
     ASSERT_TRUE(worker.Start(nullptr, 7));
 
     HRESULT cancellationResult = S_OK;
@@ -817,6 +905,85 @@ TEST_F(SapiEngineTests, InvalidCancellationBoundaryFaultsTheWorker) {
     cancellationThread.join();
     EXPECT_EQ(cancellationResult, E_FAIL);
     EXPECT_TRUE(worker.IsFaulted());
+}
+
+TEST_F(SapiEngineTests, MisalignedSynthesisCompleteTotalFaultsTheWorker) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 11));
+
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":11,\"total_audio_bytes\":1}\n"));
+
+    EXPECT_TRUE(worker.WaitForFaultForTest(1000));
+    EXPECT_TRUE(worker.IsFaulted());
+}
+
+TEST_F(SapiEngineTests, MisalignedCancellationTotalFaultsTheWorker) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 12));
+
+    HRESULT cancellationResult = S_OK;
+    std::thread cancellationThread([&] { cancellationResult = worker.CancelAndDrain(); });
+    ThreadJoinGuard cancellationJoin(cancellationThread);
+    std::string cancellationRequest;
+    ASSERT_TRUE(server.ReadControl(cancellationRequest));
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_cancelled\",\"speak_id\":12,\"audio_bytes_written\":1}\n"));
+
+    cancellationThread.join();
+    EXPECT_EQ(cancellationResult, E_FAIL);
+    EXPECT_TRUE(worker.IsFaulted());
+}
+
+TEST_F(SapiEngineTests, CancellationDiscardsCarriedPcmBeforeTheNextRequest) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 13));
+    ASSERT_TRUE(server.WriteAudio({ 0xA1 }));
+    for (int attempt = 0; attempt < 100 && worker.RawAudioBytesForTest() != 1; ++attempt) Sleep(1);
+    ASSERT_EQ(worker.RawAudioBytesForTest(), 1u);
+
+    HRESULT cancellationResult = E_FAIL;
+    std::thread cancellationThread([&] { cancellationResult = worker.CancelAndDrain(); });
+    ThreadJoinGuard cancellationJoin(cancellationThread);
+    std::string cancellationRequest;
+    ASSERT_TRUE(server.ReadControl(cancellationRequest));
+    ASSERT_TRUE(server.WriteAudio({ 0xA2 }));
+    for (int attempt = 0; attempt < 100 && worker.RawAudioBytesForTest() != 2; ++attempt) Sleep(1);
+    ASSERT_EQ(worker.RawAudioBytesForTest(), 2u);
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_cancelled\",\"speak_id\":13,\"audio_bytes_written\":2}\n"));
+    cancellationThread.join();
+    ASSERT_EQ(cancellationResult, S_OK);
+
+    ASSERT_TRUE(worker.Start(nullptr, 14));
+    ASSERT_TRUE(server.WriteAudio({ 0xB1, 0xB2 }));
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":14,\"total_audio_bytes\":2}\n"));
+    ASSERT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
+
+    std::lock_guard<std::mutex> lock(mockSite->writesMutex);
+    EXPECT_EQ(mockSite->requestedWriteSizes, (std::vector<ULONG>{ 2 }));
+    EXPECT_EQ(mockSite->acceptedAudio, (std::vector<uint8_t>{ 0xB1, 0xB2 }));
 }
 
 TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak) {

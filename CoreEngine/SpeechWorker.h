@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <mutex>
 #include "PipeClient.h"
+#include "PcmFrameAssembler.h"
 
 class CSapiEngine;
 
@@ -27,7 +28,7 @@ public:
      * @param pEngine Pointer to parent CSapiEngine instance.
      * @param pClient Raw PipeClient IPC transport owned by CSapiEngine.
      */
-    SpeechWorker(CSapiEngine* pEngine, PipeClient* pClient);
+    SpeechWorker(CSapiEngine* pEngine, PipeClient* pClient, WORD blockAlign);
 
     /**
      * @brief Destructs SpeechWorker, stopping and joining background worker threads.
@@ -73,6 +74,7 @@ public:
     bool WaitForEventForwardPauseForTest(DWORD timeoutMs);
     void ReleaseEventForwardForTest();
     bool WaitForFaultForTest(DWORD timeoutMs);
+    uint64_t RawAudioBytesForTest() const;
 #endif
 
 private:
@@ -89,7 +91,7 @@ private:
     /**
      * @brief Completes speech only when the provider-declared PCM boundary has reached SAPI.
      */
-    void CompleteIfAudioBoundaryReached();
+    bool CompleteIfAudioBoundaryReached();
 
     /**
      * @brief Completes cancellation only after all provider-committed old PCM has been discarded.
@@ -135,6 +137,7 @@ private:
     uint64_t m_cancelledAudioBytes{0};       /**< Raw PCM bytes committed before cancellation. */
     uint64_t m_rawAudioBytesRead{0};         /**< Raw bytes consumed from the audio pipe for the active request. */
     uint64_t m_deliveredAudioBytes{0};       /**< Bytes successfully written to ISpTTSEngineSite. */
+    PcmFrameAssembler m_frameAssembler;      /**< Reassembles provider-native PCM frames under m_requestMutex. */
 #if defined(_DEBUG)
     std::mutex m_eventForwardTestMutex;
     std::condition_variable m_eventForwardTestChanged;

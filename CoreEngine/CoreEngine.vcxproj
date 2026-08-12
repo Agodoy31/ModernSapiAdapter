@@ -167,6 +167,7 @@
     <ClInclude Include="AsyncLogger.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="PipeClient.h" />
+    <ClInclude Include="PcmFrameAssembler.h" />
     <ClInclude Include="SapiEngine.h" />
     <ClInclude Include="SpeechWorker.h" />
   </ItemGroup>
@@ -174,6 +175,7 @@
     <ClCompile Include="AsyncLogger.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="PipeClient.cpp" />
+    <ClCompile Include="PcmFrameAssembler.cpp" />
     <ClCompile Include="SapiEngine.cpp" />
     <ClCompile Include="SpeechWorker.cpp" />
     <ClCompile Include="pch.cpp">

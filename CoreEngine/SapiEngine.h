@@ -21,6 +21,7 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_CreateProviderSessionDoesNotPublishAnInvalidInfoResponse_Test;
     friend class SapiEngineTests_FaultedSessionDoesNotForwardAnEventPausedBeforeItsSapiCallback_Test;
     friend class SapiEngineTests_OnSpeechEventAlignsOffsetsToPcmFrames_Test;
+    friend class SapiEngineTests_CancellationDiscardsCarriedPcmBeforeTheNextRequest_Test;
 public:
     /**
      * @brief Constructs a new CSapiEngine instance.

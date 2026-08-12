@@ -2,8 +2,8 @@
 #include "SpeechWorker.h"
 #include "SapiEngine.h"
 
-SpeechWorker::SpeechWorker(CSapiEngine* pEngine, PipeClient* pClient)
-    : m_pEngine(pEngine), m_pClient(pClient), m_exit(false)
+SpeechWorker::SpeechWorker(CSapiEngine* pEngine, PipeClient* pClient, WORD blockAlign)
+    : m_pEngine(pEngine), m_pClient(pClient), m_exit(false), m_frameAssembler(blockAlign)
 {
     m_audioThread = std::thread(&SpeechWorker::AudioThreadProc, this);
     m_controlThread = std::thread(&SpeechWorker::ControlThreadProc, this);
@@ -42,6 +42,7 @@ bool SpeechWorker::Start(void* /*pSite*/, uint64_t speakId)
     m_synthesisComplete = false;
     m_cancellationComplete = false;
     m_cancellationFailed = false;
+    m_frameAssembler.Reset();
     m_requestState = RequestState::Speaking;
     return true;
 }
@@ -89,6 +90,12 @@ bool SpeechWorker::WaitForFaultForTest(DWORD timeoutMs)
     }
     return m_faultVisible.load(std::memory_order_acquire);
 }
+
+uint64_t SpeechWorker::RawAudioBytesForTest() const
+{
+    std::lock_guard<std::mutex> lock(m_requestMutex);
+    return m_rawAudioBytesRead;
+}
 #endif
 
 void SpeechWorker::Stop()
@@ -107,6 +114,7 @@ void SpeechWorker::Stop()
         }
 
         speakId = m_activeSpeakId;
+        m_frameAssembler.Reset();
         m_requestState = RequestState::Idle;
         m_requestChanged.notify_all();
     }
@@ -137,6 +145,7 @@ HRESULT SpeechWorker::CancelAndDrain()
         speakId = m_activeSpeakId;
         m_cancellationComplete = false;
         m_cancellationFailed = false;
+        m_frameAssembler.Reset();
         m_requestState = RequestState::Cancelling;
     }
 
@@ -162,6 +171,7 @@ void SpeechWorker::EnterFaultedState()
 
     std::lock_guard<std::mutex> requestLock(m_requestMutex);
     m_cancellationFailed = true;
+    m_frameAssembler.Reset();
     m_requestState = RequestState::Faulted;
     m_requestChanged.notify_all();
 }
@@ -246,25 +256,33 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
     return S_OK;
 }
 
-void SpeechWorker::CompleteIfAudioBoundaryReached()
+bool SpeechWorker::CompleteIfAudioBoundaryReached()
 {
     if (!m_synthesisComplete || m_requestState != RequestState::Speaking)
     {
-        return;
+        return false;
     }
 
-    if (m_deliveredAudioBytes == m_expectedAudioBytes)
+    if (m_rawAudioBytesRead == m_expectedAudioBytes &&
+        m_deliveredAudioBytes == m_expectedAudioBytes &&
+        !m_frameAssembler.HasCarry())
     {
+        m_frameAssembler.Reset();
         m_requestState = RequestState::Idle;
         m_requestChanged.notify_all();
+        return false;
     }
-    else if (m_deliveredAudioBytes > m_expectedAudioBytes)
+    else if (m_rawAudioBytesRead > m_expectedAudioBytes ||
+             m_deliveredAudioBytes > m_expectedAudioBytes ||
+             (m_rawAudioBytesRead == m_expectedAudioBytes &&
+              (m_deliveredAudioBytes != m_expectedAudioBytes || m_frameAssembler.HasCarry())))
     {
-        CoreLog(L"[SpeechWorker] Provider declared %llu audio bytes after %llu bytes were already delivered.",
-            m_expectedAudioBytes, m_deliveredAudioBytes);
-        m_requestState = RequestState::Idle;
-        m_requestChanged.notify_all();
+        CoreLog(L"[SpeechWorker] Provider audio boundary disagrees with raw (%llu), delivered (%llu), or carried PCM.",
+            m_rawAudioBytesRead, m_deliveredAudioBytes);
+        return true;
     }
+
+    return false;
 }
 
 bool SpeechWorker::CompleteCancellationIfAudioBoundaryReached()
@@ -276,6 +294,7 @@ bool SpeechWorker::CompleteCancellationIfAudioBoundaryReached()
 
     if (m_rawAudioBytesRead == m_cancelledAudioBytes)
     {
+        m_frameAssembler.Reset();
         m_requestState = RequestState::Idle;
         m_requestChanged.notify_all();
         return false;
@@ -318,19 +337,31 @@ void SpeechWorker::AudioThreadProc()
             if (m_requestState == RequestState::Speaking)
             {
                 m_rawAudioBytesRead += bytesRead;
-                if (!m_pEngine->OnAudioData(buffer.data(), bytesRead))
+                bool writeAccepted = true;
+                const auto spans = m_frameAssembler.Process(buffer.data(), bytesRead);
+                for (const auto& span : spans)
+                {
+                    if (!m_pEngine->OnAudioData(span.data, static_cast<uint32_t>(span.size)))
+                    {
+                        writeAccepted = false;
+                        break;
+                    }
+                    m_deliveredAudioBytes += span.size;
+                }
+
+                if (!writeAccepted)
                 {
                     CoreLog(L"[SpeechWorker] SAPI rejected an audio write; cancelling active synthesis.");
                     cancellationToSend = m_activeSpeakId;
                     m_cancelledAudioBytes = 0;
                     m_cancellationComplete = false;
                     m_cancellationFailed = false;
+                    m_frameAssembler.Reset();
                     m_requestState = RequestState::Cancelling;
                 }
                 else
                 {
-                    m_deliveredAudioBytes += bytesRead;
-                    CompleteIfAudioBoundaryReached();
+                    cancellationBoundaryFailed = CompleteIfAudioBoundaryReached();
                 }
             }
             else if (m_requestState == RequestState::Cancelling)
@@ -411,6 +442,7 @@ void SpeechWorker::ControlThreadProc()
                                     json.GetNamedValue(L"total_audio_bytes").ValueType() != winrt::Windows::Data::Json::JsonValueType::Number)
                                 {
                                     CoreLog(L"[SpeechWorker] synthesis_complete for speak_id %llu omitted total_audio_bytes.", eventSpeakId);
+                                    m_frameAssembler.Reset();
                                     m_requestState = RequestState::Idle;
                                     m_requestChanged.notify_all();
                                 }
@@ -423,14 +455,23 @@ void SpeechWorker::ControlThreadProc()
                                         m_synthesisComplete)
                                     {
                                         CoreLog(L"[SpeechWorker] synthesis_complete for speak_id %llu has an invalid or duplicate total_audio_bytes value.", eventSpeakId);
+                                        m_frameAssembler.Reset();
                                         m_requestState = RequestState::Idle;
                                         m_requestChanged.notify_all();
                                     }
                                     else
                                     {
                                         m_expectedAudioBytes = static_cast<uint64_t>(totalAudioBytesValue);
-                                        m_synthesisComplete = true;
-                                        CompleteIfAudioBoundaryReached();
+                                        if (m_expectedAudioBytes % m_frameAssembler.BlockAlign() != 0)
+                                        {
+                                            CoreLog(L"[SpeechWorker] synthesis_complete for speak_id %llu is not PCM-frame aligned.", eventSpeakId);
+                                            faultAfterStateUpdate = true;
+                                        }
+                                        else
+                                        {
+                                            m_synthesisComplete = true;
+                                            faultAfterStateUpdate = CompleteIfAudioBoundaryReached();
+                                        }
                                     }
                                 }
                             }
@@ -456,8 +497,16 @@ void SpeechWorker::ControlThreadProc()
                                     else
                                     {
                                         m_cancelledAudioBytes = static_cast<uint64_t>(cancelledAudioBytesValue);
-                                        m_cancellationComplete = true;
-                                        faultAfterStateUpdate = CompleteCancellationIfAudioBoundaryReached();
+                                        if (m_cancelledAudioBytes % m_frameAssembler.BlockAlign() != 0)
+                                        {
+                                            CoreLog(L"[SpeechWorker] synthesis_cancelled for speak_id %llu is not PCM-frame aligned.", eventSpeakId);
+                                            faultAfterStateUpdate = true;
+                                        }
+                                        else
+                                        {
+                                            m_cancellationComplete = true;
+                                            faultAfterStateUpdate = CompleteCancellationIfAudioBoundaryReached();
+                                        }
                                     }
                                 }
                             }
@@ -479,6 +528,7 @@ void SpeechWorker::ControlThreadProc()
                                     }
                                     else
                                     {
+                                        m_frameAssembler.Reset();
                                         m_requestState = RequestState::Idle;
                                         m_requestChanged.notify_all();
                                     }

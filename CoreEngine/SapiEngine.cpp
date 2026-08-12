@@ -410,7 +410,7 @@ HRESULT CSapiEngine::CreateProviderSessionLocked()
             return E_FAIL;
         }
 
-        auto candidateWorker = std::make_unique<SpeechWorker>(this, candidateClient.get());
+        auto candidateWorker = std::make_unique<SpeechWorker>(this, candidateClient.get(), candidateFormat.nBlockAlign);
         m_pClient = std::move(candidateClient);
         m_pWorker = std::move(candidateWorker);
         if (!m_hasOutputFormat)

@@ -38,6 +38,9 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
     std::function<DWORD()> getActionsCallback;
     std::mutex eventsMutex;
     std::vector<SPEVENT> receivedEvents;
+    std::mutex writesMutex;
+    std::vector<ULONG> requestedWriteSizes;
+    std::vector<uint8_t> acceptedAudio;
 
     IFACEMETHODIMP AddEvents(const SPEVENT* pEventArray, ULONG ulCount) noexcept override {
         std::lock_guard<std::mutex> lock(eventsMutex);
@@ -53,14 +56,23 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
     IFACEMETHODIMP_(DWORD) GetActions() noexcept override {
         return getActionsCallback ? getActionsCallback() : actions.load();
     }
-    IFACEMETHODIMP Write(const void*, ULONG cb, ULONG* pcbWritten) noexcept override {
+    IFACEMETHODIMP Write(const void* data, ULONG cb, ULONG* pcbWritten) noexcept override {
         writeCallCount++;
+        {
+            std::lock_guard<std::mutex> lock(writesMutex);
+            requestedWriteSizes.push_back(cb);
+        }
         if (rejectNextWrite.exchange(false)) {
             m_rejectedWriteObserved = true;
             if (pcbWritten) *pcbWritten = 0;
             return E_FAIL;
         }
         totalBytesWritten += cb;
+        {
+            std::lock_guard<std::mutex> lock(writesMutex);
+            const auto bytes = static_cast<const uint8_t*>(data);
+            acceptedAudio.insert(acceptedAudio.end(), bytes, bytes + cb);
+        }
         if (m_rejectedWriteObserved.load()) {
             bytesAcceptedAfterRejectedWrite += cb;
         }

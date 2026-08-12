@@ -12,7 +12,7 @@ This specification details the pipe path security model, control message schemas
 | :--- | :--- |
 | **Target Platform** | Windows 11 (x64, ARM64) |
 | **Control Pipe Format** | Bi-directional, newline-delimited UTF-8 JSON (`PIPE_READMODE_BYTE`) |
-| **Audio Pipe Format** | Inbound, raw 16-bit Mono PCM streaming (`PIPE_READMODE_BYTE`) |
+| **Audio Pipe Format** | Inbound, provider-native raw PCM streaming (`PIPE_READMODE_BYTE`) |
 | **Security Isolation** | Dynamic Windows User SID path injection |
 | **Default Audio Format** | 24,000 Hz, 16-bit Mono PCM |
 
@@ -360,7 +360,8 @@ uncommitted audio for that request, and can accept another `sapi_speak`.
 - Preserve the `speak_id` from the cancelled request.
 - `audio_bytes_written` is a non-negative integer equal to the number of raw
   PCM bytes from that request that have been committed to the audio named pipe.
-  It is not the number of bytes merely accepted into an internal queue.
+  It is not the number of bytes merely accepted into an internal queue, and it
+  must be a multiple of the negotiated format's block alignment.
 - Before sending the event, discard any uncommitted audio and wait for any
   in-flight audio-pipe write to finish. After the event, write no more PCM or
   normal speech events for that `speak_id`.
@@ -407,5 +408,6 @@ Fired if the provider encounters an issue, diagnostic event, or synthesis failur
 The Audio Pipe is a unidirectional, raw byte stream (`PIPE_READMODE_BYTE`).
 
 - **Headerless Raw PCM:** Audio data is streamed as uncompressed PCM samples without WAV headers.
-- **Buffer Alignment:** Audio chunks are read in 4096-byte buffers and passed directly to `ISpTTSEngineSite::Write()`.
+- **Frame Alignment:** Byte-mode pipe read boundaries are arbitrary and may split a PCM frame. CoreEngine reconstructs complete frames using the negotiated block alignment (`channels * bits_per_sample / 8`), forwards complete frames immediately, and retains at most one partial frame until the next read.
+- **Terminal Alignment:** Both `synthesis_complete.total_audio_bytes` and `synthesis_cancelled.audio_bytes_written` must be multiples of the negotiated block alignment. A trailing partial frame is a provider protocol error; CoreEngine never pads it.
 - **Sample Rate:** The sample rate, bit depth, and channel count must match the parameters returned in the `info` response.
