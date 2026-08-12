@@ -7,17 +7,12 @@ inline std::wstring GetMockProviderPath()
 
     const auto testOutputDirectory = std::filesystem::path(modulePath).parent_path();
     const auto binaryDirectory = testOutputDirectory.parent_path().parent_path().parent_path();
-#if defined(_M_ARM64)
-    constexpr const wchar_t* platform = L"ARM64";
-#else
-    constexpr const wchar_t* platform = L"x64";
-#endif
 #if defined(_DEBUG)
     constexpr const wchar_t* configuration = L"Debug";
 #else
     constexpr const wchar_t* configuration = L"Release";
 #endif
-    return (binaryDirectory / L"MockProvider" / platform / configuration / L"MockProvider.exe").wstring();
+    return (binaryDirectory / L"MockProvider" / L"AnyCPU" / configuration / L"MockProvider.exe").wstring();
 }
 
 inline HRESULT CopyMockTokenString(const std::wstring& value, LPWSTR* output)
