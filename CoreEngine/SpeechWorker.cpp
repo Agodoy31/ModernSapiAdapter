@@ -29,7 +29,7 @@ SpeechWorker::~SpeechWorker()
 bool SpeechWorker::Start(void* /*pSite*/, uint64_t speakId)
 {
     std::lock_guard<std::mutex> lock(m_requestMutex);
-    if (m_requestState == RequestState::Faulted)
+    if (m_requestState != RequestState::Idle)
     {
         return false;
     }
@@ -331,7 +331,7 @@ void SpeechWorker::AudioThreadProc()
         }
 
         uint64_t cancellationToSend = 0;
-        bool cancellationBoundaryFailed = false;
+        bool protocolBoundaryFailed = false;
         {
             std::lock_guard<std::mutex> lock(m_requestMutex);
             if (m_requestState == RequestState::Speaking)
@@ -361,13 +361,18 @@ void SpeechWorker::AudioThreadProc()
                 }
                 else
                 {
-                    cancellationBoundaryFailed = CompleteIfAudioBoundaryReached();
+                    protocolBoundaryFailed = CompleteIfAudioBoundaryReached();
                 }
             }
             else if (m_requestState == RequestState::Cancelling)
             {
                 m_rawAudioBytesRead += bytesRead;
-                cancellationBoundaryFailed = CompleteCancellationIfAudioBoundaryReached();
+                protocolBoundaryFailed = CompleteCancellationIfAudioBoundaryReached();
+            }
+            else if (m_requestState == RequestState::Idle)
+            {
+                CoreLog(L"[SpeechWorker] Provider sent audio after the active request reached its terminal boundary.");
+                protocolBoundaryFailed = true;
             }
             else if (m_requestState == RequestState::Faulted)
             {
@@ -387,7 +392,7 @@ void SpeechWorker::AudioThreadProc()
             }
         }
 
-        if (cancellationBoundaryFailed)
+        if (protocolBoundaryFailed)
         {
             EnterFaultedState();
         }
@@ -442,9 +447,7 @@ void SpeechWorker::ControlThreadProc()
                                     json.GetNamedValue(L"total_audio_bytes").ValueType() != winrt::Windows::Data::Json::JsonValueType::Number)
                                 {
                                     CoreLog(L"[SpeechWorker] synthesis_complete for speak_id %llu omitted total_audio_bytes.", eventSpeakId);
-                                    m_frameAssembler.Reset();
-                                    m_requestState = RequestState::Idle;
-                                    m_requestChanged.notify_all();
+                                    faultAfterStateUpdate = true;
                                 }
                                 else
                                 {
@@ -455,9 +458,7 @@ void SpeechWorker::ControlThreadProc()
                                         m_synthesisComplete)
                                     {
                                         CoreLog(L"[SpeechWorker] synthesis_complete for speak_id %llu has an invalid or duplicate total_audio_bytes value.", eventSpeakId);
-                                        m_frameAssembler.Reset();
-                                        m_requestState = RequestState::Idle;
-                                        m_requestChanged.notify_all();
+                                        faultAfterStateUpdate = true;
                                     }
                                     else
                                     {
