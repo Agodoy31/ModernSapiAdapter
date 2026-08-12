@@ -74,12 +74,13 @@ private:
     wil::unique_handle m_audioPipe;                 /**< Overlapped handle to Audio Pipe. */
     wil::unique_process_information m_providerProcess; /**< Process information handle of launched provider. */
     std::string m_controlInputBuffer;                /**< Retained bytes after the most recently extracted JSON line. */
+    size_t m_controlInputOffset{0};                  /**< Offset of unparsed data in control input buffer. */
+    size_t m_controlSearchOffset{0};                 /**< Search offset to prevent O(N^2) scanning. */
     std::mutex m_controlWriteMutex;                  /**< Serializes newline-delimited JSON writes to the byte-mode control pipe. */
 #if defined(_DEBUG)
     std::atomic_bool m_failNextCancellationMessageForTest{false}; /**< Test-only cancellation write failure injection. */
     std::atomic_bool m_failNextSpeakMessageForTest{false}; /**< Test-only initial speak write failure injection. */
 #endif
-
     /**
      * @brief Internal helper to attempt connection to Control and Audio pipes.
      * @param controlPipePath Full pipe path for control channel.

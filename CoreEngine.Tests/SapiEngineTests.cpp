@@ -843,6 +843,111 @@ TEST_F(SapiEngineTests, ReadControlMessageReassemblesFragmentedJsonLine) {
     EXPECT_EQ(message.GetNamedString(L"event"), L"fragmented");
 }
 
+TEST_F(SapiEngineTests, ReadControlMessageOffsetInfrastructureSupportsSequentialReads) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    ASSERT_TRUE(server.WriteControl("{\"id\":1}\n{\"id\":2}\n{\"id\":3}\n"));
+
+    winrt::Windows::Data::Json::JsonObject msg1 = nullptr;
+    winrt::Windows::Data::Json::JsonObject msg2 = nullptr;
+    winrt::Windows::Data::Json::JsonObject msg3 = nullptr;
+
+    ASSERT_EQ(client.ReadControlMessage(msg1), S_OK);
+    ASSERT_EQ(client.ReadControlMessage(msg2), S_OK);
+    ASSERT_EQ(client.ReadControlMessage(msg3), S_OK);
+
+    EXPECT_EQ(msg1.GetNamedNumber(L"id"), 1);
+    EXPECT_EQ(msg2.GetNamedNumber(L"id"), 2);
+    EXPECT_EQ(msg3.GetNamedNumber(L"id"), 3);
+}
+
+TEST_F(SapiEngineTests, ReadControlMessageHandlesCRLFAndEmptyLines) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    ASSERT_TRUE(server.WriteControl("\r\n{\"msg\":\"hello\"}\r\n\n{\"msg\":\"world\"}\n"));
+
+    winrt::Windows::Data::Json::JsonObject msg1 = nullptr;
+    winrt::Windows::Data::Json::JsonObject msg2 = nullptr;
+
+    EXPECT_EQ(client.ReadControlMessage(msg1), S_FALSE);
+    EXPECT_EQ(msg1, nullptr);
+
+    ASSERT_EQ(client.ReadControlMessage(msg1), S_OK);
+    ASSERT_NE(msg1, nullptr);
+    EXPECT_EQ(msg1.GetNamedString(L"msg"), L"hello");
+
+    EXPECT_EQ(client.ReadControlMessage(msg2), S_FALSE);
+
+    ASSERT_EQ(client.ReadControlMessage(msg2), S_OK);
+    ASSERT_NE(msg2, nullptr);
+    EXPECT_EQ(msg2.GetNamedString(L"msg"), L"world");
+}
+
+TEST_F(SapiEngineTests, ReadControlMessageCompactsBufferAndPreservesMessagesAcrossCompactionThreshold) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+
+    std::string stream;
+    constexpr int totalMsgs = 500;
+    for (int i = 0; i < totalMsgs; ++i) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "{\"seq\":%d}\n", i);
+        stream += buf;
+    }
+
+    std::thread writer([&server, stream]() {
+        server.WriteControl(stream.c_str());
+    });
+
+    for (int i = 0; i < totalMsgs; ++i) {
+        winrt::Windows::Data::Json::JsonObject msg = nullptr;
+        ASSERT_EQ(client.ReadControlMessage(msg), S_OK) << "Failed at index " << i;
+        ASSERT_NE(msg, nullptr) << "Null json at index " << i;
+        EXPECT_EQ(static_cast<int>(msg.GetNamedNumber(L"seq")), i);
+    }
+    writer.join();
+}
+
+TEST_F(SapiEngineTests, ReadControlMessageHandlesLargePayloadAcrossCompactionThreshold) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+
+    std::string largeVal(4200, 'x');
+    std::string msgStr1 = "{\"data\":\"" + largeVal + "\"}\n";
+    std::string msgStr2 = "{\"data\":\"small\"}\n";
+
+    std::thread writer([&server, msgStr1, msgStr2]() {
+        server.WriteControl((msgStr1 + msgStr2).c_str());
+    });
+
+    winrt::Windows::Data::Json::JsonObject msg1 = nullptr;
+    winrt::Windows::Data::Json::JsonObject msg2 = nullptr;
+
+    ASSERT_EQ(client.ReadControlMessage(msg1), S_OK);
+    ASSERT_NE(msg1, nullptr);
+    EXPECT_EQ(msg1.GetNamedString(L"data").size(), 4200u);
+
+    ASSERT_EQ(client.ReadControlMessage(msg2), S_OK);
+    ASSERT_NE(msg2, nullptr);
+    EXPECT_EQ(msg2.GetNamedString(L"data"), L"small");
+
+    writer.join();
+}
+
+
+
 TEST_F(SapiEngineTests, GetOutputFormatFailsWhenNoProviderLoaded) {
     auto engine = winrt::make_self<CSapiEngine>();
     
@@ -1780,4 +1885,43 @@ TEST_F(SapiEngineTests, SpeakDoesNotHoldTheSessionLockAcrossReentrantGetActions)
     EXPECT_EQ(reentrantGetOutputResult, S_OK);
     EXPECT_EQ(speakResult, S_OK);
     EXPECT_LT(std::chrono::steady_clock::now() - speakStart, std::chrono::seconds(2));
+}
+
+TEST_F(SapiEngineTests, ReadControlMessage_InvalidUtf8_RecoversPipe) {
+    ControlPipeTestServer server;
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+
+    std::string invalidUtf8 = "{\"type\":\"event\"}\xff\n";
+    server.WriteControl(invalidUtf8);
+
+    winrt::Windows::Data::Json::JsonObject outJson{ nullptr };
+    HRESULT hr = client.ReadControlMessage(outJson, 1000);
+    EXPECT_NE(hr, S_OK);
+
+    std::string validUtf8 = "{\"type\":\"event\"}\n";
+    server.WriteControl(validUtf8);
+
+    hr = client.ReadControlMessage(outJson, 1000);
+    EXPECT_EQ(hr, S_OK) << "Should recover and read next message successfully";
+}
+
+TEST_F(SapiEngineTests, ReadControlMessage_O_N_LinearSearch) {
+    ControlPipeTestServer server;
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+
+    // Send a message in tiny chunks to test offset search tracking
+    std::string chunk(100, ' ');
+    for (int i = 0; i < 30; ++i) {
+        server.WriteControl(chunk);
+    }
+    server.WriteControl("{\"type\":\"event\"}\n");
+
+    winrt::Windows::Data::Json::JsonObject outJson{ nullptr };
+    HRESULT hr = client.ReadControlMessage(outJson, 5000); 
+    EXPECT_EQ(hr, S_OK);
+    if (outJson) {
+        EXPECT_EQ(outJson.GetNamedString(L"type"), L"event");
+    }
 }

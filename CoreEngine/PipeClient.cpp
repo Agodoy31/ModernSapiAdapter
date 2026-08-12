@@ -47,6 +47,9 @@ HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& ex
     constexpr DWORD pipeProbeIntervalMs = 10;
 
     m_controlInputBuffer.clear();
+    m_controlInputOffset = 0;
+    m_controlSearchOffset = 0;
+    m_controlInputBuffer.reserve(8192);
 
     std::wstring sid = GetCurrentUserSid();
     std::wstring controlPipePath = L"\\\\.\\pipe\\" + pipeName + L"\\" + sid + L"\\control";
@@ -314,9 +317,9 @@ HRESULT PipeClient::ReadControlMessage(
     char chunk[4096];
     const ULONGLONG deadline = timeoutMs == INFINITE ? 0 : GetTickCount64() + timeoutMs;
 
-    while (m_controlInputBuffer.find('\n') == std::string::npos)
+    while (m_controlInputBuffer.find('\n', m_controlSearchOffset) == std::string::npos)
     {
-        if (m_controlInputBuffer.size() > maxControlRecordBytes)
+        if (m_controlInputBuffer.size() - m_controlInputOffset > maxControlRecordBytes)
         {
             return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
         }
@@ -362,6 +365,7 @@ HRESULT PipeClient::ReadControlMessage(
         if (bytesRead > 0)
         {
             m_controlInputBuffer.append(chunk, bytesRead);
+            m_controlSearchOffset = m_controlInputBuffer.size() - bytesRead;
         }
         else
         {
@@ -369,30 +373,47 @@ HRESULT PipeClient::ReadControlMessage(
         }
     }
 
-    const size_t newlinePos = m_controlInputBuffer.find('\n');
-    if (newlinePos > maxControlRecordBytes)
+    const size_t newlinePos = m_controlInputBuffer.find('\n', m_controlSearchOffset);
+    if (newlinePos - m_controlInputOffset > maxControlRecordBytes)
     {
         return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
     }
 
-    std::string utf8String = m_controlInputBuffer.substr(0, newlinePos);
-    m_controlInputBuffer.erase(0, newlinePos + 1);
-
-    if (!utf8String.empty() && utf8String.back() == '\r')
+    std::string_view utf8View(m_controlInputBuffer.data() + m_controlInputOffset, newlinePos - m_controlInputOffset);
+    if (utf8View.ends_with('\r'))
     {
-        utf8String.pop_back();
+        utf8View.remove_suffix(1);
     }
 
-    if (utf8String.empty())
+    bool isEmpty = utf8View.empty();
+    std::string extractedUtf8(utf8View);
+
+    m_controlInputOffset = newlinePos + 1;
+    m_controlSearchOffset = m_controlInputOffset;
+
+    if (m_controlInputOffset == m_controlInputBuffer.size())
+    {
+        m_controlInputBuffer.clear();
+        m_controlInputOffset = 0;
+        m_controlSearchOffset = 0;
+    }
+    else if (m_controlInputOffset >= 4096)
+    {
+        m_controlInputBuffer.erase(0, m_controlInputOffset);
+        m_controlInputOffset = 0;
+        m_controlSearchOffset = 0;
+    }
+
+    if (isEmpty)
     {
         return S_FALSE;
     }
 
-    int wideLen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8String.data(), static_cast<int>(utf8String.size()), nullptr, 0);
+    int wideLen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, extractedUtf8.data(), static_cast<int>(extractedUtf8.size()), nullptr, 0);
     if (wideLen == 0) return HRESULT_FROM_WIN32(GetLastError());
 
     std::wstring wideString(wideLen, 0);
-    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8String.data(), static_cast<int>(utf8String.size()), wideString.data(), wideLen) == 0)
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, extractedUtf8.data(), static_cast<int>(extractedUtf8.size()), wideString.data(), wideLen) == 0)
     {
         return HRESULT_FROM_WIN32(GetLastError());
     }
