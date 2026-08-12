@@ -141,6 +141,11 @@ void SpeechWorker::FailNextFrameAssemblyForTest()
     std::lock_guard<std::mutex> lock(m_requestMutex);
     m_failNextFrameAssemblyForTest = true;
 }
+
+bool SpeechWorker::IsAudioApartmentActiveForTest() const noexcept
+{
+    return m_audioApartmentActiveForTest.load(std::memory_order_acquire);
+}
 #endif
 
 void SpeechWorker::Stop()
@@ -378,6 +383,15 @@ bool SpeechWorker::CompleteCancellationIfAudioBoundaryReached()
 void SpeechWorker::AudioThreadProc()
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    auto apartmentCleanup = wil::scope_exit([this] {
+#if defined(_DEBUG)
+        m_audioApartmentActiveForTest.store(false, std::memory_order_release);
+#endif
+        winrt::uninit_apartment();
+    });
+#if defined(_DEBUG)
+    m_audioApartmentActiveForTest.store(true, std::memory_order_release);
+#endif
     std::vector<uint8_t> buffer(4096);
     while (!m_exit.load())
     {
@@ -398,7 +412,6 @@ void SpeechWorker::AudioThreadProc()
 
         uint64_t cancellationToSend = 0;
         bool protocolBoundaryFailed = false;
-        try
         {
             std::lock_guard<std::mutex> lock(m_requestMutex);
             if (m_requestState == RequestState::Speaking)
@@ -466,24 +479,6 @@ void SpeechWorker::AudioThreadProc()
                 m_faultPending = true;
             }
         }
-        catch (const std::exception& error)
-        {
-            CoreLog(L"[SpeechWorker] Audio framing failed: %hs", error.what());
-            {
-                std::lock_guard<std::mutex> lock(m_requestMutex);
-                m_faultPending = true;
-            }
-            protocolBoundaryFailed = true;
-        }
-        catch (...)
-        {
-            CoreLog(L"[SpeechWorker] Audio framing failed with an unknown exception.");
-            {
-                std::lock_guard<std::mutex> lock(m_requestMutex);
-                m_faultPending = true;
-            }
-            protocolBoundaryFailed = true;
-        }
 
         if (cancellationToSend != 0)
         {
@@ -502,7 +497,6 @@ void SpeechWorker::AudioThreadProc()
             EnterFaultedState();
         }
     }
-    winrt::uninit_apartment();
 }
 
 void SpeechWorker::ControlThreadProc()

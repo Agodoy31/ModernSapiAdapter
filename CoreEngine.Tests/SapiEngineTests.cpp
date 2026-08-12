@@ -1127,6 +1127,7 @@ TEST_F(SapiEngineTests, FrameAssemblyFailureFaultsWorkerWithoutEscapingThread) {
 
     EXPECT_TRUE(worker.WaitForFaultForTest(1000));
     EXPECT_TRUE(worker.IsFaulted());
+    EXPECT_FALSE(worker.IsAudioApartmentActiveForTest());
     EXPECT_EQ(mockSite->writeCallCount.load(), 0u);
 }
 

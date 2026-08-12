@@ -79,6 +79,7 @@ public:
     bool WaitForFaultPublicationPauseForTest(DWORD timeoutMs);
     void ReleaseFaultPublicationForTest();
     void FailNextFrameAssemblyForTest();
+    bool IsAudioApartmentActiveForTest() const noexcept;
 #endif
 
 private:
@@ -153,5 +154,6 @@ private:
     bool m_pauseNextFaultPublicationForTest{false};
     bool m_faultPublicationPausedForTest{false};
     bool m_failNextFrameAssemblyForTest{false};
+    std::atomic_bool m_audioApartmentActiveForTest{false};
 #endif
 };
