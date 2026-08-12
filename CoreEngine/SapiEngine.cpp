@@ -152,13 +152,12 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
     HRESULT hr = client->SendControlMessage(speakReq);
     if (FAILED(hr))
     {
-        worker->Stop();
+        worker->EnterFaultedState();
         return hr;
     }
 
-    // A cancellation-transport failure leaves the session in its discard-only Faulted state.
-    // This call must return promptly without disrupting outstanding provider reads; the next
-    // Speak owns worker/client retirement and replacement under the session lifecycle lock.
+    // A transport failure leaves the session Faulted with outstanding pipe I/O cancelled.
+    // The next Speak owns worker/client retirement and replacement under the session lifecycle lock.
     return worker->WaitUntilFinished(pOutputSite);
 }
 catch (const std::exception& e) { CoreLog(L"[CoreEngine] Speak exception: %hs", e.what()); return winrt::to_hresult(); }
@@ -181,6 +180,15 @@ void CSapiEngine::FailNextCancellationControlSendForTest()
     if (m_pClient)
     {
         m_pClient->FailNextCancellationMessageForTest();
+    }
+}
+
+void CSapiEngine::FailNextSpeakControlSendForTest()
+{
+    std::lock_guard<std::mutex> sessionLock(m_sessionMutex);
+    if (m_pClient)
+    {
+        m_pClient->FailNextSpeakMessageForTest();
     }
 }
 #endif
@@ -345,7 +353,8 @@ HRESULT CSapiEngine::CreateProviderSessionLocked()
         }
 
         JsonObject infoResponse = nullptr;
-        if (FAILED(candidateClient->ReadControlMessage(infoResponse)) || !infoResponse ||
+        if (FAILED(candidateClient->ReadControlMessage(
+                infoResponse, PipeClient::ControlOperationTimeoutMs)) || !infoResponse ||
             !infoResponse.HasKey(L"response") ||
             infoResponse.GetNamedValue(L"response").ValueType() != JsonValueType::String ||
             infoResponse.GetNamedString(L"response") != L"info" ||

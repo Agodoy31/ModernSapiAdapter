@@ -76,6 +76,10 @@ public class SynthesisEngine
                 if (fragment.TryGetProperty("text", out var textProp))
                 {
                     string text = textProp.GetString() ?? "";
+                    if (text.StartsWith("[stall-synthesis]", StringComparison.Ordinal))
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    }
                     delayCancelledEvent |= text.StartsWith("[delay-cancelled-event]", StringComparison.Ordinal);
                     string[] words = text.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
                     uint charOffset = fragment.TryGetProperty("source_offset", out var sourceOffsetProp)

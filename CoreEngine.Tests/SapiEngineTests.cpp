@@ -218,6 +218,13 @@ public:
         return true;
     }
 
+    void Disconnect()
+    {
+        if (m_connectThread.joinable()) m_connectThread.join();
+        m_controlPipe.reset();
+        m_audioPipe.reset();
+    }
+
 private:
     void ConnectPipe(HANDLE pipe)
     {
@@ -260,11 +267,18 @@ class ScopedFaultEventLog
 public:
     ScopedFaultEventLog()
     {
-        std::error_code error;
-        std::filesystem::remove(m_path, error);
+        for (int attempt = 0; attempt < 20 && !m_isActive; ++attempt)
+        {
+            std::error_code error;
+            std::filesystem::remove(m_path, error);
 
-        std::ofstream stream(m_path, std::ios::binary | std::ios::trunc);
-        m_isActive = stream.good();
+            std::ofstream stream(m_path, std::ios::binary | std::ios::trunc);
+            m_isActive = stream.good();
+            if (!m_isActive)
+            {
+                Sleep(10);
+            }
+        }
     }
 
     ~ScopedFaultEventLog()
@@ -366,6 +380,300 @@ TEST(PcmFrameAssemblerTests, AlignedInputWithoutCarryUsesTheOriginalBuffer) {
     EXPECT_EQ(spans[0].data, input.data());
     EXPECT_EQ(spans[0].size, 12u);
 }
+
+TEST_F(SapiEngineTests, TimedOutControlReadCancelsItsOverlappedOperationBeforeReturning) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+
+    winrt::Windows::Data::Json::JsonObject response = nullptr;
+    const auto timeoutStart = std::chrono::steady_clock::now();
+    EXPECT_EQ(client.ReadControlMessage(response, 100), HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+    EXPECT_LT(std::chrono::steady_clock::now() - timeoutStart, std::chrono::seconds(1));
+
+    ASSERT_TRUE(server.WriteControl(
+        "{\"response\":\"info\",\"audio_format\":{\"sample_rate\":24000,\"bits_per_sample\":16,\"channels\":1}}\n"));
+    ASSERT_EQ(client.ReadControlMessage(response, 1000), S_OK);
+    ASSERT_TRUE(response);
+    EXPECT_EQ(response.GetNamedString(L"response"), L"info");
+}
+
+TEST_F(SapiEngineTests, ControlRecordTimeoutCoversTheWholeFragmentedMessage) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+
+    std::thread writer([&] {
+        server.WriteControl("{\"response\":");
+        Sleep(80);
+        server.WriteControl("\"info\"");
+        Sleep(80);
+        server.WriteControl("}\n");
+    });
+    ThreadJoinGuard writerJoin(writer);
+
+    winrt::Windows::Data::Json::JsonObject response = nullptr;
+    const auto timeoutStart = std::chrono::steady_clock::now();
+    const HRESULT result = client.ReadControlMessage(response, 100);
+    const auto elapsed = std::chrono::steady_clock::now() - timeoutStart;
+    writer.join();
+
+    EXPECT_EQ(result, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+    EXPECT_GE(elapsed, std::chrono::milliseconds(80));
+    EXPECT_LT(elapsed, std::chrono::milliseconds(150));
+}
+
+TEST_F(SapiEngineTests, PipeDisconnectFaultsActiveWorkerWithoutRetryingForever) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 31));
+
+    HRESULT waitResult = S_OK;
+    std::atomic_bool waitReturned{false};
+    std::thread waitThread([&] {
+        waitResult = worker.WaitUntilFinished(nullptr);
+        waitReturned = true;
+    });
+    ThreadJoinGuard waitJoin(waitThread);
+
+    server.Disconnect();
+    for (int attempt = 0; attempt < 100 && !waitReturned.load(); ++attempt)
+    {
+        Sleep(10);
+    }
+
+    const bool returnedBeforeCleanup = waitReturned.load();
+    if (!returnedBeforeCleanup)
+    {
+        worker.Stop();
+    }
+    waitThread.join();
+
+    EXPECT_TRUE(returnedBeforeCleanup);
+    EXPECT_TRUE(FAILED(waitResult));
+    EXPECT_TRUE(worker.IsFaulted());
+}
+
+TEST_F(SapiEngineTests, SilentActiveRequestTimesOutInsteadOfHoldingSapiForever) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 32));
+
+    HRESULT waitResult = S_OK;
+    std::atomic_bool waitReturned{false};
+    const auto waitStart = std::chrono::steady_clock::now();
+    std::thread waitThread([&] {
+        waitResult = worker.WaitUntilFinished(nullptr);
+        waitReturned = true;
+    });
+    ThreadJoinGuard waitJoin(waitThread);
+
+    const auto cleanupDeadline = waitStart + std::chrono::milliseconds(2300);
+    while (!waitReturned.load() && std::chrono::steady_clock::now() < cleanupDeadline)
+    {
+        Sleep(10);
+    }
+
+    const bool returnedBeforeCleanup = waitReturned.load();
+    const auto elapsedBeforeCleanup = std::chrono::steady_clock::now() - waitStart;
+    if (!returnedBeforeCleanup)
+    {
+        worker.Stop();
+    }
+    waitThread.join();
+
+    EXPECT_TRUE(returnedBeforeCleanup);
+    EXPECT_EQ(waitResult, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+    EXPECT_TRUE(worker.IsFaulted());
+    EXPECT_GE(elapsedBeforeCleanup, std::chrono::milliseconds(1300));
+    EXPECT_LT(elapsedBeforeCleanup, std::chrono::milliseconds(2300));
+}
+
+TEST_F(SapiEngineTests, IdleProviderRemainsUsableBeyondTheActiveRequestDeadline) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    SpeechWorker worker(engine.get(), &client, 2);
+
+    Sleep(1700);
+
+    ASSERT_TRUE(worker.Start(nullptr, 33));
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":33,\"total_audio_bytes\":0}\n"));
+    EXPECT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
+    EXPECT_FALSE(worker.IsFaulted());
+}
+
+TEST_F(SapiEngineTests, MatchingProviderEventsKeepLongRequestAlive) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 34));
+
+    HRESULT waitResult = E_FAIL;
+    std::atomic_bool waitReturned{false};
+    std::thread waitThread([&] {
+        waitResult = worker.WaitUntilFinished(nullptr);
+        waitReturned = true;
+    });
+    ThreadJoinGuard waitJoin(waitThread);
+
+    for (int eventIndex = 0; eventIndex < 3; ++eventIndex)
+    {
+        Sleep(700);
+        ASSERT_TRUE(server.WriteControl(
+            "{\"event\":\"word_boundary\",\"speak_id\":34,\"text_offset\":0,\"text_length\":1,\"audio_offset_ms\":0}\n"));
+    }
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":34,\"total_audio_bytes\":0}\n"));
+
+    for (int attempt = 0; attempt < 100 && !waitReturned.load(); ++attempt)
+    {
+        Sleep(10);
+    }
+    if (!waitReturned.load())
+    {
+        worker.Stop();
+    }
+    waitThread.join();
+
+    EXPECT_EQ(waitResult, S_OK);
+    EXPECT_FALSE(worker.IsFaulted());
+}
+
+TEST_F(SapiEngineTests, IgnoredCancellationTimesOutTheEntireTransaction) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 35));
+
+    HRESULT cancellationResult = S_OK;
+    std::atomic_bool cancellationReturned{false};
+    const auto cancellationStart = std::chrono::steady_clock::now();
+    std::thread cancellationThread([&] {
+        cancellationResult = worker.CancelAndDrain();
+        cancellationReturned = true;
+    });
+    ThreadJoinGuard cancellationJoin(cancellationThread);
+
+    std::string cancellationRequest;
+    ASSERT_TRUE(server.ReadControl(cancellationRequest));
+
+    const auto cleanupDeadline = cancellationStart + std::chrono::milliseconds(1200);
+    while (!cancellationReturned.load() && std::chrono::steady_clock::now() < cleanupDeadline)
+    {
+        Sleep(10);
+    }
+
+    const bool returnedBeforeAcknowledgement = cancellationReturned.load();
+    const auto elapsedBeforeAcknowledgement = std::chrono::steady_clock::now() - cancellationStart;
+    if (!returnedBeforeAcknowledgement)
+    {
+        ASSERT_TRUE(server.WriteControl(
+            "{\"event\":\"synthesis_cancelled\",\"speak_id\":35,\"audio_bytes_written\":0}\n"));
+    }
+    cancellationThread.join();
+
+    EXPECT_TRUE(returnedBeforeAcknowledgement);
+    EXPECT_EQ(cancellationResult, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+    EXPECT_TRUE(worker.IsFaulted());
+    EXPECT_GE(elapsedBeforeAcknowledgement, std::chrono::milliseconds(400));
+    EXPECT_LT(elapsedBeforeAcknowledgement, std::chrono::milliseconds(1200));
+}
+
+TEST_F(SapiEngineTests, SpeakRebuildsProviderSessionAfterSynthesisTimeout) {
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockToken = winrt::make_self<MockSpObjectToken>();
+    ASSERT_EQ(engine->SetObjectToken(mockToken.get()), S_OK);
+
+    GUID formatId = {};
+    WAVEFORMATEX* pWaveFormat = nullptr;
+    ASSERT_EQ(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat), S_OK);
+    ASSERT_NE(pWaveFormat, nullptr);
+
+    wchar_t stalledText[] = L"[stall-synthesis] provider never reports progress";
+    SPVTEXTFRAG stalledFragment = {};
+    stalledFragment.pTextStart = stalledText;
+    stalledFragment.ulTextLen = static_cast<ULONG>(wcslen(stalledText));
+
+    const auto stalledStart = std::chrono::steady_clock::now();
+    const HRESULT stalledResult = engine->Speak(0, formatId, pWaveFormat, &stalledFragment, mockSite.get());
+    const auto stalledElapsed = std::chrono::steady_clock::now() - stalledStart;
+
+    EXPECT_EQ(stalledResult, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+    EXPECT_GE(stalledElapsed, std::chrono::milliseconds(1300));
+    EXPECT_LT(stalledElapsed, std::chrono::milliseconds(2300));
+    EXPECT_EQ(mockSite->totalBytesWritten.load(), 0u);
+
+    wchar_t freshText[] = L"fresh";
+    SPVTEXTFRAG freshFragment = {};
+    freshFragment.pTextStart = freshText;
+    freshFragment.ulTextLen = static_cast<ULONG>(wcslen(freshText));
+
+    EXPECT_EQ(engine->Speak(0, formatId, pWaveFormat, &freshFragment, mockSite.get()), S_OK);
+    CoTaskMemFree(pWaveFormat);
+
+    EXPECT_EQ(mockSite->totalBytesWritten.load(), 9600u);
+}
+
+#if defined(_DEBUG)
+TEST_F(SapiEngineTests, FailedSpeakDispatchQuarantinesSessionAndNextSpeakRecovers) {
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockToken = winrt::make_self<MockSpObjectToken>();
+    ASSERT_EQ(engine->SetObjectToken(mockToken.get()), S_OK);
+
+    GUID formatId = {};
+    WAVEFORMATEX* pWaveFormat = nullptr;
+    ASSERT_EQ(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat), S_OK);
+    ASSERT_NE(pWaveFormat, nullptr);
+
+    wchar_t rejectedText[] = L"rejected dispatch";
+    SPVTEXTFRAG rejectedFragment = {};
+    rejectedFragment.pTextStart = rejectedText;
+    rejectedFragment.ulTextLen = static_cast<ULONG>(wcslen(rejectedText));
+
+    engine->FailNextSpeakControlSendForTest();
+    EXPECT_EQ(engine->Speak(0, formatId, pWaveFormat, &rejectedFragment, mockSite.get()), E_FAIL);
+    EXPECT_EQ(mockSite->totalBytesWritten.load(), 0u);
+
+    wchar_t freshText[] = L"fresh";
+    SPVTEXTFRAG freshFragment = {};
+    freshFragment.pTextStart = freshText;
+    freshFragment.ulTextLen = static_cast<ULONG>(wcslen(freshText));
+
+    EXPECT_EQ(engine->Speak(0, formatId, pWaveFormat, &freshFragment, mockSite.get()), S_OK);
+    CoTaskMemFree(pWaveFormat);
+
+    EXPECT_EQ(mockSite->totalBytesWritten.load(), 9600u);
+}
+#endif
 
 TEST_F(SapiEngineTests, DllCanUnloadNowTracksFactoryLifetime) {
     CoreEngineDll module;
@@ -1322,9 +1630,6 @@ TEST_F(SapiEngineTests, FaultedSessionDoesNotForwardAnEventPausedBeforeItsSapiCa
 }
 
 TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorker) {
-    ScopedFaultEventLog faultEventLog;
-    ASSERT_TRUE(faultEventLog.IsActive());
-
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     auto engine = winrt::make_self<CSapiEngine>();
     auto mockToken = winrt::make_self<MockSpObjectToken>();
@@ -1385,20 +1690,14 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
     EXPECT_EQ(engine->m_pClient.get(), faultedClient);
     EXPECT_TRUE(faultedWorker->IsFaulted());
 
-    // Discard events accepted before the rejected write. The trace offset makes the subsequent observations
-    // prove post-fault provider activity rather than merely output that arrived before fault publication.
+    // Discard events accepted before the rejected write. Entering Faulted now cancels both
+    // pipe reads, so the provider is not required (or expected) to complete later writes.
     {
         std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
         mockSite->receivedEvents.clear();
     }
-    const size_t postFaultTraceOffset = faultEventLog.SnapshotSize();
 
-    ASSERT_TRUE(faultEventLog.WaitForEntryAfter(postFaultTraceOffset, "1:word_boundary", 1000))
-        << "The faulted provider did not emit a late control event.";
-    ASSERT_TRUE(faultEventLog.WaitForEntryAfter(postFaultTraceOffset, "1:pcm", 1000))
-        << "The faulted provider did not emit late PCM.";
-
-    // Faulted-session PCM and events must be consumed or discarded without crossing the SAPI boundary.
+    // No faulted-session PCM or events may cross the SAPI boundary.
     EXPECT_EQ(mockSite->BytesAcceptedAfterRejectedWrite(), 0u);
     {
         std::lock_guard<std::mutex> lock(mockSite->eventsMutex);

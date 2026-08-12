@@ -13,6 +13,8 @@
 class PipeClient
 {
 public:
+    static constexpr DWORD ControlOperationTimeoutMs = 1500;
+
     /**
      * @brief Constructs a new PipeClient instance.
      */
@@ -36,14 +38,18 @@ public:
      * @param json JsonObject payload to serialize and transmit.
      * @return S_OK on success, or HRESULT error code on failure.
      */
-    HRESULT SendControlMessage(const winrt::Windows::Data::Json::JsonObject& json);
+    HRESULT SendControlMessage(
+        const winrt::Windows::Data::Json::JsonObject& json,
+        DWORD timeoutMs = ControlOperationTimeoutMs);
 
     /**
      * @brief Reads and parses a newline-delimited JSON control message from the Control Pipe.
      * @param[out] outJson Parsed JsonObject output.
      * @return S_OK on success, or HRESULT error code on failure.
      */
-    HRESULT ReadControlMessage(winrt::Windows::Data::Json::JsonObject& outJson);
+    HRESULT ReadControlMessage(
+        winrt::Windows::Data::Json::JsonObject& outJson,
+        DWORD timeoutMs = INFINITE);
 
     /**
      * @brief Reads a raw PCM audio chunk from the Audio Pipe.
@@ -60,6 +66,7 @@ public:
 
 #if defined(_DEBUG)
     void FailNextCancellationMessageForTest();
+    void FailNextSpeakMessageForTest();
 #endif
 
 private:
@@ -70,6 +77,7 @@ private:
     std::mutex m_controlWriteMutex;                  /**< Serializes newline-delimited JSON writes to the byte-mode control pipe. */
 #if defined(_DEBUG)
     std::atomic_bool m_failNextCancellationMessageForTest{false}; /**< Test-only cancellation write failure injection. */
+    std::atomic_bool m_failNextSpeakMessageForTest{false}; /**< Test-only initial speak write failure injection. */
 #endif
 
     /**
@@ -83,4 +91,13 @@ private:
         const std::wstring& controlPipePath,
         const std::wstring& audioPipePath,
         bool& controlPipeOpened);
+
+    /**
+     * @brief Completes or safely cancels one overlapped operation within its caller's deadline.
+     */
+    static HRESULT CompleteOverlappedOperation(
+        HANDLE pipe,
+        OVERLAPPED& overlapped,
+        DWORD& bytesTransferred,
+        DWORD timeoutMs) noexcept;
 };

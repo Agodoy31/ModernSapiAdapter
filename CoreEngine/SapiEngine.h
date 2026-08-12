@@ -97,6 +97,7 @@ public:
      * @brief Injects one cancellation-control send failure for the focused worker recovery regression.
      */
     void FailNextCancellationControlSendForTest();
+    void FailNextSpeakControlSendForTest();
 #endif
 
 private:

@@ -36,6 +36,19 @@ The proxy (`CoreEngine`) and provider executables communicate using two dedicate
 
 ---
 
+## Responsiveness and Failure Boundaries
+
+Providers must treat every connected session as latency-sensitive. CoreEngine enforces the following local deadlines so an unresponsive provider cannot hold a SAPI host or screen reader indefinitely:
+
+- Pipe creation after provider launch retains the existing 1,000 ms startup deadline.
+- A synchronous Control Pipe write and the initialization `info` response have a 1,500 ms deadline.
+- An active `sapi_speak` request has a 1,500 ms inactivity deadline. Matching PCM, word, sentence, bookmark, completion, cancellation, or log activity resets this deadline; total synthesis duration is not capped while progress continues.
+- A cancellation transaction has one 500 ms deadline shared by the `cancel` write, `synthesis_cancelled` acknowledgement, and draining exactly `audio_bytes_written` bytes.
+- A completed pipe error, disconnect, access denial, malformed terminal boundary, or expired deadline faults the session immediately. CoreEngine cancels outstanding pipe I/O, discards all later output from that session, returns an error to SAPI, and creates a fresh provider session on a later `Speak`.
+- Idle audio and control reads may remain pending indefinitely. Deadlines apply only to synchronous operations and active requests, so an idle provider is not disconnected merely for being quiet.
+
+Providers should report matching progress promptly and must complete cancellation cleanup well within 500 ms. These deadlines are CoreEngine recovery policy; they do not add delay to healthy requests.
+
 ## Control Pipe Messages (Proxy -> Provider)
 
 Control pipe messages are sent as single-line, newline-terminated (`\n`) UTF-8 JSON objects.

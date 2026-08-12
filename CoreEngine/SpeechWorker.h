@@ -83,6 +83,11 @@ public:
 #endif
 
 private:
+    friend class CSapiEngine;
+
+    static constexpr ULONGLONG SynthesisInactivityTimeoutMs = 1500;
+    static constexpr DWORD CancellationTimeoutMs = 500;
+
     /**
      * @brief Thread procedure for reading PCM audio bytes and dispatching to engine.
      */
@@ -106,10 +111,10 @@ private:
     /**
      * @brief Sends a cancellation command for a specific request without changing worker state.
      */
-    HRESULT SendCancellation(uint64_t speakId);
+    HRESULT SendCancellation(uint64_t speakId, DWORD timeoutMs);
 
     /**
-     * @brief Records a terminal cancellation transport failure without touching pipe or thread ownership.
+     * @brief Quarantines the session and cancels outstanding pipe I/O without changing pipe ownership.
      */
     void EnterFaultedState();
 
@@ -129,8 +134,10 @@ private:
     std::thread m_audioThread;               /**< Audio streaming worker thread. */
     std::thread m_controlThread;             /**< Control event worker thread. */
     std::atomic_bool m_exit;                 /**< Flag indicating worker shutdown. */
+    std::atomic<ULONGLONG> m_lastProviderProgressTick{0}; /**< Monotonic tick of active-request PCM or control progress. */
     mutable std::mutex m_requestMutex;       /**< Serializes request lifecycle state across audio and control threads. */
     std::recursive_mutex m_eventForwardMutex;/**< Serializes event callbacks with Faulted publication; recursive for COM re-entrancy. */
+    std::atomic_bool m_faultPublicationStarted{false}; /**< Ensures concurrent pipe failures publish quarantine once. */
     std::atomic_bool m_faultVisible{false};  /**< Prevents new SAPI event callbacks once a fault is visible. */
     std::condition_variable m_requestChanged;/**< Wakes synchronous Speak and purge callers at terminal boundaries. */
     RequestState m_requestState{RequestState::Idle}; /**< Active request lifecycle state. */
@@ -139,6 +146,7 @@ private:
     bool m_synthesisComplete{false};         /**< Provider has declared the final PCM byte count. */
     bool m_cancellationComplete{false};      /**< Provider has declared the final cancellation byte count. */
     bool m_cancellationFailed{false};        /**< Cancellation could not reach a valid terminal boundary. */
+    ULONGLONG m_cancellationDeadlineTick{0}; /**< Absolute deadline for the active cancellation transaction. */
     uint64_t m_expectedAudioBytes{0};        /**< Declared raw PCM byte count for normal completion. */
     uint64_t m_cancelledAudioBytes{0};       /**< Raw PCM bytes committed before cancellation. */
     uint64_t m_rawAudioBytesRead{0};         /**< Raw bytes consumed from the audio pipe for the active request. */

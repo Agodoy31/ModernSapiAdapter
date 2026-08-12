@@ -181,12 +181,70 @@ HRESULT PipeClient::TryConnectPipes(
     return S_OK;
 }
 
-HRESULT PipeClient::SendControlMessage(const winrt::Windows::Data::Json::JsonObject& json)
+HRESULT PipeClient::CompleteOverlappedOperation(
+    HANDLE pipe,
+    OVERLAPPED& overlapped,
+    DWORD& bytesTransferred,
+    DWORD timeoutMs) noexcept
+{
+    const BOOL completed = timeoutMs == INFINITE
+        ? GetOverlappedResult(pipe, &overlapped, &bytesTransferred, TRUE)
+        : GetOverlappedResultEx(pipe, &overlapped, &bytesTransferred, timeoutMs, FALSE);
+    if (completed)
+    {
+        return S_OK;
+    }
+
+    const DWORD completionError = GetLastError();
+    if (completionError != WAIT_TIMEOUT)
+    {
+        return HRESULT_FROM_WIN32(completionError);
+    }
+
+    // OVERLAPPED and its event are caller-owned stack objects. They cannot be released
+    // until the kernel has completed cancellation of this exact operation.
+    DWORD cancellationError = ERROR_SUCCESS;
+    if (!CancelIoEx(pipe, &overlapped))
+    {
+        cancellationError = GetLastError();
+    }
+
+    DWORD cancelledBytes = 0;
+    if (!GetOverlappedResult(pipe, &overlapped, &cancelledBytes, TRUE))
+    {
+        const DWORD reapError = GetLastError();
+        if (reapError != ERROR_OPERATION_ABORTED)
+        {
+            return HRESULT_FROM_WIN32(reapError);
+        }
+    }
+
+    if (cancellationError != ERROR_SUCCESS && cancellationError != ERROR_NOT_FOUND)
+    {
+        return HRESULT_FROM_WIN32(cancellationError);
+    }
+
+    bytesTransferred = 0;
+    return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+}
+
+HRESULT PipeClient::SendControlMessage(
+    const winrt::Windows::Data::Json::JsonObject& json,
+    DWORD timeoutMs)
 {
     std::lock_guard<std::mutex> lock(m_controlWriteMutex);
     if (!m_controlPipe) return E_UNEXPECTED;
 
 #if defined(_DEBUG)
+    if (m_failNextSpeakMessageForTest &&
+        json.HasKey(L"command") &&
+        json.GetNamedValue(L"command").ValueType() == winrt::Windows::Data::Json::JsonValueType::String &&
+        json.GetNamedString(L"command") == L"sapi_speak")
+    {
+        m_failNextSpeakMessageForTest = false;
+        return E_FAIL;
+    }
+
     if (m_failNextCancellationMessageForTest &&
         json.HasKey(L"command") &&
         json.GetNamedValue(L"command").ValueType() == winrt::Windows::Data::Json::JsonValueType::String &&
@@ -203,9 +261,16 @@ HRESULT PipeClient::SendControlMessage(const winrt::Windows::Data::Json::JsonObj
     if (utf8Len == 0) return HRESULT_FROM_WIN32(GetLastError());
 
     std::string utf8String(utf8Len, 0);
-    WideCharToMultiByte(CP_UTF8, 0, jsonStringW.c_str(), -1, utf8String.data(), utf8Len, nullptr, nullptr);
+    if (WideCharToMultiByte(CP_UTF8, 0, jsonStringW.c_str(), -1, utf8String.data(), utf8Len, nullptr, nullptr) == 0)
+    {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
     utf8String.resize(utf8Len - 1); 
     utf8String += "\n";
+    if (utf8String.size() > (std::numeric_limits<DWORD>::max)())
+    {
+        return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
+    }
 
     wil::unique_event overlappedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     if (!overlappedEvent) return HRESULT_FROM_WIN32(GetLastError());
@@ -221,15 +286,24 @@ HRESULT PipeClient::SendControlMessage(const winrt::Windows::Data::Json::JsonObj
         return HRESULT_FROM_WIN32(GetLastError());
     }
 
-    if (!GetOverlappedResult(m_controlPipe.get(), &overlapped, &bytesWritten, TRUE))
+    HRESULT hr = CompleteOverlappedOperation(
+        m_controlPipe.get(), overlapped, bytesWritten, timeoutMs);
+    if (FAILED(hr))
     {
-        return HRESULT_FROM_WIN32(GetLastError());
+        return hr;
+    }
+
+    if (bytesWritten != utf8String.size())
+    {
+        return HRESULT_FROM_WIN32(ERROR_WRITE_FAULT);
     }
 
     return S_OK;
 }
 
-HRESULT PipeClient::ReadControlMessage(winrt::Windows::Data::Json::JsonObject& outJson)
+HRESULT PipeClient::ReadControlMessage(
+    winrt::Windows::Data::Json::JsonObject& outJson,
+    DWORD timeoutMs)
 {
     // Keeps long screen-reader Read All requests valid without allowing unbounded buffering.
     constexpr size_t maxControlRecordBytes = 16 * 1024 * 1024;
@@ -238,12 +312,24 @@ HRESULT PipeClient::ReadControlMessage(winrt::Windows::Data::Json::JsonObject& o
     if (!m_controlPipe) return E_UNEXPECTED;
 
     char chunk[4096];
+    const ULONGLONG deadline = timeoutMs == INFINITE ? 0 : GetTickCount64() + timeoutMs;
 
     while (m_controlInputBuffer.find('\n') == std::string::npos)
     {
         if (m_controlInputBuffer.size() > maxControlRecordBytes)
         {
             return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
+        }
+
+        DWORD operationTimeout = INFINITE;
+        if (timeoutMs != INFINITE)
+        {
+            const ULONGLONG now = GetTickCount64();
+            if (now >= deadline)
+            {
+                return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+            }
+            operationTimeout = static_cast<DWORD>(deadline - now);
         }
 
         wil::unique_event overlappedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
@@ -266,9 +352,11 @@ HRESULT PipeClient::ReadControlMessage(winrt::Windows::Data::Json::JsonObject& o
             }
         }
 
-        if (!GetOverlappedResult(m_controlPipe.get(), &overlapped, &bytesRead, TRUE))
+        HRESULT hr = CompleteOverlappedOperation(
+            m_controlPipe.get(), overlapped, bytesRead, operationTimeout);
+        if (FAILED(hr))
         {
-            return HRESULT_FROM_WIN32(GetLastError());
+            return hr;
         }
 
         if (bytesRead > 0)
@@ -361,5 +449,10 @@ void PipeClient::Cancel()
 void PipeClient::FailNextCancellationMessageForTest()
 {
     m_failNextCancellationMessageForTest = true;
+}
+
+void PipeClient::FailNextSpeakMessageForTest()
+{
+    m_failNextSpeakMessageForTest = true;
 }
 #endif
