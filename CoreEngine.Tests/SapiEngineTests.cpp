@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "MockSapiInterfaces.h"
 #include "../CoreEngine/PipeClient.h"
+#include "../CoreEngine/JsonValue.h"
 #include "../CoreEngine/SapiEngine.h"
 #include "../CoreEngine/PcmFrameAssembler.h"
 #include <sddl.h>
@@ -965,22 +966,82 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsAndDispatchesToSite) {
     engine->m_cpSite.copy_from(mockSite.get());
     engine->m_audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
 
-    nlohmann::json eventJson;
-    eventJson["event"] = "word_boundary";
-    eventJson["audio_offset_ms"] = 50u;
-    eventJson["text_offset"] = 17u;
-    eventJson["text_length"] = 5u;
+    const auto makeEvent = [](auto audioOffset, auto textOffset, auto textLength) {
+        return nlohmann::json{
+            {"event", "word_boundary"},
+            {"audio_offset_ms", audioOffset},
+            {"text_offset", textOffset},
+            {"text_length", textLength}
+        };
+    };
 
-    engine->OnSpeechEvent(eventJson);
+    engine->OnSpeechEvent(makeEvent(50u, 17u, 5u));
+    engine->OnSpeechEvent(makeEvent(50, 17, 5));
+    engine->OnSpeechEvent(makeEvent(50.0, 17.0, 5.0));
+
+    {
+        std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
+        ASSERT_EQ(mockSite->receivedEvents.size(), 3u);
+        for (const SPEVENT& received : mockSite->receivedEvents)
+        {
+            EXPECT_EQ(received.eEventId, SPEI_WORD_BOUNDARY);
+            EXPECT_EQ(received.elParamType, SPET_LPARAM_IS_UNDEFINED);
+            EXPECT_EQ(received.ullAudioStreamOffset, 2400u);
+            EXPECT_EQ(received.wParam, 5u);
+            EXPECT_EQ(received.lParam, 17);
+        }
+    }
+
+    engine->OnSpeechEvent(makeEvent(50u, -1, 5u));
+    engine->OnSpeechEvent(nlohmann::json{
+        {"event", "word_boundary"},
+        {"audio_offset_ms", 50u},
+        {"text_offset", 17u}
+    });
+    engine->OnSpeechEvent(nlohmann::json{
+        {"event", "word_boundary"},
+        {"text_offset", 17u},
+        {"text_length", 5u}
+    });
 
     std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
-    ASSERT_EQ(mockSite->receivedEvents.size(), 1u);
-    const SPEVENT& received = mockSite->receivedEvents.front();
-    EXPECT_EQ(received.eEventId, SPEI_WORD_BOUNDARY);
-    EXPECT_EQ(received.elParamType, SPET_LPARAM_IS_UNDEFINED);
-    EXPECT_EQ(received.ullAudioStreamOffset, 2400u);
-    EXPECT_EQ(received.wParam, 5u);
-    EXPECT_EQ(received.lParam, 17);
+    EXPECT_EQ(mockSite->receivedEvents.size(), 3u);
+}
+
+TEST(JsonValueTests, TryGetJsonUnsignedIntegerAcceptsCompatibleNumberRepresentations) {
+    uint32_t output = 0;
+
+    EXPECT_TRUE(TryGetJsonUnsignedInteger(nlohmann::json(17u), output));
+    EXPECT_EQ(output, 17u);
+
+    EXPECT_TRUE(TryGetJsonUnsignedInteger(nlohmann::json(18), output));
+    EXPECT_EQ(output, 18u);
+
+    EXPECT_TRUE(TryGetJsonUnsignedInteger(nlohmann::json(19.0), output));
+    EXPECT_EQ(output, 19u);
+}
+
+TEST(JsonValueTests, TryGetJsonUnsignedIntegerRejectsIncompatibleValuesWithoutChangingOutput) {
+    const std::vector<nlohmann::json> invalidValues{
+        nlohmann::json(-1),
+        nlohmann::json(1.5),
+        nlohmann::json(std::numeric_limits<double>::infinity()),
+        nlohmann::json(9007199254740992.0),
+        nlohmann::json(4294967296ull),
+        nlohmann::json(static_cast<double>((std::numeric_limits<uint64_t>::max)())),
+        nlohmann::json(true),
+        nlohmann::json("17"),
+        nlohmann::json(nullptr),
+        nlohmann::json::array(),
+        nlohmann::json::object()
+    };
+
+    for (const auto& invalidValue : invalidValues)
+    {
+        uint32_t output = 123u;
+        EXPECT_FALSE(TryGetJsonUnsignedInteger(invalidValue, output));
+        EXPECT_EQ(output, 123u);
+    }
 }
 
 TEST_F(SapiEngineTests, OnSpeechEventPreservesLongAudioOffsets) {
@@ -1288,6 +1349,31 @@ TEST_F(SapiEngineTests, CreateProviderSessionDoesNotPublishAnInvalidInfoResponse
     EXPECT_EQ(engine->m_pWorker, nullptr);
 }
 
+TEST_F(SapiEngineTests, CreateProviderSessionAcceptsIntegralFloatAudioFormatNumbers) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    auto engine = winrt::make_self<CSapiEngine>();
+    engine->m_providerExecutablePath = L"ignored.exe";
+    engine->m_providerPipeName = server.PipeName();
+
+    std::atomic_bool infoResponseSent{false};
+    std::thread infoResponder([&server, &infoResponseSent] {
+        std::string request;
+        infoResponseSent = server.ReadControl(request) &&
+            request == "{\"command\":\"info\"}\n" &&
+            server.WriteControl(
+                "{\"response\":\"info\",\"audio_format\":{\"sample_rate\":24000.0,\"bits_per_sample\":16.0,\"channels\":1.0}}\n");
+    });
+
+    ASSERT_EQ(engine->CreateProviderSessionLocked(), S_OK);
+    infoResponder.join();
+    EXPECT_TRUE(infoResponseSent.load());
+    EXPECT_EQ(engine->m_audioFormat.nSamplesPerSec, 24000u);
+    EXPECT_EQ(engine->m_audioFormat.wBitsPerSample, 16u);
+    EXPECT_EQ(engine->m_audioFormat.nChannels, 1u);
+}
+
 TEST_F(SapiEngineTests, InvalidCancellationBoundaryFaultsTheWorker) {
     ControlPipeTestServer server;
     ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
@@ -1364,6 +1450,23 @@ TEST_F(SapiEngineTests, NonIntegerSynthesisCompleteTotalFaultsTheWorker) {
 
     EXPECT_TRUE(worker.WaitForFaultForTest(1000));
     EXPECT_TRUE(worker.IsFaulted());
+}
+
+TEST_F(SapiEngineTests, IntegralFloatSynthesisCompleteFieldsCompleteTheRequest) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 22));
+
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":22.0,\"total_audio_bytes\":0.0}\n"));
+
+    EXPECT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
+    EXPECT_FALSE(worker.IsFaulted());
 }
 
 TEST_F(SapiEngineTests, DuplicateSynthesisCompleteTotalFaultsTheWorker) {

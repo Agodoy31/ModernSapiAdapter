@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "SapiEngine.h"
+#include "JsonValue.h"
 
 namespace {
     std::string WideToUtf8(const wchar_t* wstr, size_t len) {
@@ -246,11 +247,15 @@ void CSapiEngine::OnSpeechEvent(const nlohmann::json& eventJson) try
     if (!m_cpSite) return;
 
     if (!eventJson.contains("event") || !eventJson["event"].is_string()) return;
-    auto eventStr = eventJson["event"].get<std::string>();
+    const std::string_view eventStr = eventJson["event"].get<std::string_view>();
     
-    if (eventJson.contains("speak_id") && eventJson["speak_id"].is_number_integer())
+    if (eventJson.contains("speak_id"))
     {
-        uint64_t eventSpeakId = eventJson["speak_id"].get<uint64_t>();
+        uint64_t eventSpeakId = 0;
+        if (!TryGetJsonUnsignedInteger(eventJson["speak_id"], eventSpeakId))
+        {
+            return;
+        }
         if (eventSpeakId != m_speakIdCounter.load())
         {
             return; // Drop stale event
@@ -259,15 +264,21 @@ void CSapiEngine::OnSpeechEvent(const nlohmann::json& eventJson) try
 
     if (eventStr == "word_boundary")
     {
+        uint32_t audioMs = 0;
+        uint32_t textOffset = 0;
+        uint32_t textLength = 0;
+        if (!eventJson.contains("audio_offset_ms") || !TryGetJsonUnsignedInteger(eventJson["audio_offset_ms"], audioMs) ||
+            !eventJson.contains("text_offset") || !TryGetJsonUnsignedInteger(eventJson["text_offset"], textOffset) ||
+            !eventJson.contains("text_length") || !TryGetJsonUnsignedInteger(eventJson["text_length"], textLength))
+        {
+            return;
+        }
+
         SPEVENT spEvent = {};
         spEvent.eEventId = SPEI_WORD_BOUNDARY;
         spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
-        
-        uint32_t audioMs = (eventJson.contains("audio_offset_ms") && eventJson["audio_offset_ms"].is_number_unsigned()) ? eventJson["audio_offset_ms"].get<uint32_t>() : 0;
         spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
 
-        uint32_t textOffset = (eventJson.contains("text_offset") && eventJson["text_offset"].is_number_unsigned()) ? eventJson["text_offset"].get<uint32_t>() : 0;
-        uint32_t textLength = (eventJson.contains("text_length") && eventJson["text_length"].is_number_unsigned()) ? eventJson["text_length"].get<uint32_t>() : 0;
         spEvent.wParam = static_cast<WPARAM>(textLength);
         spEvent.lParam = static_cast<LPARAM>(textOffset);
         
@@ -275,15 +286,21 @@ void CSapiEngine::OnSpeechEvent(const nlohmann::json& eventJson) try
     }
     else if (eventStr == "sentence_boundary")
     {
+        uint32_t audioMs = 0;
+        uint32_t textOffset = 0;
+        uint32_t textLength = 0;
+        if (!eventJson.contains("audio_offset_ms") || !TryGetJsonUnsignedInteger(eventJson["audio_offset_ms"], audioMs) ||
+            !eventJson.contains("text_offset") || !TryGetJsonUnsignedInteger(eventJson["text_offset"], textOffset) ||
+            !eventJson.contains("text_length") || !TryGetJsonUnsignedInteger(eventJson["text_length"], textLength))
+        {
+            return;
+        }
+
         SPEVENT spEvent = {};
         spEvent.eEventId = SPEI_SENTENCE_BOUNDARY;
         spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
-        
-        uint32_t audioMs = (eventJson.contains("audio_offset_ms") && eventJson["audio_offset_ms"].is_number_unsigned()) ? eventJson["audio_offset_ms"].get<uint32_t>() : 0;
         spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
 
-        uint32_t textOffset = (eventJson.contains("text_offset") && eventJson["text_offset"].is_number_unsigned()) ? eventJson["text_offset"].get<uint32_t>() : 0;
-        uint32_t textLength = (eventJson.contains("text_length") && eventJson["text_length"].is_number_unsigned()) ? eventJson["text_length"].get<uint32_t>() : 0;
         spEvent.wParam = static_cast<WPARAM>(textLength);
         spEvent.lParam = static_cast<LPARAM>(textOffset);
         
@@ -291,10 +308,14 @@ void CSapiEngine::OnSpeechEvent(const nlohmann::json& eventJson) try
     }
     else if (eventStr == "bookmark_reached")
     {
+        uint32_t audioMs = 0;
+        if (!eventJson.contains("audio_offset_ms") || !TryGetJsonUnsignedInteger(eventJson["audio_offset_ms"], audioMs))
+        {
+            return;
+        }
+
         SPEVENT spEvent = {};
         spEvent.eEventId = SPEI_TTS_BOOKMARK;
-        
-        uint32_t audioMs = (eventJson.contains("audio_offset_ms") && eventJson["audio_offset_ms"].is_number_unsigned()) ? eventJson["audio_offset_ms"].get<uint32_t>() : 0;
         spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
 
         if (eventJson.contains("bookmark_name") && eventJson["bookmark_name"].is_string())
@@ -423,18 +444,15 @@ HRESULT CSapiEngine::CreateProviderSessionLocked()
 
         const auto& format = infoResponse["audio_format"];
         const auto isPositiveInteger = [&format](const char* name, uint64_t maximum, uint64_t& value) {
-            if (!format.contains(name) || !format[name].is_number_unsigned())
+            if (!format.contains(name) || !TryGetJsonUnsignedInteger(format[name], value))
             {
                 return false;
             }
 
-            const uint64_t number = format[name].get<uint64_t>();
-            if (number == 0 || number > maximum)
+            if (value == 0 || value > maximum)
             {
                 return false;
             }
-
-            value = number;
             return true;
         };
 

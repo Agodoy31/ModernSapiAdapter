@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "SpeechWorker.h"
 #include "SapiEngine.h"
+#include "JsonValue.h"
 
 SpeechWorker::SpeechWorker(CSapiEngine* pEngine, PipeClient* pClient, WORD blockAlign)
     : m_pEngine(pEngine), m_pClient(pClient), m_exit(false), m_frameAssembler(blockAlign)
@@ -584,10 +585,23 @@ void SpeechWorker::ControlThreadProc()
             bool faultAfterStateUpdate = false;
             if (json.contains("event") && json.contains("speak_id"))
             {
-                if (json["event"].is_string() && json["speak_id"].is_number_integer())
+                if (json["event"].is_string())
                 {
                     std::string_view eventStr = json["event"].get<std::string_view>();
-                    uint64_t eventSpeakId = json["speak_id"].get<uint64_t>();
+                    uint64_t eventSpeakId = 0;
+                    if (!TryGetJsonUnsignedInteger(json["speak_id"], eventSpeakId))
+                    {
+                        continue;
+                    }
+
+                    const bool isSynthesisComplete = eventStr == "synthesis_complete";
+                    const bool isSynthesisCancelled = eventStr == "synthesis_cancelled";
+                    uint64_t terminalAudioBytes = 0;
+                    const bool hasValidTerminalAudioBytes =
+                        (!isSynthesisComplete && !isSynthesisCancelled) ||
+                        ((isSynthesisComplete ? json.contains("total_audio_bytes") : json.contains("audio_bytes_written")) &&
+                         TryGetJsonUnsignedInteger(
+                             json[isSynthesisComplete ? "total_audio_bytes" : "audio_bytes_written"], terminalAudioBytes));
 
                     {
                         std::lock_guard<std::mutex> lock(m_requestMutex);
@@ -598,13 +612,12 @@ void SpeechWorker::ControlThreadProc()
                                 eventStr == "sentence_boundary" || eventStr == "bookmark_reached" ||
                                 eventStr == "synthesis_complete" || eventStr == "synthesis_cancelled" ||
                                 eventStr == "log";
-                            if (isProviderProgress &&
+                            if (isProviderProgress && hasValidTerminalAudioBytes &&
                                 (m_requestState == RequestState::Speaking || m_requestState == RequestState::Cancelling))
                             {
                                 m_lastProviderProgressTick.store(GetTickCount64(), std::memory_order_release);
                             }
 
-                            constexpr double maxExactJsonInteger = 9007199254740991.0;
                             const bool isSpeechEvent = eventStr == "word_boundary" ||
                                 eventStr == "sentence_boundary" || eventStr == "bookmark_reached";
                             if (isSpeechEvent && m_requestState != RequestState::Speaking)
@@ -619,27 +632,23 @@ void SpeechWorker::ControlThreadProc()
                                 CoreLog(L"[SpeechWorker] Duplicate synthesis_complete for completed speak_id %llu.", eventSpeakId);
                                 faultAfterStateUpdate = true;
                             }
-                            else if (eventStr == "synthesis_complete" && m_requestState == RequestState::Speaking)
+                            else if (isSynthesisComplete && m_requestState == RequestState::Speaking)
                             {
-                                if (!json.contains("total_audio_bytes") || !json["total_audio_bytes"].is_number())
+                                if (!hasValidTerminalAudioBytes)
                                 {
-                                    CoreLog(L"[SpeechWorker] synthesis_complete for speak_id %llu omitted total_audio_bytes.", eventSpeakId);
+                                    CoreLog(L"[SpeechWorker] synthesis_complete for speak_id %llu has an invalid total_audio_bytes value.", eventSpeakId);
                                     faultAfterStateUpdate = true;
                                 }
                                 else
                                 {
-                                    const double totalAudioBytesValue = json["total_audio_bytes"].get<double>();
-                                    if (!std::isfinite(totalAudioBytesValue) || totalAudioBytesValue < 0 ||
-                                        totalAudioBytesValue > maxExactJsonInteger ||
-                                        totalAudioBytesValue != static_cast<double>(static_cast<uint64_t>(totalAudioBytesValue)) ||
-                                        m_synthesisComplete)
+                                    if (m_synthesisComplete)
                                     {
                                         CoreLog(L"[SpeechWorker] synthesis_complete for speak_id %llu has an invalid or duplicate total_audio_bytes value.", eventSpeakId);
                                         faultAfterStateUpdate = true;
                                     }
                                     else
                                     {
-                                        m_expectedAudioBytes = static_cast<uint64_t>(totalAudioBytesValue);
+                                        m_expectedAudioBytes = terminalAudioBytes;
                                         if (m_expectedAudioBytes % m_frameAssembler.BlockAlign() != 0)
                                         {
                                             CoreLog(L"[SpeechWorker] synthesis_complete for speak_id %llu is not PCM-frame aligned.", eventSpeakId);
@@ -653,27 +662,23 @@ void SpeechWorker::ControlThreadProc()
                                     }
                                 }
                             }
-                            else if (eventStr == "synthesis_cancelled" && m_requestState == RequestState::Cancelling)
+                            else if (isSynthesisCancelled && m_requestState == RequestState::Cancelling)
                             {
-                                if (!json.contains("audio_bytes_written") || !json["audio_bytes_written"].is_number())
+                                if (!hasValidTerminalAudioBytes)
                                 {
-                                    CoreLog(L"[SpeechWorker] synthesis_cancelled for speak_id %llu omitted audio_bytes_written.", eventSpeakId);
+                                    CoreLog(L"[SpeechWorker] synthesis_cancelled for speak_id %llu has an invalid audio_bytes_written value.", eventSpeakId);
                                     faultAfterStateUpdate = true;
                                 }
                                 else
                                 {
-                                    const double cancelledAudioBytesValue = json["audio_bytes_written"].get<double>();
-                                    if (!std::isfinite(cancelledAudioBytesValue) || cancelledAudioBytesValue < 0 ||
-                                        cancelledAudioBytesValue > maxExactJsonInteger ||
-                                        cancelledAudioBytesValue != static_cast<double>(static_cast<uint64_t>(cancelledAudioBytesValue)) ||
-                                        m_cancellationComplete)
+                                    if (m_cancellationComplete)
                                     {
                                         CoreLog(L"[SpeechWorker] synthesis_cancelled for speak_id %llu has an invalid or duplicate audio_bytes_written value.", eventSpeakId);
                                         faultAfterStateUpdate = true;
                                     }
                                     else
                                     {
-                                        m_cancelledAudioBytes = static_cast<uint64_t>(cancelledAudioBytesValue);
+                                        m_cancelledAudioBytes = terminalAudioBytes;
                                         if (m_cancelledAudioBytes % m_frameAssembler.BlockAlign() != 0)
                                         {
                                             CoreLog(L"[SpeechWorker] synthesis_cancelled for speak_id %llu is not PCM-frame aligned.", eventSpeakId);

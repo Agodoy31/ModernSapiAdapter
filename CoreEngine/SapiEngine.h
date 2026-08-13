@@ -20,6 +20,7 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_OnSpeechEventPreservesLongAudioOffsets_Test;
     friend class SapiEngineTests_RejectedAudioWriteWithFailedCancellationQuarantinesWorker_Test;
     friend class SapiEngineTests_CreateProviderSessionDoesNotPublishAnInvalidInfoResponse_Test;
+    friend class SapiEngineTests_CreateProviderSessionAcceptsIntegralFloatAudioFormatNumbers_Test;
     friend class SapiEngineTests_FaultedSessionDoesNotForwardAnEventPausedBeforeItsSapiCallback_Test;
     friend class SapiEngineTests_OnSpeechEventAlignsOffsetsToPcmFrames_Test;
     friend class SapiEngineTests_CancellationDiscardsCarriedPcmBeforeTheNextRequest_Test;
