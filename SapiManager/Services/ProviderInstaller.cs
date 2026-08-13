@@ -33,8 +33,7 @@ public class ProviderInstaller
             if (manifestEntry != null)
             {
                 using var stream = manifestEntry.Open();
-                var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                manifest = JsonSerializer.Deserialize<ProviderPackageManifest>(stream, jsonOptions);
+                manifest = JsonSerializer.Deserialize(stream, SapiJsonContext.Default.ProviderPackageManifest);
             }
         }
         catch (Exception ex)

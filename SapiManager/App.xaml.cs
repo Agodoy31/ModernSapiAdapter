@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Windows;
+using SapiManager.Services;
 using SapiManager.Views;
 
 namespace SapiManager;
@@ -25,8 +26,8 @@ public partial class App : Application
         }
 
         string currentBaseDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        string? installLocation = SapiManager.Services.RegistryManager.GetInstallLocation();
-        string? installedVersionStr = SapiManager.Services.RegistryManager.GetInstalledVersion();
+        string? installLocation = RegistryManager.GetInstallLocation();
+        string? installedVersionStr = RegistryManager.GetInstalledVersion();
         
         bool isRunningFromInstallLocation = false;
 
@@ -61,7 +62,7 @@ public partial class App : Application
         else
         {
             // Already installed. Compare versions.
-            Version currentVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
+            Version currentVersion = RegistryManager.CurrentVersion;
             Version.TryParse(installedVersionStr, out Version? installedVersion);
             installedVersion ??= new Version(1, 0, 0);
 

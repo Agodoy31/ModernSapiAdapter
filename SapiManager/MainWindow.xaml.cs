@@ -59,10 +59,9 @@ public partial class MainWindow : Window
 
         if (Directory.Exists(providersDir))
         {
-            var subDirs = Directory.GetDirectories(providersDir);
-            foreach (var dir in subDirs)
+            foreach (string dir in Directory.EnumerateDirectories(providersDir))
             {
-                foreach (var exePath in Directory.GetFiles(dir, "*.exe"))
+                foreach (string exePath in Directory.EnumerateFiles(dir, "*.exe"))
                 {
                     await TryAddProviderFromExeAsync(exePath);
                 }

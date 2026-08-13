@@ -2,13 +2,25 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <Version>2.0.9</Version>
+    <AssemblyVersion>2.0.9.0</AssemblyVersion>
+    <FileVersion>2.0.9.0</FileVersion>
+
+    <!-- Performance & JIT Tuning -->
+    <TieredPGO>true</TieredPGO>
+
+    <!-- Dead Feature Stripping -->
+    <EventSourceSupport>false</EventSourceSupport>
+    <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+    <EnableUnsafeBinaryFormatterSerialization>false</EnableUnsafeBinaryFormatterSerialization>
 
     <!-- Output Minimization & Single File Settings -->
     <PublishSingleFile>true</PublishSingleFile>
+    <PublishReadyToRun>true</PublishReadyToRun>
     <SelfContained>false</SelfContained>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     
@@ -18,7 +30,35 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Speech" Version="8.0.0" />
+    <PackageReference Include="System.Speech" Version="10.0.0" />
   </ItemGroup>
+
+  <!-- Version Bump Enforcement on Publish -->
+  <Target Name="ValidateVersionBumpBeforePublish" BeforeTargets="BeforePublish;Publish">
+    <PropertyGroup>
+      <VersionTrackingFile>$(MSBuildProjectDirectory)\.last_published_version</VersionTrackingFile>
+    </PropertyGroup>
+
+    <ReadLinesFromFile File="$(VersionTrackingFile)" Condition="Exists('$(VersionTrackingFile)')">
+      <Output TaskParameter="Lines" ItemName="LastPublishedVersionLines" />
+    </ReadLinesFromFile>
+
+    <PropertyGroup Condition="Exists('$(VersionTrackingFile)')">
+      <LastPublishedVersion>%(LastPublishedVersionLines.Identity)</LastPublishedVersion>
+    </PropertyGroup>
+
+    <Message Importance="high" Text="[Version Check] Current Version: $(Version) | Last Published: $(LastPublishedVersion)" />
+
+    <Error Condition="'$(LastPublishedVersion)' != '' AND '$(Version)' == '$(LastPublishedVersion)'"
+           Text="PUBLISH BLOCKED: Version bump required! Current version ($(Version)) matches the last published version ($(LastPublishedVersion)). You must update &lt;Version&gt; in SapiManager.csproj before publishing." />
+  </Target>
+
+  <Target Name="RecordVersionAfterPublish" AfterTargets="Publish">
+    <PropertyGroup>
+      <VersionTrackingFile>$(MSBuildProjectDirectory)\.last_published_version</VersionTrackingFile>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(VersionTrackingFile)" Lines="$(Version)" Overwrite="true" Encoding="UTF-8" />
+    <Message Importance="high" Text="[Version Recorded] Successfully recorded published version $(Version) to .last_published_version" />
+  </Target>
 
 </Project>

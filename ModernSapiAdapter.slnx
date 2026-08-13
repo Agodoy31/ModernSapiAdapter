@@ -9,4 +9,5 @@
   <Project Path="CoreEngine/CoreEngine.vcxproj" Id="17ece6f7-00ac-432e-9bf9-01cefb4581b3" />
   <Project Path="MockProvider/MockProvider.csproj" Id="2578a7fd-2984-45d1-83fe-b3745871d685" />
   <Project Path="SapiManager/SapiManager.csproj" />
+  <Project Path="SapiManager.Tests/SapiManager.Tests.csproj" />
 </Solution>

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Frozen;
+using System.Collections.Generic;
 using System.Globalization;
 using Microsoft.Win32;
 using SapiManager.Models;
@@ -13,11 +15,37 @@ public static class RegistryManager
     private const string SapiVoicesKeyPath = @"SOFTWARE\Microsoft\Speech\Voices\Tokens";
     private const string UninstallKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\ModernSapiAdapter";
 
+    private static readonly Version s_currentVersion = typeof(RegistryManager).Assembly.GetName().Version ?? new Version(1, 0, 0);
+
+    public static Version CurrentVersion => s_currentVersion;
+
+    private static readonly FrozenDictionary<string, string> s_commonLcids = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["en-US"] = "409",
+        ["en-GB"] = "809",
+        ["en-CA"] = "1009",
+        ["en-AU"] = "C09",
+        ["es-ES"] = "C0A",
+        ["es-MX"] = "80A",
+        ["fr-FR"] = "40C",
+        ["de-DE"] = "407",
+        ["it-IT"] = "410",
+        ["ja-JP"] = "411",
+        ["ko-KR"] = "412",
+        ["zh-CN"] = "804",
+        ["zh-TW"] = "404",
+        ["pt-BR"] = "416",
+        ["pt-PT"] = "816"
+    }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Converts a BCP-47 language tag (e.g., "en-US") into a SAPI 5 hex LCID string (e.g., "409").
     /// </summary>
     public static string LanguageTagToHexLcid(string bcp47Tag)
     {
+        if (string.IsNullOrWhiteSpace(bcp47Tag)) return "409";
+        if (s_commonLcids.TryGetValue(bcp47Tag, out string? lcid)) return lcid;
+
         try
         {
             CultureInfo culture = CultureInfo.GetCultureInfo(bcp47Tag);
@@ -179,7 +207,7 @@ public static class RegistryManager
         try
         {
             string exePath = System.IO.Path.Combine(installDir, "SapiManager.exe");
-            string version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0";
+            string version = CurrentVersion.ToString();
             
             using RegistryKey baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
             using RegistryKey uninstallKey = baseKey.CreateSubKey(UninstallKeyPath, true);

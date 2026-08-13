@@ -31,8 +31,7 @@ public class ProviderDiscovery
         try
         {
             string json = await File.ReadAllTextAsync(manifestPath);
-            var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-            manifest = JsonSerializer.Deserialize<ProviderPackageManifest>(json, jsonOptions);
+            manifest = JsonSerializer.Deserialize(json, SapiJsonContext.Default.ProviderPackageManifest);
         }
         catch (Exception ex)
         {
@@ -80,40 +79,42 @@ public class ProviderDiscovery
             using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
             await client.ConnectAsync(5000);
 
-            var utf8NoBom = new UTF8Encoding(false);
-            using var reader = new StreamReader(client, utf8NoBom, leaveOpen: true);
-            using var writer = new StreamWriter(client, utf8NoBom, leaveOpen: true) { AutoFlush = true };
-
             // 1. Send info command
             var infoRequest = new InfoRequest();
-            string infoJson = JsonSerializer.Serialize(infoRequest);
-            await writer.WriteLineAsync(infoJson);
+            byte[] infoBytes = JsonSerializer.SerializeToUtf8Bytes(infoRequest, SapiJsonContext.Default.InfoRequest);
+            await client.WriteAsync(infoBytes);
+            client.WriteByte((byte)'\n');
+            await client.FlushAsync();
 
-            string? infoResponseJson = await reader.ReadLineAsync();
+            string? infoResponseJson = await ReadLineUtf8Async(client);
             InfoResponse? infoResponse = null;
             if (!string.IsNullOrEmpty(infoResponseJson))
             {
-                infoResponse = JsonSerializer.Deserialize<InfoResponse>(infoResponseJson);
+                infoResponse = JsonSerializer.Deserialize(infoResponseJson, SapiJsonContext.Default.InfoResponse);
             }
 
             // 2. Send voices command
             var voicesRequest = new VoicesRequest();
-            string voicesJson = JsonSerializer.Serialize(voicesRequest);
-            await writer.WriteLineAsync(voicesJson);
+            byte[] voicesBytes = JsonSerializer.SerializeToUtf8Bytes(voicesRequest, SapiJsonContext.Default.VoicesRequest);
+            await client.WriteAsync(voicesBytes);
+            client.WriteByte((byte)'\n');
+            await client.FlushAsync();
 
-            string? voicesResponseJson = await reader.ReadLineAsync();
+            string? voicesResponseJson = await ReadLineUtf8Async(client);
             VoicesResponse? voicesResponse = null;
             if (!string.IsNullOrEmpty(voicesResponseJson))
             {
-                voicesResponse = JsonSerializer.Deserialize<VoicesResponse>(voicesResponseJson);
+                voicesResponse = JsonSerializer.Deserialize(voicesResponseJson, SapiJsonContext.Default.VoicesResponse);
             }
 
             // 3. Send shutdown command
             try
             {
                 var shutdownRequest = new ShutdownRequest();
-                string shutdownJson = JsonSerializer.Serialize(shutdownRequest);
-                await writer.WriteLineAsync(shutdownJson);
+                byte[] shutdownBytes = JsonSerializer.SerializeToUtf8Bytes(shutdownRequest, SapiJsonContext.Default.ShutdownRequest);
+                await client.WriteAsync(shutdownBytes);
+                client.WriteByte((byte)'\n');
+                await client.FlushAsync();
             }
             catch (Exception ex)
             {
@@ -139,6 +140,45 @@ public class ProviderDiscovery
             {
                 try { bgProcess.Kill(entireProcessTree: true); } catch (Exception ex) { Debug.WriteLine($"Error killing provider process '{exePath}': {ex.Message}"); }
             }
+        }
+    }
+
+    private static async Task<string?> ReadLineUtf8Async(NamedPipeClientStream stream)
+    {
+        using var ms = new MemoryStream();
+        byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(65536);
+        try
+        {
+            while (true)
+            {
+                int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
+                if (bytesRead <= 0) break;
+
+                int newlineIndex = Array.IndexOf(buffer, (byte)'\n', 0, bytesRead);
+                if (newlineIndex >= 0)
+                {
+                    int lengthToWrite = newlineIndex;
+                    if (lengthToWrite > 0 && buffer[lengthToWrite - 1] == (byte)'\r')
+                    {
+                        lengthToWrite--;
+                    }
+                    if (lengthToWrite > 0)
+                    {
+                        ms.Write(buffer, 0, lengthToWrite);
+                    }
+                    break;
+                }
+                else
+                {
+                    ms.Write(buffer, 0, bytesRead);
+                }
+            }
+
+            return ms.Length > 0 ? Encoding.UTF8.GetString(ms.ToArray()) : null;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 }
