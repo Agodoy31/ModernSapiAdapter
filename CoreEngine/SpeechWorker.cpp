@@ -30,6 +30,7 @@ SpeechWorker::~SpeechWorker()
     m_exit.store(true);
 #if defined(_DEBUG)
     ReleaseEventForwardForTest();
+    ReleaseAbortTransitionForTest();
     ReleaseFaultPublicationForTest();
 #endif
     
@@ -94,6 +95,36 @@ void SpeechWorker::ReleaseEventForwardForTest()
     m_pauseNextEventForwardForTest = false;
     m_eventForwardPausedForTest = false;
     m_eventForwardTestChanged.notify_all();
+}
+
+void SpeechWorker::PauseNextAbortTransitionForTest()
+{
+    std::lock_guard<std::mutex> lock(m_abortTransitionTestMutex);
+    m_pauseNextAbortTransitionForTest = true;
+    m_abortTransitionPausedForTest = false;
+    m_wasCancellingAtAbortUnlockForTest = false;
+}
+
+bool SpeechWorker::WaitForAbortTransitionPauseForTest(DWORD timeoutMs)
+{
+    std::unique_lock<std::mutex> lock(m_abortTransitionTestMutex);
+    return m_abortTransitionTestChanged.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
+        return m_abortTransitionPausedForTest || m_exit.load();
+    }) && m_abortTransitionPausedForTest;
+}
+
+void SpeechWorker::ReleaseAbortTransitionForTest()
+{
+    std::lock_guard<std::mutex> lock(m_abortTransitionTestMutex);
+    m_pauseNextAbortTransitionForTest = false;
+    m_abortTransitionPausedForTest = false;
+    m_abortTransitionTestChanged.notify_all();
+}
+
+bool SpeechWorker::WasCancellingAtAbortUnlockForTest()
+{
+    std::lock_guard<std::mutex> lock(m_abortTransitionTestMutex);
+    return m_wasCancellingAtAbortUnlockForTest;
 }
 
 bool SpeechWorker::WaitForFaultForTest(DWORD timeoutMs)
@@ -177,38 +208,79 @@ void SpeechWorker::Stop()
 
 HRESULT SpeechWorker::CancelAndDrain()
 {
-    const ULONGLONG cancellationDeadline = GetTickCount64() + CancellationTimeoutMs;
+    const ULONGLONG cancellationEntryTick = GetTickCount64();
+    const ULONGLONG cancellationDeadline = cancellationEntryTick + CancellationTimeoutMs;
+#if defined(_DEBUG)
+    CoreLog(L"[CancelTrace] cancel_and_drain_enter tick=%llu.", cancellationEntryTick);
+#endif
     uint64_t speakId = 0;
     {
         std::lock_guard<std::mutex> lock(m_requestMutex);
-        if (m_requestState == RequestState::Idle)
+        const HRESULT transitionHr = BeginCancellationLocked(
+            cancellationDeadline, cancellationEntryTick, speakId);
+        if (transitionHr == S_FALSE)
         {
             return S_OK;
         }
-
-        if (m_requestState == RequestState::Faulted)
+        if (FAILED(transitionHr))
         {
-            return E_FAIL;
+            return transitionHr;
         }
-
-        if (m_requestState == RequestState::Cancelling)
-        {
-            return E_UNEXPECTED;
-        }
-
-        speakId = m_activeSpeakId;
-        m_cancellationComplete = false;
-        m_cancellationFailed = false;
-        m_cancellationDeadlineTick = cancellationDeadline;
-        m_frameAssembler.Reset();
-        m_requestState = RequestState::Cancelling;
     }
 
+    return FinishCancellation(speakId, cancellationDeadline, cancellationEntryTick);
+}
+
+HRESULT SpeechWorker::BeginCancellationLocked(ULONGLONG cancellationDeadline,
+                                              ULONGLONG cancellationEntryTick,
+                                              uint64_t& speakId)
+{
+    if (m_requestState == RequestState::Idle)
+    {
+        return S_FALSE;
+    }
+
+    if (m_requestState == RequestState::Faulted)
+    {
+        return E_FAIL;
+    }
+
+    if (m_requestState == RequestState::Cancelling)
+    {
+        return E_UNEXPECTED;
+    }
+
+    speakId = m_activeSpeakId;
+    m_cancellationComplete = false;
+    m_cancellationFailed = false;
+    m_cancellationDeadlineTick = cancellationDeadline;
+    m_frameAssembler.Reset();
+    m_requestState = RequestState::Cancelling;
+#if defined(_DEBUG)
+    CoreLog(L"[CancelTrace] speak_id=%llu cancelling_published tick=%llu entry_to_publish_ms=%llu raw=%llu delivered=%llu.",
+        speakId, GetTickCount64(), GetTickCount64() - cancellationEntryTick,
+        m_rawAudioBytesRead, m_deliveredAudioBytes);
+#endif
+    return S_OK;
+}
+
+HRESULT SpeechWorker::FinishCancellation(uint64_t speakId,
+                                         ULONGLONG cancellationDeadline,
+                                         ULONGLONG cancellationEntryTick)
+{
     const ULONGLONG beforeSend = GetTickCount64();
     const DWORD sendTimeout = beforeSend < cancellationDeadline
         ? static_cast<DWORD>(cancellationDeadline - beforeSend)
         : 0;
+#if defined(_DEBUG)
+    CoreLog(L"[CancelTrace] speak_id=%llu cancel_send_begin tick=%llu remaining_budget_ms=%lu.",
+        speakId, beforeSend, sendTimeout);
+#endif
     HRESULT hr = SendCancellation(speakId, sendTimeout);
+#if defined(_DEBUG)
+    CoreLog(L"[CancelTrace] speak_id=%llu cancel_send_end tick=%llu duration_ms=%llu hr=0x%08x.",
+        speakId, GetTickCount64(), GetTickCount64() - beforeSend, hr);
+#endif
     if (FAILED(hr))
     {
         CoreLog(L"[SpeechWorker] Cancellation command failed for speak_id %llu: 0x%08x.", speakId, hr);
@@ -227,13 +299,29 @@ HRESULT SpeechWorker::CancelAndDrain()
 
     if (!completed && m_requestState == RequestState::Cancelling)
     {
+#if defined(_DEBUG)
+        const uint64_t rawAudioBytes = m_rawAudioBytesRead;
+        const uint64_t cancelledAudioBytes = m_cancelledAudioBytes;
+        const bool terminalReceived = m_cancellationComplete;
+#endif
         lock.unlock();
         CoreLog(L"[SpeechWorker] Provider did not complete cancellation within %lu ms for speak_id %llu; quarantining session.",
             CancellationTimeoutMs, speakId);
+#if defined(_DEBUG)
+        CoreLog(L"[CancelTrace] speak_id=%llu cancellation_timeout tick=%llu elapsed_ms=%llu terminal_received=%u declared=%llu raw=%llu.",
+            speakId, GetTickCount64(), GetTickCount64() - cancellationEntryTick,
+            terminalReceived ? 1u : 0u, cancelledAudioBytes, rawAudioBytes);
+#endif
         EnterFaultedState();
         return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
     }
 
+#if defined(_DEBUG)
+    CoreLog(L"[CancelTrace] speak_id=%llu cancel_and_drain_end tick=%llu elapsed_ms=%llu state=%u terminal_received=%u declared=%llu raw=%llu.",
+        speakId, GetTickCount64(), GetTickCount64() - cancellationEntryTick,
+        static_cast<unsigned>(m_requestState), m_cancellationComplete ? 1u : 0u,
+        m_cancelledAudioBytes, m_rawAudioBytesRead);
+#endif
     return m_exit.load() ? E_ABORT : (m_cancellationFailed ? E_FAIL : S_OK);
 }
 
@@ -290,7 +378,47 @@ void SpeechWorker::ForwardEventToSapi(const nlohmann::json& json)
         return;
     }
 
+    uint64_t eventSpeakId = 0;
+    if (!json.contains("speak_id") ||
+        !TryGetJsonUnsignedInteger(json["speak_id"], eventSpeakId))
+    {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> requestLock(m_requestMutex);
+        if (m_requestState != RequestState::Speaking ||
+            m_faultPending ||
+            eventSpeakId != m_activeSpeakId)
+        {
+            return;
+        }
+    }
+
+#if defined(_DEBUG)
+    const ULONGLONG callbackStartTick = GetTickCount64();
+    const std::string_view eventName = json.contains("event") && json["event"].is_string()
+        ? json["event"].get<std::string_view>()
+        : std::string_view("invalid");
+    CoreLog(L"[CancelTrace] speak_id=%llu sapi_event_begin event=%hs tick=%llu.",
+        eventSpeakId, eventName.data(), callbackStartTick);
+#endif
     m_pEngine->OnSpeechEvent(json);
+#if defined(_DEBUG)
+    const ULONGLONG callbackEndTick = GetTickCount64();
+    RequestState stateAfterCallback = RequestState::Faulted;
+    {
+        std::lock_guard<std::mutex> requestLock(m_requestMutex);
+        stateAfterCallback = m_requestState;
+    }
+    const ULONGLONG callbackDuration = callbackEndTick - callbackStartTick;
+    if (callbackDuration >= 5 || stateAfterCallback != RequestState::Speaking)
+    {
+        CoreLog(L"[CancelTrace] speak_id=%llu sapi_event_end event=%hs tick=%llu duration_ms=%llu state_after=%u.",
+            eventSpeakId, eventName.data(), callbackEndTick, callbackDuration,
+            static_cast<unsigned>(stateAfterCallback));
+    }
+#endif
 }
 
 HRESULT SpeechWorker::SendCancellation(uint64_t speakId, DWORD timeoutMs)
@@ -361,11 +489,45 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
         const DWORD actions = pOutputSite->GetActions();
         lock.lock();
 
-        if ((actions & SPVES_ABORT) != 0 && m_requestState != RequestState::Idle && m_requestState != RequestState::Faulted)
+        if ((actions & SPVES_ABORT) != 0 && m_requestState == RequestState::Speaking)
         {
+            const ULONGLONG cancellationEntryTick = GetTickCount64();
+            const ULONGLONG cancellationDeadline = cancellationEntryTick + CancellationTimeoutMs;
+#if defined(_DEBUG)
+            CoreLog(L"[CancelTrace] speak_id=%llu sapi_abort_observed tick=%llu state=%u raw=%llu delivered=%llu.",
+                m_activeSpeakId, cancellationEntryTick, static_cast<unsigned>(m_requestState),
+                m_rawAudioBytesRead, m_deliveredAudioBytes);
+#endif
+            uint64_t speakId = 0;
+            const HRESULT transitionHr = BeginCancellationLocked(
+                cancellationDeadline, cancellationEntryTick, speakId);
+            if (FAILED(transitionHr))
+            {
+                return transitionHr;
+            }
+#if defined(_DEBUG)
+            {
+                std::lock_guard<std::mutex> testLock(m_abortTransitionTestMutex);
+                m_wasCancellingAtAbortUnlockForTest = m_requestState == RequestState::Cancelling;
+            }
+#endif
             lock.unlock();
+#if defined(_DEBUG)
+            {
+                std::unique_lock<std::mutex> testLock(m_abortTransitionTestMutex);
+                if (m_pauseNextAbortTransitionForTest)
+                {
+                    m_pauseNextAbortTransitionForTest = false;
+                    m_abortTransitionPausedForTest = true;
+                    m_abortTransitionTestChanged.notify_all();
+                    m_abortTransitionTestChanged.wait(testLock, [this] {
+                        return !m_abortTransitionPausedForTest || m_exit.load();
+                    });
+                }
+            }
+#endif
             CoreLog(L"[SpeechWorker] SAPI requested SPVES_ABORT; cancelling active synthesis.");
-            return CancelAndDrain();
+            return FinishCancellation(speakId, cancellationDeadline, cancellationEntryTick);
         }
     }
 
@@ -420,6 +582,15 @@ bool SpeechWorker::CompleteCancellationIfAudioBoundaryReached()
 
     if (m_rawAudioBytesRead == m_cancelledAudioBytes)
     {
+#if defined(_DEBUG)
+        const ULONGLONG cancellationStartTick = m_cancellationDeadlineTick >= CancellationTimeoutMs
+            ? m_cancellationDeadlineTick - CancellationTimeoutMs
+            : 0;
+        CoreLog(L"[CancelTrace] speak_id=%llu cancellation_boundary_reached tick=%llu elapsed_ms=%llu declared=%llu raw=%llu.",
+            m_activeSpeakId, GetTickCount64(),
+            cancellationStartTick == 0 ? 0 : GetTickCount64() - cancellationStartTick,
+            m_cancelledAudioBytes, m_rawAudioBytesRead);
+#endif
         m_frameAssembler.Reset();
         m_requestState = RequestState::Idle;
         m_requestChanged.notify_all();
@@ -521,7 +692,18 @@ void SpeechWorker::AudioThreadProc()
             }
             else if (m_requestState == RequestState::Cancelling)
             {
+#if defined(_DEBUG)
+                const uint64_t rawBeforeRead = m_rawAudioBytesRead;
+#endif
                 m_rawAudioBytesRead += bytesRead;
+#if defined(_DEBUG)
+                if (m_cancellationComplete)
+                {
+                    CoreLog(L"[CancelTrace] speak_id=%llu cancellation_audio_read tick=%llu chunk=%lu raw_before=%llu raw_after=%llu declared=%llu.",
+                        m_activeSpeakId, GetTickCount64(), bytesRead, rawBeforeRead,
+                        m_rawAudioBytesRead, m_cancelledAudioBytes);
+                }
+#endif
                 protocolBoundaryFailed = CompleteCancellationIfAudioBoundaryReached();
             }
             else if (m_requestState == RequestState::Idle)
@@ -685,6 +867,16 @@ void SpeechWorker::ControlThreadProc()
                             }
                             else if (isSynthesisCancelled && m_requestState == RequestState::Cancelling)
                             {
+#if defined(_DEBUG)
+                                const ULONGLONG cancellationStartTick = m_cancellationDeadlineTick >= CancellationTimeoutMs
+                                    ? m_cancellationDeadlineTick - CancellationTimeoutMs
+                                    : 0;
+                                CoreLog(L"[CancelTrace] speak_id=%llu synthesis_cancelled_received tick=%llu elapsed_ms=%llu declared=%llu raw=%llu valid=%u.",
+                                    eventSpeakId, GetTickCount64(),
+                                    cancellationStartTick == 0 ? 0 : GetTickCount64() - cancellationStartTick,
+                                    terminalAudioBytes, m_rawAudioBytesRead,
+                                    hasValidTerminalAudioBytes ? 1u : 0u);
+#endif
                                 if (!hasValidTerminalAudioBytes)
                                 {
                                     CoreLog(L"[SpeechWorker] synthesis_cancelled for speak_id %llu has an invalid audio_bytes_written value.", eventSpeakId);

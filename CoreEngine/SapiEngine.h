@@ -26,6 +26,8 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_TerminalBeforeOverrunAudioForwardsOnlyDeclaredFrames_Test;
     friend class SapiEngineTests_WorkerReassemblesAwkward24BitStereoPipeFragments_Test;
     friend class SapiEngineTests_FrameAssemblyFailureFaultsWorkerWithoutEscapingThread_Test;
+    friend class SapiEngineTests_AbortObservationRejectsPcmBeforeCancellationTransportStarts_Test;
+    friend class SapiEngineTests_CancellationRejectsAnInitiallyApprovedEventAtTheSapiBoundary_Test;
 public:
     /**
      * @brief Constructs a new CSapiEngine instance.
