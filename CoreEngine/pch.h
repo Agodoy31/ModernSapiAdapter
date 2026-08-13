@@ -35,6 +35,9 @@
 #include <winreg.h>
 
 #include <string>
+#include <cmath>
+#include <concepts>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <mutex>

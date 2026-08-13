@@ -583,27 +583,45 @@ void SpeechWorker::ControlThreadProc()
         {
             bool forwardToSapi = false;
             bool faultAfterStateUpdate = false;
-            if (json.contains("event") && json.contains("speak_id"))
+            if (json.contains("event"))
             {
                 if (json["event"].is_string())
                 {
                     std::string_view eventStr = json["event"].get<std::string_view>();
                     uint64_t eventSpeakId = 0;
-                    if (!TryGetJsonUnsignedInteger(json["speak_id"], eventSpeakId))
+                    if (!json.contains("speak_id") || !TryGetJsonUnsignedInteger(json["speak_id"], eventSpeakId))
                     {
-                        continue;
+                        std::lock_guard<std::mutex> lock(m_requestMutex);
+                        if (m_requestState != RequestState::Faulted)
+                        {
+                            m_faultPending = true;
+                            faultAfterStateUpdate = true;
+                        }
                     }
-
-                    const bool isSynthesisComplete = eventStr == "synthesis_complete";
-                    const bool isSynthesisCancelled = eventStr == "synthesis_cancelled";
-                    uint64_t terminalAudioBytes = 0;
-                    const bool hasValidTerminalAudioBytes =
-                        (!isSynthesisComplete && !isSynthesisCancelled) ||
-                        ((isSynthesisComplete ? json.contains("total_audio_bytes") : json.contains("audio_bytes_written")) &&
-                         TryGetJsonUnsignedInteger(
-                             json[isSynthesisComplete ? "total_audio_bytes" : "audio_bytes_written"], terminalAudioBytes));
-
+                    else
                     {
+                        const bool isWordBoundary = eventStr == "word_boundary";
+                        const bool isSentenceBoundary = eventStr == "sentence_boundary";
+                        const bool isBookmarkReached = eventStr == "bookmark_reached";
+                        const bool isSpeechEvent = isWordBoundary || isSentenceBoundary || isBookmarkReached;
+                        uint32_t audioOffsetMs = 0;
+                        uint32_t textOffset = 0;
+                        uint32_t textLength = 0;
+                        const bool hasValidSpeechEventNumbers = !isSpeechEvent ||
+                            (json.contains("audio_offset_ms") &&
+                             TryGetJsonUnsignedInteger(json["audio_offset_ms"], audioOffsetMs) &&
+                             (isBookmarkReached ||
+                              (json.contains("text_offset") && TryGetJsonUnsignedInteger(json["text_offset"], textOffset) &&
+                               json.contains("text_length") && TryGetJsonUnsignedInteger(json["text_length"], textLength))));
+                        const bool isSynthesisComplete = eventStr == "synthesis_complete";
+                        const bool isSynthesisCancelled = eventStr == "synthesis_cancelled";
+                        uint64_t terminalAudioBytes = 0;
+                        const bool hasValidTerminalAudioBytes =
+                            (!isSynthesisComplete && !isSynthesisCancelled) ||
+                            ((isSynthesisComplete ? json.contains("total_audio_bytes") : json.contains("audio_bytes_written")) &&
+                             TryGetJsonUnsignedInteger(
+                                 json[isSynthesisComplete ? "total_audio_bytes" : "audio_bytes_written"], terminalAudioBytes));
+
                         std::lock_guard<std::mutex> lock(m_requestMutex);
                         forwardToSapi = m_requestState != RequestState::Faulted && !m_faultPending;
                         if (eventSpeakId == m_activeSpeakId)
@@ -612,15 +630,18 @@ void SpeechWorker::ControlThreadProc()
                                 eventStr == "sentence_boundary" || eventStr == "bookmark_reached" ||
                                 eventStr == "synthesis_complete" || eventStr == "synthesis_cancelled" ||
                                 eventStr == "log";
-                            if (isProviderProgress && hasValidTerminalAudioBytes &&
+                            if (isProviderProgress && hasValidSpeechEventNumbers && hasValidTerminalAudioBytes &&
                                 (m_requestState == RequestState::Speaking || m_requestState == RequestState::Cancelling))
                             {
                                 m_lastProviderProgressTick.store(GetTickCount64(), std::memory_order_release);
                             }
 
-                            const bool isSpeechEvent = eventStr == "word_boundary" ||
-                                eventStr == "sentence_boundary" || eventStr == "bookmark_reached";
-                            if (isSpeechEvent && m_requestState != RequestState::Speaking)
+                            if (isSpeechEvent && !hasValidSpeechEventNumbers)
+                            {
+                                forwardToSapi = false;
+                                faultAfterStateUpdate = true;
+                            }
+                            else if (isSpeechEvent && m_requestState != RequestState::Speaking)
                             {
                                 // SAPI has aborted this request, so delayed provider callbacks must not move focus.
                                 forwardToSapi = false;

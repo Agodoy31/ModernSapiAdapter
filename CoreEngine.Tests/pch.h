@@ -25,6 +25,9 @@
 #include <nlohmann/json.hpp>
 
 #include <string>
+#include <cmath>
+#include <concepts>
+#include <limits>
 #include <thread>
 #include <mutex>
 #include <vector>

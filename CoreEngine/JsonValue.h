@@ -1,9 +1,5 @@
 #pragma once
 
-#include <cmath>
-#include <concepts>
-#include <limits>
-
 template <std::unsigned_integral UInt>
 bool TryGetJsonUnsignedInteger(const nlohmann::json& value, UInt& output) noexcept
 {

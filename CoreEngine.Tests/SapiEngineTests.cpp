@@ -563,6 +563,74 @@ TEST_F(SapiEngineTests, MatchingProviderEventsKeepLongRequestAlive) {
     EXPECT_FALSE(worker.IsFaulted());
 }
 
+TEST_F(SapiEngineTests, InvalidSpeechEventSpeakIdQuarantinesTheWorker) {
+    const std::vector<std::string> invalidEvents{
+        "{\"event\":\"word_boundary\",\"speak_id\":\"40\",\"text_offset\":0,\"text_length\":1,\"audio_offset_ms\":0}\n",
+        "{\"event\":\"word_boundary\",\"text_offset\":0,\"text_length\":1,\"audio_offset_ms\":0}\n"
+    };
+
+    for (const auto& invalidEvent : invalidEvents)
+    {
+        ControlPipeTestServer server;
+        ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+        PipeClient client;
+        ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+        auto engine = winrt::make_self<CSapiEngine>();
+        SpeechWorker worker(engine.get(), &client, 2);
+        ASSERT_TRUE(worker.Start(nullptr, 40));
+
+        ASSERT_TRUE(server.WriteControl(invalidEvent));
+
+        EXPECT_TRUE(worker.WaitForFaultForTest(1000));
+        EXPECT_TRUE(worker.IsFaulted());
+    }
+}
+
+TEST_F(SapiEngineTests, MalformedRequiredSpeechEventNumbersQuarantineTheWorker) {
+    const std::vector<std::string> malformedEvents{
+        "{\"event\":\"word_boundary\",\"speak_id\":41,\"text_offset\":\"0\",\"text_length\":1,\"audio_offset_ms\":0}\n",
+        "{\"event\":\"sentence_boundary\",\"speak_id\":41,\"text_offset\":0,\"text_length\":1.5,\"audio_offset_ms\":0}\n",
+        "{\"event\":\"bookmark_reached\",\"speak_id\":41,\"bookmark_name\":\"mark\"}\n"
+    };
+
+    for (const auto& malformedEvent : malformedEvents)
+    {
+        ControlPipeTestServer server;
+        ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+        PipeClient client;
+        ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+        auto engine = winrt::make_self<CSapiEngine>();
+        SpeechWorker worker(engine.get(), &client, 2);
+        ASSERT_TRUE(worker.Start(nullptr, 41));
+
+        ASSERT_TRUE(server.WriteControl(malformedEvent));
+
+        EXPECT_TRUE(worker.WaitForFaultForTest(1000));
+        EXPECT_TRUE(worker.IsFaulted());
+    }
+}
+
+TEST_F(SapiEngineTests, StaleSpeechEventWithValidSpeakIdDoesNotQuarantineTheWorker) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 43));
+
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"word_boundary\",\"speak_id\":42,\"text_offset\":0,\"text_length\":1,\"audio_offset_ms\":0}\n"));
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":43,\"total_audio_bytes\":0}\n"));
+
+    EXPECT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
+    EXPECT_FALSE(worker.IsFaulted());
+}
+
 TEST_F(SapiEngineTests, IgnoredCancellationTimesOutTheEntireTransaction) {
     ControlPipeTestServer server;
     ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
