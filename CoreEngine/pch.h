@@ -30,6 +30,8 @@
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.Collections.h>
 
+#include <nlohmann/json.hpp>
+
 #include <winreg.h>
 
 #include <string>

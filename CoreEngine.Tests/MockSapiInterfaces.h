@@ -11,7 +11,12 @@ inline std::wstring GetMockProviderPath()
 #else
     constexpr const wchar_t* configuration = L"Release";
 #endif
-    return (binaryDirectory / L"MockProvider" / L"x64" / configuration / L"MockProvider.exe").wstring();
+#if defined(_M_ARM64)
+    constexpr const wchar_t* platform = L"ARM64";
+#else
+    constexpr const wchar_t* platform = L"x64";
+#endif
+    return (binaryDirectory / L"MockProvider" / platform / configuration / L"MockProvider.exe").wstring();
 }
 
 inline HRESULT CopyMockTokenString(const std::wstring& value, LPWSTR* output)

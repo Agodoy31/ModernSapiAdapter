@@ -22,6 +22,7 @@
 #include <wil/com.h>
 #include <wil/resource.h>
 
+#include <nlohmann/json.hpp>
 
 #include <string>
 #include <thread>

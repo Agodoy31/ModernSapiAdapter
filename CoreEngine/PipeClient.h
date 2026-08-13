@@ -5,7 +5,6 @@
 
 #pragma once
 #include "pch.h"
-#include <nlohmann/json.hpp>
 
 /**
  * @class PipeClient

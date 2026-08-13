@@ -3,7 +3,6 @@
 #include <cmath>
 #include <concepts>
 #include <limits>
-#include <nlohmann/json.hpp>
 
 template <std::unsigned_integral UInt>
 bool TryGetJsonUnsignedInteger(const nlohmann::json& value, UInt& output) noexcept

@@ -6,7 +6,6 @@
 #pragma once
 #include "PipeClient.h"
 #include "SpeechWorker.h"
-#include <nlohmann/json.hpp>
 
 /**
  * @class CSapiEngine

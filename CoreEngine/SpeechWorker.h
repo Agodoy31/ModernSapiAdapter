@@ -11,7 +11,6 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
-#include <nlohmann/json.hpp>
 #include "PipeClient.h"
 #include "PcmFrameAssembler.h"
 
