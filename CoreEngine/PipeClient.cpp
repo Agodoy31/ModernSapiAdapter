@@ -231,45 +231,10 @@ HRESULT PipeClient::CompleteOverlappedOperation(
     return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
 }
 
-HRESULT PipeClient::SendControlMessage(
-    const winrt::Windows::Data::Json::JsonObject& json,
+HRESULT PipeClient::SendControlMessageUtf8(
+    const std::string& utf8String,
     DWORD timeoutMs)
 {
-    std::lock_guard<std::mutex> lock(m_controlWriteMutex);
-    if (!m_controlPipe) return E_UNEXPECTED;
-
-#if defined(_DEBUG)
-    if (m_failNextSpeakMessageForTest &&
-        json.HasKey(L"command") &&
-        json.GetNamedValue(L"command").ValueType() == winrt::Windows::Data::Json::JsonValueType::String &&
-        json.GetNamedString(L"command") == L"sapi_speak")
-    {
-        m_failNextSpeakMessageForTest = false;
-        return E_FAIL;
-    }
-
-    if (m_failNextCancellationMessageForTest &&
-        json.HasKey(L"command") &&
-        json.GetNamedValue(L"command").ValueType() == winrt::Windows::Data::Json::JsonValueType::String &&
-        json.GetNamedString(L"command") == L"cancel")
-    {
-        m_failNextCancellationMessageForTest = false;
-        return E_FAIL;
-    }
-#endif
-
-    winrt::hstring jsonHString = json.Stringify();
-    std::wstring jsonStringW(jsonHString.c_str(), jsonHString.size());
-    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, jsonStringW.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (utf8Len == 0) return HRESULT_FROM_WIN32(GetLastError());
-
-    std::string utf8String(utf8Len, 0);
-    if (WideCharToMultiByte(CP_UTF8, 0, jsonStringW.c_str(), -1, utf8String.data(), utf8Len, nullptr, nullptr) == 0)
-    {
-        return HRESULT_FROM_WIN32(GetLastError());
-    }
-    utf8String.resize(utf8Len - 1); 
-    utf8String += "\n";
     if (utf8String.size() > (std::numeric_limits<DWORD>::max)())
     {
         return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
@@ -304,14 +269,27 @@ HRESULT PipeClient::SendControlMessage(
     return S_OK;
 }
 
-HRESULT PipeClient::ReadControlMessage(
-    winrt::Windows::Data::Json::JsonObject& outJson,
+void PipeClient::CompactControlBuffer()
+{
+    if (m_controlInputOffset == m_controlInputBuffer.size())
+    {
+        m_controlInputBuffer.clear();
+        m_controlInputOffset = 0;
+        m_controlSearchOffset = 0;
+    }
+    else if (m_controlInputOffset >= 4096)
+    {
+        m_controlInputBuffer.erase(0, m_controlInputOffset);
+        m_controlInputOffset = 0;
+        m_controlSearchOffset = 0;
+    }
+}
+
+HRESULT PipeClient::ReadControlMessageUtf8(
+    std::string_view& utf8View,
     DWORD timeoutMs)
 {
-    // Keeps long screen-reader Read All requests valid without allowing unbounded buffering.
     constexpr size_t maxControlRecordBytes = 16 * 1024 * 1024;
-
-    outJson = nullptr;
     if (!m_controlPipe) return E_UNEXPECTED;
 
     char chunk[4096];
@@ -346,10 +324,7 @@ HRESULT PipeClient::ReadControlMessage(
         if (!success)
         {
             DWORD err = GetLastError();
-            if (err == ERROR_IO_PENDING)
-            {
-            }
-            else
+            if (err != ERROR_IO_PENDING)
             {
                 return HRESULT_FROM_WIN32(err);
             }
@@ -379,60 +354,18 @@ HRESULT PipeClient::ReadControlMessage(
         return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
     }
 
-    std::string_view utf8View(m_controlInputBuffer.data() + m_controlInputOffset, newlinePos - m_controlInputOffset);
+    utf8View = std::string_view(m_controlInputBuffer.data() + m_controlInputOffset, newlinePos - m_controlInputOffset);
     if (utf8View.ends_with('\r'))
     {
         utf8View.remove_suffix(1);
     }
 
-    bool isEmpty = utf8View.empty();
-    std::string extractedUtf8(utf8View);
-
     m_controlInputOffset = newlinePos + 1;
     m_controlSearchOffset = m_controlInputOffset;
-
-    if (m_controlInputOffset == m_controlInputBuffer.size())
-    {
-        m_controlInputBuffer.clear();
-        m_controlInputOffset = 0;
-        m_controlSearchOffset = 0;
-    }
-    else if (m_controlInputOffset >= 4096)
-    {
-        m_controlInputBuffer.erase(0, m_controlInputOffset);
-        m_controlInputOffset = 0;
-        m_controlSearchOffset = 0;
-    }
-
-    if (isEmpty)
-    {
-        return S_FALSE;
-    }
-
-    int wideLen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, extractedUtf8.data(), static_cast<int>(extractedUtf8.size()), nullptr, 0);
-    if (wideLen == 0) return HRESULT_FROM_WIN32(GetLastError());
-
-    std::wstring wideString(wideLen, 0);
-    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, extractedUtf8.data(), static_cast<int>(extractedUtf8.size()), wideString.data(), wideLen) == 0)
-    {
-        return HRESULT_FROM_WIN32(GetLastError());
-    }
-
-    try
-    {
-        outJson = winrt::Windows::Data::Json::JsonObject::Parse(wideString);
-    }
-    catch (const winrt::hresult_error& e)
-    {
-        return e.code();
-    }
-    catch (...)
-    {
-        return E_FAIL;
-    }
-
     return S_OK;
 }
+
+
 
 HRESULT PipeClient::ReadAudioChunk(std::vector<uint8_t>& buffer, DWORD& bytesRead)
 {
@@ -477,3 +410,64 @@ void PipeClient::FailNextSpeakMessageForTest()
     m_failNextSpeakMessageForTest = true;
 }
 #endif
+
+HRESULT PipeClient::SendControlMessage(
+    const nlohmann::json& json,
+    DWORD timeoutMs)
+{
+    std::lock_guard<std::mutex> lock(m_controlWriteMutex);
+    if (!m_controlPipe) return E_UNEXPECTED;
+
+#if defined(_DEBUG)
+    if (m_failNextSpeakMessageForTest &&
+        json.contains("command") &&
+        json["command"].is_string() &&
+        json["command"].get<std::string>() == "sapi_speak")
+    {
+        m_failNextSpeakMessageForTest = false;
+        return E_FAIL;
+    }
+
+    if (m_failNextCancellationMessageForTest &&
+        json.contains("command") &&
+        json["command"].is_string() &&
+        json["command"].get<std::string>() == "cancel")
+    {
+        m_failNextCancellationMessageForTest = false;
+        return E_FAIL;
+    }
+#endif
+
+    std::string utf8String = json.dump() + "\n";
+    return SendControlMessageUtf8(utf8String, timeoutMs);
+}
+
+HRESULT PipeClient::ReadControlMessage(
+    nlohmann::json& outJson,
+    DWORD timeoutMs)
+{
+    outJson.clear();
+    std::string_view utf8View;
+    HRESULT hr = ReadControlMessageUtf8(utf8View, timeoutMs);
+    if (FAILED(hr)) return hr;
+
+    bool isEmpty = utf8View.empty();
+    HRESULT parseHr = S_OK;
+
+    if (isEmpty)
+    {
+        parseHr = S_FALSE;
+    }
+    else
+    {
+        try {
+            outJson = nlohmann::json::parse(utf8View);
+        } catch (const nlohmann::json::exception& e) {
+            CoreLog(L"JSON Parse Error: %S", e.what());
+            parseHr = E_FAIL; 
+        }
+    }
+
+    CompactControlBuffer();
+    return parseHr;
+}

@@ -4,7 +4,6 @@ inline std::wstring GetMockProviderPath()
 {
     wchar_t modulePath[MAX_PATH] = {};
     if (GetModuleFileNameW(nullptr, modulePath, ARRAYSIZE(modulePath)) == 0) return {};
-
     const auto testOutputDirectory = std::filesystem::path(modulePath).parent_path();
     const auto binaryDirectory = testOutputDirectory.parent_path().parent_path().parent_path();
 #if defined(_DEBUG)
@@ -12,7 +11,7 @@ inline std::wstring GetMockProviderPath()
 #else
     constexpr const wchar_t* configuration = L"Release";
 #endif
-    return (binaryDirectory / L"MockProvider" / L"AnyCPU" / configuration / L"MockProvider.exe").wstring();
+    return (binaryDirectory / L"MockProvider" / L"x64" / configuration / L"MockProvider.exe").wstring();
 }
 
 inline HRESULT CopyMockTokenString(const std::wstring& value, LPWSTR* output)
@@ -96,10 +95,10 @@ struct MockSpDataKey : winrt::implements<MockSpDataKey, ISpDataKey>
     IFACEMETHODIMP SetStringValue(LPCWSTR, LPCWSTR) noexcept override { return E_NOTIMPL; }
     IFACEMETHODIMP GetStringValue(LPCWSTR pszValueName, LPWSTR* ppszValue) noexcept override {
         if (wcscmp(pszValueName, L"ProviderExecutablePath") == 0) {
-            const wchar_t* path = L"d:\\Projects\\ModernSapiAdapter\\bin\\MockProvider\\MockProvider.exe";
-            size_t size = (wcslen(path) + 1) * sizeof(wchar_t);
+            std::wstring path = GetMockProviderPath();
+            size_t size = (path.length() + 1) * sizeof(wchar_t);
             *ppszValue = (LPWSTR)CoTaskMemAlloc(size);
-            wcscpy_s(*ppszValue, size / sizeof(wchar_t), path);
+            wcscpy_s(*ppszValue, size / sizeof(wchar_t), path.c_str());
             return S_OK;
         }
         if (wcscmp(pszValueName, L"ProviderPipeName") == 0) {

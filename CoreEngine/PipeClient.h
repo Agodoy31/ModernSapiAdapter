@@ -5,6 +5,7 @@
 
 #pragma once
 #include "pch.h"
+#include <nlohmann/json.hpp>
 
 /**
  * @class PipeClient
@@ -35,20 +36,20 @@ public:
 
     /**
      * @brief Sends a JSON control message over the Control Pipe.
-     * @param json JsonObject payload to serialize and transmit.
+     * @param json JSON payload to serialize and transmit.
      * @return S_OK on success, or HRESULT error code on failure.
      */
     HRESULT SendControlMessage(
-        const winrt::Windows::Data::Json::JsonObject& json,
+        const nlohmann::json& json,
         DWORD timeoutMs = ControlOperationTimeoutMs);
 
     /**
      * @brief Reads and parses a newline-delimited JSON control message from the Control Pipe.
-     * @param[out] outJson Parsed JsonObject output.
+     * @param[out] outJson Parsed JSON output.
      * @return S_OK on success, or HRESULT error code on failure.
      */
     HRESULT ReadControlMessage(
-        winrt::Windows::Data::Json::JsonObject& outJson,
+        nlohmann::json& outJson,
         DWORD timeoutMs = INFINITE);
 
     /**
@@ -92,6 +93,16 @@ private:
         const std::wstring& controlPipePath,
         const std::wstring& audioPipePath,
         bool& controlPipeOpened);
+
+    HRESULT SendControlMessageUtf8(
+        const std::string& utf8String,
+        DWORD timeoutMs);
+
+    HRESULT ReadControlMessageUtf8(
+        std::string_view& utf8View,
+        DWORD timeoutMs);
+
+    void CompactControlBuffer();
 
     /**
      * @brief Completes or safely cancels one overlapped operation within its caller's deadline.

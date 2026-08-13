@@ -6,6 +6,7 @@
 #pragma once
 #include "PipeClient.h"
 #include "SpeechWorker.h"
+#include <nlohmann/json.hpp>
 
 /**
  * @class CSapiEngine
@@ -88,9 +89,9 @@ public:
 
     /**
      * @brief Parses incoming JSON event payloads and translates them into SAPI SPEVENT notifications.
-     * @param eventJson JsonObject event payload received from Control Pipe.
+     * @param eventJson JSON event payload received from Control Pipe.
      */
-    void OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& eventJson);
+    void OnSpeechEvent(const nlohmann::json& eventJson);
 
 #if defined(_DEBUG)
     /**

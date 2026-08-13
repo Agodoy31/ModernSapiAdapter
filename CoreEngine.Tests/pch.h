@@ -14,13 +14,14 @@
 #include <sphelper.h>
 #pragma warning(pop)
 
+
 #include <sapiddk.h>
 
 #include <winrt/base.h>
-#include <winrt/Windows.Data.Json.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <wil/com.h>
 #include <wil/resource.h>
+
 
 #include <string>
 #include <thread>
@@ -34,3 +35,7 @@
 #include <functional>
 
 #include "gtest/gtest.h"
+
+void CoreLog(const wchar_t* fmt, ...);
+std::vector<std::wstring> GetTestLogs();
+void ClearTestLogs();

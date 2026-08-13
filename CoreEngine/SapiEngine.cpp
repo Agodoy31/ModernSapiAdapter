@@ -1,6 +1,30 @@
 #include "pch.h"
 #include "SapiEngine.h"
 
+namespace {
+    std::string WideToUtf8(const wchar_t* wstr, size_t len) {
+        if (len == 0 || !wstr) return "";
+        std::string utf8(len * 3, '\0');
+        int written = WideCharToMultiByte(CP_UTF8, 0, wstr, static_cast<int>(len), utf8.data(), static_cast<int>(utf8.size()), nullptr, nullptr);
+        if (written > 0) {
+            utf8.resize(written);
+            return utf8;
+        }
+        return "";
+    }
+
+    std::wstring Utf8ToWide(const std::string& utf8Str) {
+        if (utf8Str.empty()) return L"";
+        std::wstring wide(utf8Str.size(), L'\0');
+        int written = MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), static_cast<int>(utf8Str.size()), wide.data(), static_cast<int>(wide.size()));
+        if (written > 0) {
+            wide.resize(written);
+            return wide;
+        }
+        return L"";
+    }
+}
+
 CSapiEngine::CSapiEngine()
 {
     memset(&m_audioFormat, 0, sizeof(m_audioFormat));
@@ -97,52 +121,62 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
         voiceId = m_voiceId;
     }
 
-    using namespace winrt::Windows::Data::Json;
     uint64_t speakId = ++m_speakIdCounter;
-    JsonObject speakReq;
-    speakReq.SetNamedValue(L"command", JsonValue::CreateStringValue(L"sapi_speak"));
-    speakReq.SetNamedValue(L"speak_id", JsonValue::CreateNumberValue(static_cast<double>(speakId)));
+    nlohmann::json speakReq = {
+        {"command", "sapi_speak"},
+        {"speak_id", speakId}
+    };
     if (!voiceId.empty())
     {
-        speakReq.SetNamedValue(L"voice_id", JsonValue::CreateStringValue(voiceId));
+        std::string utf8VoiceId = WideToUtf8(voiceId.c_str(), voiceId.size());
+        if (!utf8VoiceId.empty())
+        {
+            speakReq["voice_id"] = utf8VoiceId;
+        }
     }
 
-    JsonArray fragments;
+    nlohmann::json fragments = nlohmann::json::array();
     const SPVTEXTFRAG* pFrag = pTextFragList;
     while (pFrag)
     {
-        JsonObject fragJson;
+        nlohmann::json fragJson;
         
         if (pFrag->State.eAction == SPVA_Bookmark)
         {
             if (pFrag->pTextStart && pFrag->ulTextLen > 0)
             {
-                std::wstring textStr((const wchar_t*)pFrag->pTextStart, pFrag->ulTextLen);
-                fragJson.SetNamedValue(L"bookmark", JsonValue::CreateStringValue(textStr));
+                std::string textStr = WideToUtf8(pFrag->pTextStart, pFrag->ulTextLen);
+                if (!textStr.empty())
+                {
+                    fragJson["bookmark"] = textStr;
+                }
             }
         }
         else if (pFrag->State.eAction == SPVA_Silence)
         {
-            fragJson.SetNamedValue(L"silence_ms", JsonValue::CreateNumberValue(pFrag->State.SilenceMSecs));
+            fragJson["silence_ms"] = pFrag->State.SilenceMSecs;
         }
         else // SPVA_Speak, SPVA_Pronounce, etc.
         {
             if (pFrag->pTextStart && pFrag->ulTextLen > 0)
             {
-                std::wstring textStr((const wchar_t*)pFrag->pTextStart, pFrag->ulTextLen);
-                fragJson.SetNamedValue(L"text", JsonValue::CreateStringValue(textStr));
-                fragJson.SetNamedValue(L"source_offset", JsonValue::CreateNumberValue(pFrag->ulTextSrcOffset));
+                std::string textStr = WideToUtf8(pFrag->pTextStart, pFrag->ulTextLen);
+                if (!textStr.empty())
+                {
+                    fragJson["text"] = textStr;
+                    fragJson["source_offset"] = pFrag->ulTextSrcOffset;
+                }
             }
-            fragJson.SetNamedValue(L"volume", JsonValue::CreateNumberValue(pFrag->State.Volume));
-            fragJson.SetNamedValue(L"pitch", JsonValue::CreateNumberValue(pFrag->State.PitchAdj.MiddleAdj));
-            fragJson.SetNamedValue(L"rate", JsonValue::CreateNumberValue(pFrag->State.RateAdj));
+            fragJson["volume"] = pFrag->State.Volume;
+            fragJson["pitch"] = pFrag->State.PitchAdj.MiddleAdj;
+            fragJson["rate"] = pFrag->State.RateAdj;
         }
         
-        fragments.Append(fragJson);
+        fragments.push_back(fragJson);
         pFrag = pFrag->pNext;
     }
 
-    speakReq.SetNamedValue(L"fragments", fragments);
+    speakReq["fragments"] = fragments;
 
     if (!worker->Start(pOutputSite, speakId))
     {
@@ -204,75 +238,91 @@ uint64_t CSapiEngine::AudioOffsetMsToBytes(uint32_t audioMs) const
     return frames * m_audioFormat.nBlockAlign;
 }
 
-void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& eventJson) try
+
+
+void CSapiEngine::OnSpeechEvent(const nlohmann::json& eventJson) try
 {
     std::lock_guard<std::mutex> lock(m_siteMutex);
     if (!m_cpSite) return;
 
-    if (!eventJson.HasKey(L"event")) return;
-    if (eventJson.GetNamedValue(L"event").ValueType() != winrt::Windows::Data::Json::JsonValueType::String) return;
-    auto eventStr = eventJson.GetNamedString(L"event");
+    if (!eventJson.contains("event") || !eventJson["event"].is_string()) return;
+    auto eventStr = eventJson["event"].get<std::string>();
     
-    if (eventJson.HasKey(L"speak_id") && eventJson.GetNamedValue(L"speak_id").ValueType() == winrt::Windows::Data::Json::JsonValueType::Number)
+    if (eventJson.contains("speak_id") && eventJson["speak_id"].is_number_integer())
     {
-        uint64_t eventSpeakId = static_cast<uint64_t>(eventJson.GetNamedNumber(L"speak_id"));
+        uint64_t eventSpeakId = eventJson["speak_id"].get<uint64_t>();
         if (eventSpeakId != m_speakIdCounter.load())
         {
             return; // Drop stale event
         }
     }
 
-    if (eventStr == L"word_boundary")
+    if (eventStr == "word_boundary")
     {
         SPEVENT spEvent = {};
         spEvent.eEventId = SPEI_WORD_BOUNDARY;
         spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
         
-        uint32_t audioMs = eventJson.HasKey(L"audio_offset_ms") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"audio_offset_ms")) : 0;
+        uint32_t audioMs = (eventJson.contains("audio_offset_ms") && eventJson["audio_offset_ms"].is_number_unsigned()) ? eventJson["audio_offset_ms"].get<uint32_t>() : 0;
         spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
 
-        uint32_t textOffset = eventJson.HasKey(L"text_offset") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_offset")) : 0;
-        uint32_t textLength = eventJson.HasKey(L"text_length") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_length")) : 0;
+        uint32_t textOffset = (eventJson.contains("text_offset") && eventJson["text_offset"].is_number_unsigned()) ? eventJson["text_offset"].get<uint32_t>() : 0;
+        uint32_t textLength = (eventJson.contains("text_length") && eventJson["text_length"].is_number_unsigned()) ? eventJson["text_length"].get<uint32_t>() : 0;
         spEvent.wParam = static_cast<WPARAM>(textLength);
         spEvent.lParam = static_cast<LPARAM>(textOffset);
         
         m_cpSite->AddEvents(&spEvent, 1);
     }
-    else if (eventStr == L"sentence_boundary")
+    else if (eventStr == "sentence_boundary")
     {
         SPEVENT spEvent = {};
         spEvent.eEventId = SPEI_SENTENCE_BOUNDARY;
         spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
         
-        uint32_t audioMs = eventJson.HasKey(L"audio_offset_ms") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"audio_offset_ms")) : 0;
+        uint32_t audioMs = (eventJson.contains("audio_offset_ms") && eventJson["audio_offset_ms"].is_number_unsigned()) ? eventJson["audio_offset_ms"].get<uint32_t>() : 0;
         spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
 
-        uint32_t textOffset = eventJson.HasKey(L"text_offset") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_offset")) : 0;
-        uint32_t textLength = eventJson.HasKey(L"text_length") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"text_length")) : 0;
+        uint32_t textOffset = (eventJson.contains("text_offset") && eventJson["text_offset"].is_number_unsigned()) ? eventJson["text_offset"].get<uint32_t>() : 0;
+        uint32_t textLength = (eventJson.contains("text_length") && eventJson["text_length"].is_number_unsigned()) ? eventJson["text_length"].get<uint32_t>() : 0;
         spEvent.wParam = static_cast<WPARAM>(textLength);
         spEvent.lParam = static_cast<LPARAM>(textOffset);
         
         m_cpSite->AddEvents(&spEvent, 1);
     }
-    else if (eventStr == L"bookmark_reached")
+    else if (eventStr == "bookmark_reached")
     {
         SPEVENT spEvent = {};
         spEvent.eEventId = SPEI_TTS_BOOKMARK;
         
-        uint32_t audioMs = eventJson.HasKey(L"audio_offset_ms") ? static_cast<uint32_t>(eventJson.GetNamedNumber(L"audio_offset_ms")) : 0;
+        uint32_t audioMs = (eventJson.contains("audio_offset_ms") && eventJson["audio_offset_ms"].is_number_unsigned()) ? eventJson["audio_offset_ms"].get<uint32_t>() : 0;
         spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
 
-        if (eventJson.HasKey(L"bookmark_name"))
+        if (eventJson.contains("bookmark_name") && eventJson["bookmark_name"].is_string())
         {
-            auto bName = eventJson.GetNamedString(L"bookmark_name");
-            size_t numChars = bName.size() + 1;
-            wchar_t* pStr = (wchar_t*)CoTaskMemAlloc(numChars * sizeof(wchar_t));
-            if (pStr)
+            auto bNameStr = eventJson["bookmark_name"].get<std::string>();
+            if (!bNameStr.empty())
             {
-                wcscpy_s(pStr, numChars, bName.c_str());
-                spEvent.elParamType = SPET_LPARAM_IS_STRING;
-                spEvent.wParam = static_cast<WPARAM>(_wtol(bName.c_str()));
-                spEvent.lParam = (LPARAM)pStr;
+                wchar_t* pStr = (wchar_t*)CoTaskMemAlloc((bNameStr.size() + 1) * sizeof(wchar_t));
+                if (pStr)
+                {
+                    int written = MultiByteToWideChar(CP_UTF8, 0, bNameStr.c_str(), static_cast<int>(bNameStr.size()), pStr, static_cast<int>(bNameStr.size()));
+                    if (written >= 0)
+                    {
+                        pStr[written] = L'\0';
+                        spEvent.elParamType = SPET_LPARAM_IS_STRING;
+                        spEvent.wParam = static_cast<WPARAM>(_wtol(pStr));
+                        spEvent.lParam = (LPARAM)pStr;
+                    }
+                    else
+                    {
+                        CoTaskMemFree(pStr);
+                        spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
+                    }
+                }
+                else
+                {
+                    spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
+                }
             }
             else
             {
@@ -286,11 +336,18 @@ void CSapiEngine::OnSpeechEvent(const winrt::Windows::Data::Json::JsonObject& ev
         
         m_cpSite->AddEvents(&spEvent, 1);
     }
-    else if (eventStr == L"log")
+    else if (eventStr == "log")
     {
-        std::wstring msg = eventJson.HasKey(L"message") ? std::wstring(eventJson.GetNamedString(L"message").c_str()) : L"Unknown log";
-        std::wstring severity = eventJson.HasKey(L"severity") ? std::wstring(eventJson.GetNamedString(L"severity").c_str()) : L"error";
-        std::wstring friendly = eventJson.HasKey(L"friendly_text") ? std::wstring(eventJson.GetNamedString(L"friendly_text").c_str()) : L"";
+        auto getUtf16String = [](const nlohmann::json& j, const char* key, const wchar_t* defaultVal) -> std::wstring {
+            if (!j.contains(key) || !j[key].is_string()) return defaultVal;
+            std::string s = j[key].get<std::string>();
+            std::wstring w = Utf8ToWide(s);
+            return w.empty() ? defaultVal : w;
+        };
+
+        std::wstring msg = getUtf16String(eventJson, "message", L"Unknown log");
+        std::wstring severity = getUtf16String(eventJson, "severity", L"error");
+        std::wstring friendly = getUtf16String(eventJson, "friendly_text", L"");
         
         CoreLog(L"[CoreEngine] Provider error (%s): %s %s", severity.c_str(), msg.c_str(), friendly.c_str());
     }
@@ -344,50 +401,49 @@ HRESULT CSapiEngine::CreateProviderSessionLocked()
             return E_FAIL;
         }
 
-        using namespace winrt::Windows::Data::Json;
-        JsonObject infoRequest;
-        infoRequest.SetNamedValue(L"command", JsonValue::CreateStringValue(L"info"));
+        nlohmann::json infoRequest = {
+            {"command", "info"}
+        };
         if (FAILED(candidateClient->SendControlMessage(infoRequest)))
         {
             return E_FAIL;
         }
 
-        JsonObject infoResponse = nullptr;
+        nlohmann::json infoResponse;
         if (FAILED(candidateClient->ReadControlMessage(
-                infoResponse, PipeClient::ControlOperationTimeoutMs)) || !infoResponse ||
-            !infoResponse.HasKey(L"response") ||
-            infoResponse.GetNamedValue(L"response").ValueType() != JsonValueType::String ||
-            infoResponse.GetNamedString(L"response") != L"info" ||
-            !infoResponse.HasKey(L"audio_format") ||
-            infoResponse.GetNamedValue(L"audio_format").ValueType() != JsonValueType::Object)
+                infoResponse, PipeClient::ControlOperationTimeoutMs)) ||
+            !infoResponse.contains("response") ||
+            !infoResponse["response"].is_string() ||
+            infoResponse["response"].get<std::string>() != "info" ||
+            !infoResponse.contains("audio_format") ||
+            !infoResponse["audio_format"].is_object())
         {
             return E_FAIL;
         }
 
-        const JsonObject format = infoResponse.GetNamedObject(L"audio_format");
-        const auto isPositiveInteger = [&format](const wchar_t* name, uint64_t maximum, uint64_t& value) {
-            if (!format.HasKey(name) || format.GetNamedValue(name).ValueType() != JsonValueType::Number)
+        const auto& format = infoResponse["audio_format"];
+        const auto isPositiveInteger = [&format](const char* name, uint64_t maximum, uint64_t& value) {
+            if (!format.contains(name) || !format[name].is_number_unsigned())
             {
                 return false;
             }
 
-            const double number = format.GetNamedNumber(name);
-            if (!std::isfinite(number) || number <= 0 || number > static_cast<double>(maximum) ||
-                number != static_cast<double>(static_cast<uint64_t>(number)))
+            const uint64_t number = format[name].get<uint64_t>();
+            if (number == 0 || number > maximum)
             {
                 return false;
             }
 
-            value = static_cast<uint64_t>(number);
+            value = number;
             return true;
         };
 
         uint64_t sampleRate = 0;
         uint64_t bitsPerSample = 0;
         uint64_t channels = 0;
-        if (!isPositiveInteger(L"sample_rate", (std::numeric_limits<DWORD>::max)(), sampleRate) ||
-            !isPositiveInteger(L"bits_per_sample", (std::numeric_limits<WORD>::max)(), bitsPerSample) ||
-            !isPositiveInteger(L"channels", (std::numeric_limits<WORD>::max)(), channels))
+        if (!isPositiveInteger("sample_rate", (std::numeric_limits<DWORD>::max)(), sampleRate) ||
+            !isPositiveInteger("bits_per_sample", (std::numeric_limits<WORD>::max)(), bitsPerSample) ||
+            !isPositiveInteger("channels", (std::numeric_limits<WORD>::max)(), channels))
         {
             return E_FAIL;
         }

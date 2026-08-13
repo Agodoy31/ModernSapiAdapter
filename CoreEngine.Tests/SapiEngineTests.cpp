@@ -388,7 +388,7 @@ TEST_F(SapiEngineTests, TimedOutControlReadCancelsItsOverlappedOperationBeforeRe
     PipeClient client;
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
 
-    winrt::Windows::Data::Json::JsonObject response = nullptr;
+    nlohmann::json response;
     const auto timeoutStart = std::chrono::steady_clock::now();
     EXPECT_EQ(client.ReadControlMessage(response, 100), HRESULT_FROM_WIN32(ERROR_TIMEOUT));
     EXPECT_LT(std::chrono::steady_clock::now() - timeoutStart, std::chrono::seconds(1));
@@ -396,8 +396,8 @@ TEST_F(SapiEngineTests, TimedOutControlReadCancelsItsOverlappedOperationBeforeRe
     ASSERT_TRUE(server.WriteControl(
         "{\"response\":\"info\",\"audio_format\":{\"sample_rate\":24000,\"bits_per_sample\":16,\"channels\":1}}\n"));
     ASSERT_EQ(client.ReadControlMessage(response, 1000), S_OK);
-    ASSERT_TRUE(response);
-    EXPECT_EQ(response.GetNamedString(L"response"), L"info");
+    ASSERT_FALSE(response.is_null());
+    EXPECT_EQ(response["response"], "info");
 }
 
 TEST_F(SapiEngineTests, ControlRecordTimeoutCoversTheWholeFragmentedMessage) {
@@ -416,7 +416,7 @@ TEST_F(SapiEngineTests, ControlRecordTimeoutCoversTheWholeFragmentedMessage) {
     });
     ThreadJoinGuard writerJoin(writer);
 
-    winrt::Windows::Data::Json::JsonObject response = nullptr;
+    nlohmann::json response;
     const auto timeoutStart = std::chrono::steady_clock::now();
     const HRESULT result = client.ReadControlMessage(response, 100);
     const auto elapsed = std::chrono::steady_clock::now() - timeoutStart;
@@ -811,13 +811,13 @@ TEST_F(SapiEngineTests, ReadControlMessageRetainsSecondJsonLineFromOnePipeRead) 
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     ASSERT_TRUE(server.WriteControl("{\"event\":\"first\"}\n{\"event\":\"second\"}\n"));
 
-    winrt::Windows::Data::Json::JsonObject first = nullptr;
-    winrt::Windows::Data::Json::JsonObject second = nullptr;
+    nlohmann::json first;
+    nlohmann::json second;
     ASSERT_EQ(client.ReadControlMessage(first), S_OK);
     ASSERT_EQ(client.ReadControlMessage(second), S_OK);
 
-    EXPECT_EQ(first.GetNamedString(L"event"), L"first");
-    EXPECT_EQ(second.GetNamedString(L"event"), L"second");
+    EXPECT_EQ(first["event"], "first");
+    EXPECT_EQ(second["event"], "second");
 }
 
 TEST_F(SapiEngineTests, ReadControlMessageReassemblesFragmentedJsonLine) {
@@ -835,12 +835,12 @@ TEST_F(SapiEngineTests, ReadControlMessageReassemblesFragmentedJsonLine) {
         writesSucceeded = server.WriteControl("fragmented\"}\n") && writesSucceeded.load();
     });
 
-    winrt::Windows::Data::Json::JsonObject message = nullptr;
+    nlohmann::json message;
     EXPECT_EQ(client.ReadControlMessage(message), S_OK);
     writer.join();
 
     ASSERT_TRUE(writesSucceeded);
-    EXPECT_EQ(message.GetNamedString(L"event"), L"fragmented");
+    EXPECT_EQ(message["event"], "fragmented");
 }
 
 TEST_F(SapiEngineTests, ReadControlMessageOffsetInfrastructureSupportsSequentialReads) {
@@ -851,17 +851,17 @@ TEST_F(SapiEngineTests, ReadControlMessageOffsetInfrastructureSupportsSequential
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     ASSERT_TRUE(server.WriteControl("{\"id\":1}\n{\"id\":2}\n{\"id\":3}\n"));
 
-    winrt::Windows::Data::Json::JsonObject msg1 = nullptr;
-    winrt::Windows::Data::Json::JsonObject msg2 = nullptr;
-    winrt::Windows::Data::Json::JsonObject msg3 = nullptr;
+    nlohmann::json msg1;
+    nlohmann::json msg2;
+    nlohmann::json msg3;
 
     ASSERT_EQ(client.ReadControlMessage(msg1), S_OK);
     ASSERT_EQ(client.ReadControlMessage(msg2), S_OK);
     ASSERT_EQ(client.ReadControlMessage(msg3), S_OK);
 
-    EXPECT_EQ(msg1.GetNamedNumber(L"id"), 1);
-    EXPECT_EQ(msg2.GetNamedNumber(L"id"), 2);
-    EXPECT_EQ(msg3.GetNamedNumber(L"id"), 3);
+    EXPECT_EQ(msg1["id"], 1);
+    EXPECT_EQ(msg2["id"], 2);
+    EXPECT_EQ(msg3["id"], 3);
 }
 
 TEST_F(SapiEngineTests, ReadControlMessageHandlesCRLFAndEmptyLines) {
@@ -872,21 +872,21 @@ TEST_F(SapiEngineTests, ReadControlMessageHandlesCRLFAndEmptyLines) {
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     ASSERT_TRUE(server.WriteControl("\r\n{\"msg\":\"hello\"}\r\n\n{\"msg\":\"world\"}\n"));
 
-    winrt::Windows::Data::Json::JsonObject msg1 = nullptr;
-    winrt::Windows::Data::Json::JsonObject msg2 = nullptr;
+    nlohmann::json msg1;
+    nlohmann::json msg2;
 
     EXPECT_EQ(client.ReadControlMessage(msg1), S_FALSE);
-    EXPECT_EQ(msg1, nullptr);
+    EXPECT_TRUE(msg1.is_null());
 
     ASSERT_EQ(client.ReadControlMessage(msg1), S_OK);
-    ASSERT_NE(msg1, nullptr);
-    EXPECT_EQ(msg1.GetNamedString(L"msg"), L"hello");
+    ASSERT_FALSE(msg1.is_null());
+    EXPECT_EQ(msg1["msg"], "hello");
 
     EXPECT_EQ(client.ReadControlMessage(msg2), S_FALSE);
 
     ASSERT_EQ(client.ReadControlMessage(msg2), S_OK);
-    ASSERT_NE(msg2, nullptr);
-    EXPECT_EQ(msg2.GetNamedString(L"msg"), L"world");
+    ASSERT_FALSE(msg2.is_null());
+    EXPECT_EQ(msg2["msg"], "world");
 }
 
 TEST_F(SapiEngineTests, ReadControlMessageCompactsBufferAndPreservesMessagesAcrossCompactionThreshold) {
@@ -909,10 +909,10 @@ TEST_F(SapiEngineTests, ReadControlMessageCompactsBufferAndPreservesMessagesAcro
     });
 
     for (int i = 0; i < totalMsgs; ++i) {
-        winrt::Windows::Data::Json::JsonObject msg = nullptr;
+        nlohmann::json msg;
         ASSERT_EQ(client.ReadControlMessage(msg), S_OK) << "Failed at index " << i;
-        ASSERT_NE(msg, nullptr) << "Null json at index " << i;
-        EXPECT_EQ(static_cast<int>(msg.GetNamedNumber(L"seq")), i);
+        ASSERT_FALSE(msg.is_null()) << "Null json at index " << i;
+        EXPECT_EQ(static_cast<int>(msg["seq"]), i);
     }
     writer.join();
 }
@@ -932,16 +932,16 @@ TEST_F(SapiEngineTests, ReadControlMessageHandlesLargePayloadAcrossCompactionThr
         server.WriteControl((msgStr1 + msgStr2).c_str());
     });
 
-    winrt::Windows::Data::Json::JsonObject msg1 = nullptr;
-    winrt::Windows::Data::Json::JsonObject msg2 = nullptr;
+    nlohmann::json msg1;
+    nlohmann::json msg2;
 
     ASSERT_EQ(client.ReadControlMessage(msg1), S_OK);
-    ASSERT_NE(msg1, nullptr);
-    EXPECT_EQ(msg1.GetNamedString(L"data").size(), 4200u);
+    ASSERT_FALSE(msg1.is_null());
+    EXPECT_EQ(msg1["data"].get<std::string>().size(), 4200u);
 
     ASSERT_EQ(client.ReadControlMessage(msg2), S_OK);
-    ASSERT_NE(msg2, nullptr);
-    EXPECT_EQ(msg2.GetNamedString(L"data"), L"small");
+    ASSERT_FALSE(msg2.is_null());
+    EXPECT_EQ(msg2["data"], "small");
 
     writer.join();
 }
@@ -965,12 +965,11 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsAndDispatchesToSite) {
     engine->m_cpSite.copy_from(mockSite.get());
     engine->m_audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
 
-    using namespace winrt::Windows::Data::Json;
-    JsonObject eventJson;
-    eventJson.SetNamedValue(L"event", JsonValue::CreateStringValue(L"word_boundary"));
-    eventJson.SetNamedValue(L"audio_offset_ms", JsonValue::CreateNumberValue(50));
-    eventJson.SetNamedValue(L"text_offset", JsonValue::CreateNumberValue(17));
-    eventJson.SetNamedValue(L"text_length", JsonValue::CreateNumberValue(5));
+    nlohmann::json eventJson;
+    eventJson["event"] = "word_boundary";
+    eventJson["audio_offset_ms"] = 50u;
+    eventJson["text_offset"] = 17u;
+    eventJson["text_length"] = 5u;
 
     engine->OnSpeechEvent(eventJson);
 
@@ -990,12 +989,11 @@ TEST_F(SapiEngineTests, OnSpeechEventPreservesLongAudioOffsets) {
     engine->m_cpSite.copy_from(mockSite.get());
     engine->m_audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
 
-    using namespace winrt::Windows::Data::Json;
-    JsonObject eventJson;
-    eventJson.SetNamedValue(L"event", JsonValue::CreateStringValue(L"word_boundary"));
-    eventJson.SetNamedValue(L"audio_offset_ms", JsonValue::CreateNumberValue(90000));
-    eventJson.SetNamedValue(L"text_offset", JsonValue::CreateNumberValue(0));
-    eventJson.SetNamedValue(L"text_length", JsonValue::CreateNumberValue(4));
+    nlohmann::json eventJson;
+    eventJson["event"] = "word_boundary";
+    eventJson["audio_offset_ms"] = 90000u;
+    eventJson["text_offset"] = 0u;
+    eventJson["text_length"] = 4u;
 
     engine->OnSpeechEvent(eventJson);
 
@@ -1010,11 +1008,10 @@ TEST_F(SapiEngineTests, OnSpeechEventAlignsOffsetsToPcmFrames) {
     engine->m_cpSite.copy_from(mockSite.get());
     engine->m_audioFormat = { WAVE_FORMAT_PCM, 2, 11099, 66594, 6, 24, 0 };
 
-    using namespace winrt::Windows::Data::Json;
-    JsonObject eventJson;
-    eventJson.SetNamedValue(L"event", JsonValue::CreateStringValue(L"bookmark_reached"));
-    eventJson.SetNamedValue(L"audio_offset_ms", JsonValue::CreateNumberValue(9));
-    eventJson.SetNamedValue(L"bookmark_name", JsonValue::CreateStringValue(L"1"));
+    nlohmann::json eventJson;
+    eventJson["event"] = "bookmark_reached";
+    eventJson["audio_offset_ms"] = 9u;
+    eventJson["bookmark_name"] = "1";
 
     engine->OnSpeechEvent(eventJson);
 
@@ -1032,12 +1029,11 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsSentenceBoundaryToSite) {
     engine->m_cpSite.copy_from(mockSite.get());
     engine->m_audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
 
-    using namespace winrt::Windows::Data::Json;
-    JsonObject eventJson;
-    eventJson.SetNamedValue(L"event", JsonValue::CreateStringValue(L"sentence_boundary"));
-    eventJson.SetNamedValue(L"audio_offset_ms", JsonValue::CreateNumberValue(75));
-    eventJson.SetNamedValue(L"text_offset", JsonValue::CreateNumberValue(22));
-    eventJson.SetNamedValue(L"text_length", JsonValue::CreateNumberValue(9));
+    nlohmann::json eventJson;
+    eventJson["event"] = "sentence_boundary";
+    eventJson["audio_offset_ms"] = 75u;
+    eventJson["text_offset"] = 22u;
+    eventJson["text_length"] = 9u;
 
     engine->OnSpeechEvent(eventJson);
 
@@ -1057,11 +1053,10 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsBookmarkStringEventToSite) {
     engine->m_cpSite.copy_from(mockSite.get());
     engine->m_audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
 
-    using namespace winrt::Windows::Data::Json;
-    JsonObject eventJson;
-    eventJson.SetNamedValue(L"event", JsonValue::CreateStringValue(L"bookmark_reached"));
-    eventJson.SetNamedValue(L"audio_offset_ms", JsonValue::CreateNumberValue(100));
-    eventJson.SetNamedValue(L"bookmark_name", JsonValue::CreateStringValue(L"42"));
+    nlohmann::json eventJson;
+    eventJson["event"] = "bookmark_reached";
+    eventJson["audio_offset_ms"] = 100u;
+    eventJson["bookmark_name"] = "42";
 
     engine->OnSpeechEvent(eventJson);
 
@@ -1895,7 +1890,7 @@ TEST_F(SapiEngineTests, ReadControlMessage_InvalidUtf8_RecoversPipe) {
     std::string invalidUtf8 = "{\"type\":\"event\"}\xff\n";
     server.WriteControl(invalidUtf8);
 
-    winrt::Windows::Data::Json::JsonObject outJson{ nullptr };
+    nlohmann::json outJson;
     HRESULT hr = client.ReadControlMessage(outJson, 1000);
     EXPECT_NE(hr, S_OK);
 
@@ -1918,10 +1913,35 @@ TEST_F(SapiEngineTests, ReadControlMessage_O_N_LinearSearch) {
     }
     server.WriteControl("{\"type\":\"event\"}\n");
 
-    winrt::Windows::Data::Json::JsonObject outJson{ nullptr };
+    nlohmann::json outJson;
     HRESULT hr = client.ReadControlMessage(outJson, 5000); 
     EXPECT_EQ(hr, S_OK);
-    if (outJson) {
-        EXPECT_EQ(outJson.GetNamedString(L"type"), L"event");
+    if (!outJson.is_null()) {
+        EXPECT_EQ(outJson["type"], "event");
     }
+}
+
+TEST_F(SapiEngineTests, ReadControlMessage_MalformedJson) {
+    ClearTestLogs();
+    ControlPipeTestServer server;
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+
+    // Write malformed JSON
+    std::string badJson = "{ bad_json ]\n";
+    server.WriteControl(badJson);
+
+    nlohmann::json outJson;
+    HRESULT hr = client.ReadControlMessage(outJson, 1000);
+    EXPECT_TRUE(FAILED(hr));
+
+    auto logs = GetTestLogs();
+    bool foundParseError = false;
+    for (const auto& log : logs) {
+        if (log.find(L"JSON Parse Error:") != std::wstring::npos) {
+            foundParseError = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundParseError) << "Expected to find a JSON Parse Error log message.";
 }

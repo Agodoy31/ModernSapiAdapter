@@ -11,6 +11,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include "PipeClient.h"
 #include "PcmFrameAssembler.h"
 
@@ -118,7 +119,7 @@ private:
      */
     void EnterFaultedState();
 
-    void ForwardEventToSapi(const winrt::Windows::Data::Json::JsonObject& json);
+    void ForwardEventToSapi(const nlohmann::json& json);
 
     enum class RequestState
     {
