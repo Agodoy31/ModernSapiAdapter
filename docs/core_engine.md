@@ -181,12 +181,6 @@ Control messages are newline-delimited UTF-8 JSON. The pipe remains in byte read
 
 `SendControlMessage` serializes a `nlohmann::json` object with `.dump()`, appends `\n`, and performs one complete overlapped write. A `std::timed_mutex` serializes writers within each caller's absolute deadline. Short writes are errors.
 
-### JSON parser policy
-
-CoreEngine uses `nlohmann::json` as its single owning representation for incoming and outgoing control records. `simdjson` is not used in the latency-sensitive speech path because runtime event objects are small and measured delays have been dominated by synthesis, host scheduling, SAPI callbacks, and request coordination rather than JSON parsing. Adding a borrowed on-demand document model would introduce buffer-lifetime constraints across `PipeClient`, `SpeechWorker`, and `CSapiEngine`, or require copying values back into another owning representation.
-
-This decision may be revisited for a demonstrably large, parse-heavy management path such as provider voice discovery. A future change must first measure parsing time and allocation pressure separately from provider startup and enumeration, show a material improvement on realistic payloads, and keep borrowed parser values within the lifetime of an immutable input buffer.
-
 ### Overlapped operation safety
 
 Timed operations use manual-reset events and `OVERLAPPED`. On timeout, CoreEngine calls `CancelIoEx` for that operation and reaps it before stack storage is destroyed. `PipeClient::Cancel` cancels all outstanding operations on both handles so worker teardown cannot leave a kernel operation referencing dead memory.
