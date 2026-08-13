@@ -1366,8 +1366,9 @@ TEST_F(SapiEngineTests, CreateProviderSessionAcceptsIntegralFloatAudioFormatNumb
                 "{\"response\":\"info\",\"audio_format\":{\"sample_rate\":24000.0,\"bits_per_sample\":16.0,\"channels\":1.0}}\n");
     });
 
-    ASSERT_EQ(engine->CreateProviderSessionLocked(), S_OK);
+    const HRESULT sessionResult = engine->CreateProviderSessionLocked();
     infoResponder.join();
+    ASSERT_EQ(sessionResult, S_OK);
     EXPECT_TRUE(infoResponseSent.load());
     EXPECT_EQ(engine->m_audioFormat.nSamplesPerSec, 24000u);
     EXPECT_EQ(engine->m_audioFormat.wBitsPerSample, 16u);
