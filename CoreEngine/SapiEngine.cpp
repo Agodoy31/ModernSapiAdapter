@@ -96,7 +96,14 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
     CoreLog(L"[CoreEngine] Speak called.");
     if (!pOutputSite || !pTextFragList) return E_INVALIDARG;
 
+#if defined(_DEBUG)
+    const ULONGLONG speakMutexWaitStart = GetTickCount64();
+#endif
     std::lock_guard<std::mutex> speakLock(m_speakMutex);
+#if defined(_DEBUG)
+    CoreLog(L"[CancelTrace] speak_mutex_acquired tick=%llu wait_ms=%llu.",
+        GetTickCount64(), GetTickCount64() - speakMutexWaitStart);
+#endif
 
     {
         std::lock_guard<std::mutex> lock(m_siteMutex);
@@ -110,11 +117,19 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
         std::lock_guard<std::mutex> sessionLock(m_sessionMutex);
         if (!m_pClient || !m_pWorker || m_pWorker->IsFaulted())
         {
+#if defined(_DEBUG)
+            const ULONGLONG sessionRecoveryStart = GetTickCount64();
+            CoreLog(L"[CancelTrace] session_recovery_begin tick=%llu.", sessionRecoveryStart);
+#endif
             RetireFaultedSessionLocked();
             if (FAILED(CreateProviderSessionLocked()))
             {
                 return E_FAIL;
             }
+#if defined(_DEBUG)
+            CoreLog(L"[CancelTrace] session_recovery_end tick=%llu duration_ms=%llu.",
+                GetTickCount64(), GetTickCount64() - sessionRecoveryStart);
+#endif
         }
 
         worker = m_pWorker.get();
@@ -184,7 +199,15 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
         return E_FAIL;
     }
 
+#if defined(_DEBUG)
+    const ULONGLONG speakDispatchStart = GetTickCount64();
+    CoreLog(L"[CancelTrace] speak_id=%llu sapi_speak_send_begin tick=%llu.", speakId, speakDispatchStart);
+#endif
     HRESULT hr = client->SendControlMessage(speakReq);
+#if defined(_DEBUG)
+    CoreLog(L"[CancelTrace] speak_id=%llu sapi_speak_send_end tick=%llu duration_ms=%llu hr=0x%08x.",
+        speakId, GetTickCount64(), GetTickCount64() - speakDispatchStart, hr);
+#endif
     if (FAILED(hr))
     {
         worker->EnterFaultedState();
@@ -193,7 +216,12 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
 
     // A transport failure leaves the session Faulted with outstanding pipe I/O cancelled.
     // The next Speak owns worker/client retirement and replacement under the session lifecycle lock.
-    return worker->WaitUntilFinished(pOutputSite);
+    hr = worker->WaitUntilFinished(pOutputSite);
+#if defined(_DEBUG)
+    CoreLog(L"[CancelTrace] speak_id=%llu speak_return tick=%llu hr=0x%08x.",
+        speakId, GetTickCount64(), hr);
+#endif
+    return hr;
 }
 catch (const std::exception& e) { CoreLog(L"[CoreEngine] Speak exception: %hs", e.what()); return winrt::to_hresult(); }
 catch (...) { CoreLog(L"[CoreEngine] Speak unknown exception."); return winrt::to_hresult(); }

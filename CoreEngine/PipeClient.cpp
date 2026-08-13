@@ -36,6 +36,9 @@ PipeClient::PipeClient() = default;
 
 PipeClient::~PipeClient()
 {
+#if defined(_DEBUG)
+    ReleaseControlWriteForTest();
+#endif
     Cancel();
     m_controlPipe.reset();
     m_audioPipe.reset();
@@ -409,13 +412,86 @@ void PipeClient::FailNextSpeakMessageForTest()
 {
     m_failNextSpeakMessageForTest = true;
 }
+
+void PipeClient::PauseNextControlWriteAfterLockForTest()
+{
+    std::lock_guard<std::mutex> lock(m_controlWriteTestMutex);
+    m_pauseNextControlWriteAfterLockForTest = true;
+    m_controlWritePausedForTest = false;
+}
+
+bool PipeClient::WaitForControlWritePauseForTest(DWORD timeoutMs)
+{
+    std::unique_lock<std::mutex> lock(m_controlWriteTestMutex);
+    return m_controlWriteTestChanged.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
+        return m_controlWritePausedForTest;
+    });
+}
+
+void PipeClient::ReleaseControlWriteForTest()
+{
+    std::lock_guard<std::mutex> lock(m_controlWriteTestMutex);
+    m_pauseNextControlWriteAfterLockForTest = false;
+    m_controlWritePausedForTest = false;
+    m_controlWriteTestChanged.notify_all();
+}
 #endif
 
 HRESULT PipeClient::SendControlMessage(
     const nlohmann::json& json,
     DWORD timeoutMs)
 {
-    std::lock_guard<std::mutex> lock(m_controlWriteMutex);
+    const ULONGLONG deadline = timeoutMs == INFINITE ? 0 : GetTickCount64() + timeoutMs;
+#if defined(_DEBUG)
+    const bool traceCancellation = json.contains("command") && json["command"].is_string() &&
+        json["command"].get<std::string_view>() == "cancel";
+    const uint64_t traceSpeakId = traceCancellation && json.contains("speak_id") && json["speak_id"].is_number_unsigned()
+        ? json["speak_id"].get<uint64_t>()
+        : 0;
+    const ULONGLONG controlMutexWaitStart = GetTickCount64();
+#endif
+    std::unique_lock<std::timed_mutex> lock(m_controlWriteMutex, std::defer_lock);
+    if (timeoutMs == INFINITE)
+    {
+        lock.lock();
+    }
+    else
+    {
+        const ULONGLONG beforeLock = GetTickCount64();
+        if (beforeLock >= deadline ||
+            !lock.try_lock_for(std::chrono::milliseconds(deadline - beforeLock)))
+        {
+#if defined(_DEBUG)
+            if (traceCancellation)
+            {
+                CoreLog(L"[CancelTrace] speak_id=%llu control_write_mutex_timeout tick=%llu wait_ms=%llu.",
+                    traceSpeakId, GetTickCount64(), GetTickCount64() - controlMutexWaitStart);
+            }
+#endif
+            return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+        }
+    }
+#if defined(_DEBUG)
+    {
+        std::unique_lock<std::mutex> testLock(m_controlWriteTestMutex);
+        if (m_pauseNextControlWriteAfterLockForTest)
+        {
+            m_pauseNextControlWriteAfterLockForTest = false;
+            m_controlWritePausedForTest = true;
+            m_controlWriteTestChanged.notify_all();
+            m_controlWriteTestChanged.wait(testLock, [this] {
+                return !m_controlWritePausedForTest;
+            });
+        }
+    }
+#endif
+#if defined(_DEBUG)
+    if (traceCancellation)
+    {
+        CoreLog(L"[CancelTrace] speak_id=%llu control_write_mutex_acquired tick=%llu wait_ms=%llu.",
+            traceSpeakId, GetTickCount64(), GetTickCount64() - controlMutexWaitStart);
+    }
+#endif
     if (!m_controlPipe) return E_UNEXPECTED;
 
 #if defined(_DEBUG)
@@ -439,7 +515,25 @@ HRESULT PipeClient::SendControlMessage(
 #endif
 
     std::string utf8String = json.dump() + "\n";
-    return SendControlMessageUtf8(utf8String, timeoutMs);
+    DWORD writeTimeout = INFINITE;
+    if (timeoutMs != INFINITE)
+    {
+        const ULONGLONG now = GetTickCount64();
+        if (now >= deadline)
+        {
+            return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+        }
+        writeTimeout = static_cast<DWORD>(deadline - now);
+    }
+    HRESULT hr = SendControlMessageUtf8(utf8String, writeTimeout);
+#if defined(_DEBUG)
+    if (traceCancellation)
+    {
+        CoreLog(L"[CancelTrace] speak_id=%llu control_write_complete tick=%llu total_ms=%llu hr=0x%08x.",
+            traceSpeakId, GetTickCount64(), GetTickCount64() - controlMutexWaitStart, hr);
+    }
+#endif
+    return hr;
 }
 
 HRESULT PipeClient::ReadControlMessage(

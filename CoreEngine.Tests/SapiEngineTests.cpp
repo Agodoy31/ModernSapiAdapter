@@ -1394,6 +1394,123 @@ TEST_F(SapiEngineTests, OutputSiteAbortCancelsTheActiveRequest) {
     EXPECT_FALSE(forwardedLateSentenceBoundary);
 }
 
+#if defined(_DEBUG)
+TEST_F(SapiEngineTests, ControlWriteTimeoutIncludesMutexContention) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    client.PauseNextControlWriteAfterLockForTest();
+
+    HRESULT firstWriteResult = E_FAIL;
+    std::thread firstWriteThread([&] {
+        firstWriteResult = client.SendControlMessage({ {"command", "first"} });
+    });
+    ThreadJoinGuard firstWriteJoin(firstWriteThread);
+    auto releaseControlWrite = wil::scope_exit([&] { client.ReleaseControlWriteForTest(); });
+    ASSERT_TRUE(client.WaitForControlWritePauseForTest(1000));
+
+    wil::unique_event secondWriteFinished(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    ASSERT_TRUE(secondWriteFinished);
+    HRESULT secondWriteResult = E_FAIL;
+    std::thread secondWriteThread([&] {
+        secondWriteResult = client.SendControlMessage({ {"command", "second"} }, 50);
+        SetEvent(secondWriteFinished.get());
+    });
+    ThreadJoinGuard secondWriteJoin(secondWriteThread);
+    auto releaseControlWriteBeforeJoins = wil::scope_exit([&] { client.ReleaseControlWriteForTest(); });
+
+    const DWORD completionBeforeRelease = WaitForSingleObject(secondWriteFinished.get(), 500);
+    client.ReleaseControlWriteForTest();
+    secondWriteThread.join();
+    firstWriteThread.join();
+
+    EXPECT_EQ(completionBeforeRelease, WAIT_OBJECT_0)
+        << "The finite control-write timeout did not bound mutex contention.";
+    EXPECT_EQ(secondWriteResult, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+    EXPECT_EQ(firstWriteResult, S_OK);
+}
+#endif
+
+#if defined(_DEBUG)
+TEST_F(SapiEngineTests, AbortObservationRejectsPcmBeforeCancellationTransportStarts) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 44));
+    worker.PauseNextAbortTransitionForTest();
+    mockSite->actions = SPVES_ABORT;
+
+    HRESULT waitResult = E_FAIL;
+    std::thread waitThread([&] { waitResult = worker.WaitUntilFinished(mockSite.get()); });
+    ThreadJoinGuard waitJoin(waitThread);
+    auto releaseAbortGate = wil::scope_exit([&] { worker.ReleaseAbortTransitionForTest(); });
+    ASSERT_TRUE(worker.WaitForAbortTransitionPauseForTest(1000));
+    EXPECT_TRUE(worker.WasCancellingAtAbortUnlockForTest())
+        << "Abort handling reached its first request-mutex unlock before publishing Cancelling.";
+
+    ASSERT_TRUE(server.WriteAudio({ 0xA1, 0xA2 }));
+    for (int attempt = 0; attempt < 100 && worker.RawAudioBytesForTest() != 2; ++attempt) Sleep(1);
+    ASSERT_EQ(worker.RawAudioBytesForTest(), 2u);
+    const ULONG writesBeforeCancellationTransport = mockSite->writeCallCount.load();
+
+    worker.ReleaseAbortTransitionForTest();
+    std::string cancellationRequest;
+    ASSERT_TRUE(server.ReadControl(cancellationRequest));
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_cancelled\",\"speak_id\":44,\"audio_bytes_written\":2}\n"));
+    waitThread.join();
+
+    EXPECT_EQ(waitResult, S_OK);
+    EXPECT_EQ(writesBeforeCancellationTransport, 0u)
+        << "PCM reached SAPI after abort observation but before cancellation state publication.";
+}
+
+TEST_F(SapiEngineTests, CancellationRejectsAnInitiallyApprovedEventAtTheSapiBoundary) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+    engine->m_speakIdCounter = 45;
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(nullptr, 45));
+    worker.PauseNextEventForwardForTest();
+
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"word_boundary\",\"speak_id\":45,\"text_offset\":0,\"text_length\":1,\"audio_offset_ms\":0}\n"));
+    auto releaseEventGate = wil::scope_exit([&] { worker.ReleaseEventForwardForTest(); });
+    ASSERT_TRUE(worker.WaitForEventForwardPauseForTest(1000));
+
+    HRESULT cancellationResult = E_FAIL;
+    std::thread cancellationThread([&] { cancellationResult = worker.CancelAndDrain(); });
+    ThreadJoinGuard cancellationJoin(cancellationThread);
+    auto releaseEventGateBeforeJoin = wil::scope_exit([&] { worker.ReleaseEventForwardForTest(); });
+    std::string cancellationRequest;
+    ASSERT_TRUE(server.ReadControl(cancellationRequest));
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_cancelled\",\"speak_id\":45,\"audio_bytes_written\":0}\n"));
+
+    worker.ReleaseEventForwardForTest();
+    cancellationThread.join();
+
+    EXPECT_EQ(cancellationResult, S_OK);
+    std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
+    EXPECT_TRUE(mockSite->receivedEvents.empty())
+        << "An event approved while speaking reached SAPI after cancellation began.";
+}
+#endif
+
 TEST_F(SapiEngineTests, CreateProviderSessionDoesNotPublishAnInvalidInfoResponse) {
     ControlPipeTestServer server;
     ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);

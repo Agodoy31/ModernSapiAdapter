@@ -67,6 +67,9 @@ public:
 #if defined(_DEBUG)
     void FailNextCancellationMessageForTest();
     void FailNextSpeakMessageForTest();
+    void PauseNextControlWriteAfterLockForTest();
+    bool WaitForControlWritePauseForTest(DWORD timeoutMs);
+    void ReleaseControlWriteForTest();
 #endif
 
 private:
@@ -76,10 +79,14 @@ private:
     std::string m_controlInputBuffer;                /**< Retained bytes after the most recently extracted JSON line. */
     size_t m_controlInputOffset{0};                  /**< Offset of unparsed data in control input buffer. */
     size_t m_controlSearchOffset{0};                 /**< Search offset to prevent O(N^2) scanning. */
-    std::mutex m_controlWriteMutex;                  /**< Serializes newline-delimited JSON writes to the byte-mode control pipe. */
+    std::timed_mutex m_controlWriteMutex;            /**< Serializes control writes within each caller's operation deadline. */
 #if defined(_DEBUG)
     std::atomic_bool m_failNextCancellationMessageForTest{false}; /**< Test-only cancellation write failure injection. */
     std::atomic_bool m_failNextSpeakMessageForTest{false}; /**< Test-only initial speak write failure injection. */
+    std::mutex m_controlWriteTestMutex;
+    std::condition_variable m_controlWriteTestChanged;
+    bool m_pauseNextControlWriteAfterLockForTest{false};
+    bool m_controlWritePausedForTest{false};
 #endif
     /**
      * @brief Internal helper to attempt connection to Control and Audio pipes.

@@ -73,6 +73,10 @@ public:
     void PauseNextEventForwardForTest();
     bool WaitForEventForwardPauseForTest(DWORD timeoutMs);
     void ReleaseEventForwardForTest();
+    void PauseNextAbortTransitionForTest();
+    bool WaitForAbortTransitionPauseForTest(DWORD timeoutMs);
+    void ReleaseAbortTransitionForTest();
+    bool WasCancellingAtAbortUnlockForTest();
     bool WaitForFaultForTest(DWORD timeoutMs);
     uint64_t RawAudioBytesForTest() const;
     void PauseNextFaultPublicationForTest();
@@ -107,6 +111,20 @@ private:
      * @brief Completes cancellation only after all provider-committed old PCM has been discarded.
      */
     bool CompleteCancellationIfAudioBoundaryReached();
+
+    /**
+     * @brief Publishes the active request's cancellation state while m_requestMutex is held.
+     */
+    HRESULT BeginCancellationLocked(ULONGLONG cancellationDeadline,
+                                    ULONGLONG cancellationEntryTick,
+                                    uint64_t& speakId);
+
+    /**
+     * @brief Sends cancellation and waits for the exact provider-declared PCM boundary.
+     */
+    HRESULT FinishCancellation(uint64_t speakId,
+                               ULONGLONG cancellationDeadline,
+                               ULONGLONG cancellationEntryTick);
 
     /**
      * @brief Sends a cancellation command for a specific request without changing worker state.
@@ -157,6 +175,11 @@ private:
     std::condition_variable m_eventForwardTestChanged;
     bool m_pauseNextEventForwardForTest{false};
     bool m_eventForwardPausedForTest{false};
+    std::mutex m_abortTransitionTestMutex;
+    std::condition_variable m_abortTransitionTestChanged;
+    bool m_pauseNextAbortTransitionForTest{false};
+    bool m_abortTransitionPausedForTest{false};
+    bool m_wasCancellingAtAbortUnlockForTest{false};
     std::mutex m_faultPublicationTestMutex;
     std::condition_variable m_faultPublicationTestChanged;
     bool m_pauseNextFaultPublicationForTest{false};
