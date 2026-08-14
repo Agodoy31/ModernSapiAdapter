@@ -12,9 +12,9 @@ This specification details the pipe path security model, control message schemas
 | :--- | :--- |
 | **Target Platform** | Windows 11 (x64, ARM64) |
 | **Control Pipe Format** | Bi-directional, newline-delimited UTF-8 JSON (`PIPE_READMODE_BYTE`) |
-| **Audio Pipe Format** | Inbound, provider-native raw PCM streaming (`PIPE_READMODE_BYTE`) |
-| **Security Isolation** | Dynamic Windows User SID path injection |
-| **Default Audio Format** | 24,000 Hz, 16-bit Mono PCM |
+| **Audio Pipe Format** | Provider to CoreEngine, provider-native raw PCM streaming (`PIPE_READMODE_BYTE`) |
+| **Security Isolation** | Dynamic Windows User SID path plus an explicit provider pipe security descriptor |
+| **Audio Format** | Provider-declared PCM; 24,000 Hz, 16-bit mono is an example, not a fallback |
 
 ---
 
@@ -29,7 +29,9 @@ The proxy (`CoreEngine`) and provider executables communicate using two dedicate
 
 `UserSID` is dynamically resolved at runtime (e.g., `S-1-5-21-...`) on both sides of the pipe connection:
 1. **Fast User Switching:** Prevents cross-session pipe collisions when multiple Windows user accounts are logged in simultaneously.
-2. **UAC & Secure Desktop Isolation:** Ensures elevated admin or system processes cannot hijack or read unprivileged user speech streams.
+2. **Stable Per-User Namespace:** Allows elevated and unelevated clients belonging to the same account to locate the same provider endpoints.
+
+The SID path is a naming boundary, not authorization. Providers must apply an explicit named-pipe security descriptor for the intended user and necessary system identities, reject remote clients, and validate connected-client identity before honoring control commands. The descriptor must include an intentional mandatory-integrity policy so an elevated provider remains reachable by the same user's medium-integrity CoreEngine without admitting unintended low-integrity writes. A provider must fail startup if it cannot resolve the SID or establish the intended security policy; it must not fall back to a shared pipe name.
 
 > [!NOTE]
 > The provider process creates the named pipe servers upon startup. If `CoreEngine` attempts to connect before the provider is running, `CoreEngine` spawns the provider executable via `CreateProcessW` and retries the connection.
@@ -79,6 +81,8 @@ Queries the provider's supported audio output format and capabilities during ini
 }
 ```
 
+All response fields shown above are required. `provider_name` and `version` are nonempty strings, `supports_ssml` is Boolean, and the three `audio_format` members are positive integers describing the exact PCM format written to the Audio Pipe.
+
 ---
 
 ### `voices` Command
@@ -124,7 +128,6 @@ Used by `SapiManager` to query the list of available voice models from a provide
 | `language` | String | BCP-47 language tag (e.g., `en-US`, `es-ES`). |
 | `gender` | String | The gender of the voice. Valid values: `male`, `female`, `neutral`. |
 | `vendor` | String | The manufacturer or vendor of the voice engine. |
-```
 
 ---
 
@@ -219,7 +222,7 @@ the audio pipe. This includes the interval after the provider has sent
 
 ### `shutdown` Command
 
-Instructs the provider process to gracefully terminate itself. This is typically sent by management applications like `SapiManager` after probing a provider for its capabilities, allowing the provider to clean up resources and exit cleanly.
+Requests graceful provider-process termination. This is typically sent by management applications like `SapiManager` after a control-only capability probe. A shared provider must not terminate active synthesis or unrelated client sessions to honor the request. If other sessions, connection handoffs, or synthesis operations exist, the provider defers or ignores `shutdown` and lets its ordinary no-client idle policy terminate the process later.
 
 #### Request (Client -> Provider)
 ```json
@@ -336,7 +339,7 @@ The required completion declaration for a `sapi_speak` request. It means:
   the final declared byte. If cancellation arrives in that interval, stop the
   writer and send `synthesis_cancelled`; the cancellation event supersedes
   normal completion for CoreEngine.
-- Send all word-boundary and bookmark events for the request before this event on
+- Send all word-boundary, sentence-boundary, and bookmark events for the request before this event on
   the Control Pipe. Do not send normal speech events after it for the same
   `speak_id`.
 - Do not send the legacy `completed` event. Cancellation uses
@@ -412,7 +415,8 @@ Fired if the provider encounters an issue, diagnostic event, or synthesis failur
 | `warning` | A non-critical issue occurred. Synthesis continues. |
 | `error` | Speech-level failure. The current utterance aborts, but the provider process is still healthy and CoreEngine can issue future requests. |
 | `fatal` | Provider-level failure. An unrecoverable error occurred (e.g. repeated network disconnects, API auth failure, bad config). The provider process cannot continue, and the connection should be treated as dead. |
-```
+
+An `error` is reusable only after the provider has stopped the request's audio and event producers and proven that no request bytes remain queued or in flight. The protocol has no byte-counted failure terminal. If exact quiescence cannot be proven after a midstream failure, the provider must close the session after reporting the diagnostic so CoreEngine can rebuild it later.
 
 ---
 
