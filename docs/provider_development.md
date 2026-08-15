@@ -29,7 +29,7 @@ A minimum usable provider must:
 5. Accept one active `sapi_speak` per session and stream the declared PCM format.
 6. Preserve every `speak_id` and normalize boundary coordinates to the original SAPI UTF-16 source.
 7. End every successful request with exactly one aligned `synthesis_complete` byte boundary.
-8. Handle `cancel` by discarding uncommitted audio, waiting for any in-flight audio write, and returning exactly one `synthesis_cancelled` committed-byte boundary within 500 ms.
+8. Handle `cancel` instantly by severing audio callbacks, purging uncommitted audio, returning exactly one `synthesis_cancelled` committed-byte boundary in sub-millisecond to sub-10ms time, and winding down backend SDK calls asynchronously in the background.
 9. Write no PCM or normal events for a request after its terminal cancellation acknowledgement.
 10. Shut itself down after a configurable no-client idle period; CoreEngine intentionally does not terminate it when one COM object disappears.
 11. Protect both pipes with an explicit per-user security descriptor, remote-client rejection, connected-client identity validation, and an intentional mandatory-integrity policy.
@@ -234,6 +234,16 @@ queue_capacity_bytes = bytes_per_second * target_buffer_ms / 1000
 
 Choose the smallest capacity that absorbs normal SDK callback jitter. Enforce it as a byte budget, not merely an item count: SDK chunks can vary greatly in size. Acquire the byte budget before accepting ownership and release it exactly once after write, discard, or failure. A fixed-size chunker may instead make item capacity equivalent to bytes. When the queue is full, apply asynchronous backpressure to the backend adapter if possible. If the SDK callback cannot block safely, copy into a bounded pool and fail the request when the limit is exhausted; never grow without bound.
 
+### Hybrid audio chunking and Real-Time Factor (RTF)
+
+Modern neural speech engines synthesize audio at 5x to 20x real-time speed once the initial connection is established. A 1-second utterance (48 KB at 24 kHz 16-bit mono) may arrive in a burst of twelve 4 KB chunks across just 50–100 ms.
+
+To balance ultra-low latency with Windows syscall efficiency:
+
+- **First Chunk (Time-to-First-Audio):** Forward the very first chunk (~2 KB – 4 KB) to the audio pipe immediately with zero delay so SAPI begins playback on the earliest possible audio frame.
+- **Steady-State Chunks (Coalescing):** For subsequent chunks during a high-speed burst, coalesce incoming audio into 8 KB to 16 KB buffers before invoking `WriteAsync`. At 10x RTF, filling an 8 KB buffer takes only ~15–20 ms of wall-clock time, but cuts kernel syscalls, I/O Request Packet (IRP) allocations, and reader context switches by 50% to 75%.
+- **Stream Termination:** Flush any remaining buffered bytes immediately upon synthesis completion or cancellation.
+
 Track two counters:
 
 - `accepted_bytes`: bytes whose ownership has transferred into the final audio egress queue;
@@ -267,19 +277,15 @@ Keep the request cancellable until the final declared byte has committed. A canc
 
 ## Cancellation
 
-Cancellation is a synchronization barrier, not merely a request to an SDK.
+Cancellation is an instant synchronization barrier, not a blocking wait for backend SDK teardown.
 
-When `cancel` arrives:
+When a human screen reader user arrows rapidly through a menu or document, cancellation commands arrive in quick succession. To maintain a responsive, low-latency UI, the provider must unblock SAPI immediately using the **Unplug & Detached Background Wind-Down** pattern:
 
-1. Atomically transition the matching request to `Cancelling`; reject later PCM and normal events immediately.
-2. Start asynchronous backend cleanup without blocking further reads from the control pipe.
-3. Wait for backend callbacks that can still enqueue output to stop or become rejected.
-4. Acquire exclusive ownership of the audio writer boundary.
-5. Let an already in-flight write finish, then discard every queued but uncommitted chunk for that request.
-6. Snapshot the aligned `committed_bytes` count.
-7. Atomically win the `Cancelled` terminal transition.
-8. Send one `synthesis_cancelled` containing that committed count.
-9. Release the per-session synthesis gate and accept the replacement `sapi_speak` immediately.
+1. **Instant Callback Severing (Unplug):** Atomically transition the matching request to `Cancelling`. Immediately sever audio callbacks (e.g. set native stream delegates to `null`) and reject all future backend PCM chunks and normal events. Future native SDK callbacks return 0 immediately without queuing or blocking.
+2. **Purge Uncommitted Audio:** Acquire the in-memory audio queue lock, discard every queued but uncommitted chunk for the cancelled request, and capture the exact `committed_bytes` count.
+3. **Send Terminal Acknowledgement Immediately:** Atomically win the `Cancelled` transition and send `synthesis_cancelled` with the committed byte count over the control pipe. This unblocks CoreEngine and SAPI in sub-millisecond to sub-5ms time.
+4. **Detached Background Wind-Down:** Dispatch the actual SDK cancellation call (e.g. `StopSpeakingAsync()`) to a detached background task (`Task.Run`) wrapped in a top-level `try/catch/finally` shield. When the native SDK join completes in the background, detach event handlers and safely return the pooled engine context to the pool.
+5. **Passive Leased Teardown:** Never force-dispose in-flight engine contexts while native cancellation threads are executing. Instead, let background wind-down tasks dispose excess or retired contexts when they return to the pool.
 
 Example:
 
@@ -289,7 +295,9 @@ Example:
 
 After this record, the provider must write no PCM and no normal event for request 41. Events already written to the control pipe before the provider received cancellation may still be in flight; CoreEngine drops stale events after it publishes its local cancellation state.
 
-The entire CoreEngine cancellation transaction—sending `cancel`, receiving this acknowledgement, and draining exactly the declared bytes—has one 500 ms budget. Healthy providers should normally acknowledge in tens of milliseconds, leaving room for scheduling and pipe drain.
+**Critical Anti-Pattern:** Never synchronously `await` backend SDK cancellation methods (such as `StopSpeakingAsync()`) before sending `synthesis_cancelled`. Doing so introduces 50–100 ms of audible keystroke lag. Worse, if the native SDK thread is blocked waiting on an audio pipe write while `StopSpeakingAsync()` waits for that thread to join, synchronous teardown will trigger a permanent native deadlock.
+
+The entire CoreEngine cancellation transaction—sending `cancel`, receiving this acknowledgement, and draining exactly the declared bytes—has one 500 ms budget. Healthy providers should acknowledge in under 10 milliseconds, leaving ample headroom for scheduling and pipe drain.
 
 Continue reading control records while cleanup runs, but gate synthesis dispatch until the acknowledgement has been sent and the old request's engine lease, event sequence, and audio queue have been released. Equally, do not hold a global engine lock while waiting; cancellation of one client must not stall unrelated sessions.
 
@@ -448,22 +456,23 @@ The current Azure project demonstrates:
 - request-local serialized event callbacks;
 - source/SSML offset normalization and duplicate bookmark suppression;
 - separate accepted and committed audio counters;
-- cancellation synchronized with the audio writer;
-- pooled Azure synthesizer contexts;
+- instant unblocking cancellation with detached background wind-down;
+- safe native-to-managed callback exception shielding in `AudioProxy.Write`;
+- unified online synthesizer pool scaling with dynamic SSML routing;
+- passive leased context teardown preventing native access violations (`0xC0000005`);
 - deferred debug formatting.
 
-Do not copy these current limitations into a new provider:
+Do not copy these initial prototype limitations into a new provider:
 
 - a string allocation for every inbound and outbound control record;
 - a copied array and queue object for every PCM callback;
-- an unbounded audio queue;
 - timing/order-only dual-pipe pairing;
 - a one-second control-only pairing delay;
 - backend or translation failures that produce a log but no reliable terminal outcome;
-- swallowed audio-writer exceptions;
-- fire-and-forget worker tasks that teardown does not await;
+- unshielded native interop callbacks where a managed exception could crash native runtime threads;
+- synchronous SDK cancellation waits that block SAPI unblocking;
 - no no-client provider-process shutdown;
-- backend SDK types exposed through the nominally neutral engine interface.
+- backend SDK types exposed through the nominally neutral engine interface;
 - 32-bit `speak_id` DTO fields even though CoreEngine's counter is 64-bit.
 
 ## Conformance checklist
