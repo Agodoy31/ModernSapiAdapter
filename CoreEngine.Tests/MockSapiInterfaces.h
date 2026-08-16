@@ -44,8 +44,16 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
     std::mutex eventsMutex;
     std::vector<SPEVENT> receivedEvents;
     std::mutex writesMutex;
+    std::condition_variable writeCondition;
     std::vector<ULONG> requestedWriteSizes;
     std::vector<uint8_t> acceptedAudio;
+
+    bool WaitForBytesWritten(ULONG expectedBytes, DWORD timeoutMs = 2000) {
+        std::unique_lock<std::mutex> lock(writesMutex);
+        return writeCondition.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&] {
+            return totalBytesWritten.load() >= expectedBytes;
+        });
+    }
 
     IFACEMETHODIMP AddEvents(const SPEVENT* pEventArray, ULONG ulCount) noexcept override {
         std::lock_guard<std::mutex> lock(eventsMutex);
@@ -82,6 +90,7 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
             const auto bytes = static_cast<const uint8_t*>(data);
             acceptedAudio.insert(acceptedAudio.end(), bytes, bytes + cb);
         }
+        writeCondition.notify_all();
         if (m_rejectedWriteObserved.load()) {
             bytesAcceptedAfterRejectedWrite += cb;
         }

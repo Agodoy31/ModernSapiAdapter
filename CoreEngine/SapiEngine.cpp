@@ -69,6 +69,9 @@ IFACEMETHODIMP CSapiEngine::GetOutputFormat(const GUID* pTargetFmtId,
                                             WAVEFORMATEX** ppCoMemOutputWaveFormatEx) noexcept
 {
     CoreLog(L"[CoreEngine] GetOutputFormat called.");
+    if (pOutputFormatId) *pOutputFormatId = GUID_NULL;
+    if (ppCoMemOutputWaveFormatEx) *ppCoMemOutputWaveFormatEx = nullptr;
+
     std::lock_guard<std::mutex> sessionLock(m_sessionMutex);
     if (!m_hasOutputFormat)
     {

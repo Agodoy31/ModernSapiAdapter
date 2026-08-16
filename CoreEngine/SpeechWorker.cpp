@@ -329,6 +329,12 @@ void SpeechWorker::EnterFaultedState()
 {
     {
         std::lock_guard<std::mutex> requestLock(m_requestMutex);
+        m_requestCompletionHr = E_FAIL;
+        m_frameAssembler.Reset();
+        m_upstreamState = UpstreamState::Faulted;
+        m_downstreamState = DownstreamState::Faulted;
+        m_requestChanged.notify_all();
+
         bool expected = false;
         if (!m_faultPublicationStarted.compare_exchange_strong(expected, true))
         {
@@ -357,12 +363,7 @@ void SpeechWorker::EnterFaultedState()
         m_faultVisible.store(true, std::memory_order_release);
 
         std::lock_guard<std::mutex> requestLock(m_requestMutex);
-        m_requestCompletionHr = E_FAIL;
-        m_frameAssembler.Reset();
-        m_upstreamState = UpstreamState::Faulted;
-        m_downstreamState = DownstreamState::Faulted;
         m_faultPending = false;
-        m_requestChanged.notify_all();
     }
 
     if (m_pClient)
@@ -864,11 +865,19 @@ void SpeechWorker::ControlThreadProc()
                                 if (m_upstreamFinished)
                                 {
                                     CoreLog(L"[SpeechWorker] Duplicate terminal event for speak_id %llu.", eventSpeakId);
+                                    m_upstreamState = UpstreamState::Faulted;
+                                    m_downstreamState = DownstreamState::Faulted;
+                                    m_requestCompletionHr = E_FAIL;
+                                    m_requestChanged.notify_all();
                                     faultAfterStateUpdate = true;
                                 }
                                 else if (!hasValidTerminalAudioBytes)
                                 {
                                     CoreLog(L"[SpeechWorker] terminal event for speak_id %llu has an invalid audio bytes value.", eventSpeakId);
+                                    m_upstreamState = UpstreamState::Faulted;
+                                    m_downstreamState = DownstreamState::Faulted;
+                                    m_requestCompletionHr = E_FAIL;
+                                    m_requestChanged.notify_all();
                                     faultAfterStateUpdate = true;
                                 }
                                 else
@@ -877,6 +886,10 @@ void SpeechWorker::ControlThreadProc()
                                     if (m_upstreamTerminalBytes % m_frameAssembler.BlockAlign() != 0)
                                     {
                                         CoreLog(L"[SpeechWorker] terminal event for speak_id %llu is not PCM-frame aligned.", eventSpeakId);
+                                        m_upstreamState = UpstreamState::Faulted;
+                                        m_downstreamState = DownstreamState::Faulted;
+                                        m_requestCompletionHr = E_FAIL;
+                                        m_requestChanged.notify_all();
                                         faultAfterStateUpdate = true;
                                     }
                                     else

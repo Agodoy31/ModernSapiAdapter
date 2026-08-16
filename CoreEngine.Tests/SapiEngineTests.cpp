@@ -255,7 +255,15 @@ public:
     {
         if (m_thread.joinable())
         {
-            m_thread.join();
+            if (WaitForSingleObject(reinterpret_cast<HANDLE>(m_thread.native_handle()), 5000) != WAIT_OBJECT_0)
+            {
+                ADD_FAILURE() << "Thread failed to terminate within 5000ms";
+                m_thread.detach();
+            }
+            else
+            {
+                m_thread.join();
+            }
         }
     }
 
@@ -533,32 +541,20 @@ TEST_F(SapiEngineTests, MatchingProviderEventsKeepLongRequestAlive) {
     ASSERT_TRUE(worker.Start(nullptr, 34));
 
     HRESULT waitResult = E_FAIL;
-    std::atomic_bool waitReturned{false};
     std::thread waitThread([&] {
         waitResult = worker.WaitUntilFinished(nullptr);
-        waitReturned = true;
     });
     ThreadJoinGuard waitJoin(waitThread);
 
     for (int eventIndex = 0; eventIndex < 3; ++eventIndex)
     {
-        Sleep(700);
         ASSERT_TRUE(server.WriteControl(
             "{\"event\":\"word_boundary\",\"speak_id\":34,\"text_offset\":0,\"text_length\":1,\"audio_offset_ms\":0}\n"));
     }
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":34,\"total_audio_bytes\":0}\n"));
 
-    for (int attempt = 0; attempt < 100 && !waitReturned.load(); ++attempt)
-    {
-        Sleep(10);
-    }
-    if (!waitReturned.load())
-    {
-        worker.Stop();
-    }
-    waitThread.join();
-
+    EXPECT_TRUE(waitJoin.Join(2000));
     EXPECT_EQ(waitResult, S_OK);
     EXPECT_FALSE(worker.IsFaulted());
 }
@@ -898,15 +894,14 @@ TEST_F(SapiEngineTests, ReadControlMessageReassemblesFragmentedJsonLine) {
 
     std::atomic_bool writesSucceeded{true};
     std::thread writer([&server, &writesSucceeded] {
-        Sleep(20);
         writesSucceeded = server.WriteControl("{\"event\":\"");
-        Sleep(20);
         writesSucceeded = server.WriteControl("fragmented\"}\n") && writesSucceeded.load();
     });
+    ThreadJoinGuard writerJoin(writer);
 
     nlohmann::json message;
     EXPECT_EQ(client.ReadControlMessage(message), S_OK);
-    writer.join();
+    EXPECT_TRUE(writerJoin.Join(1000));
 
     ASSERT_TRUE(writesSucceeded);
     EXPECT_EQ(message["event"], "fragmented");
@@ -1020,12 +1015,12 @@ TEST_F(SapiEngineTests, ReadControlMessageHandlesLargePayloadAcrossCompactionThr
 TEST_F(SapiEngineTests, GetOutputFormatFailsWhenNoProviderLoaded) {
     auto engine = winrt::make_self<CSapiEngine>();
     
-    GUID formatId = {};
-    WAVEFORMATEX* pWaveFormat = nullptr;
+    GUID formatId = GUID_NULL;
+    WAVEFORMATEX* pWaveFormat = reinterpret_cast<WAVEFORMATEX*>(static_cast<uintptr_t>(0xDEADBEEF));
     
     HRESULT hr = engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat);
-    EXPECT_TRUE(hr == SPERR_UNINITIALIZED);
-    EXPECT_TRUE(pWaveFormat == nullptr);
+    EXPECT_EQ(hr, SPERR_UNINITIALIZED);
+    EXPECT_EQ(pWaveFormat, nullptr);
 }
 
 TEST_F(SapiEngineTests, OnSpeechEventMapsAndDispatchesToSite) {
@@ -1368,21 +1363,13 @@ TEST_F(SapiEngineTests, OutputSiteAbortCancelsTheActiveRequest) {
         speakResult = engine->Speak(0, formatId, pWaveFormat, &firstFragment, mockSite.get());
         returned = true;
     });
+    ThreadJoinGuard speakJoin(speakThread);
 
-    for (int attempt = 0; attempt < 50 && mockSite->totalBytesWritten.load() == 0; ++attempt)
-    {
-        Sleep(20);
-    }
-    ASSERT_EQ(mockSite->totalBytesWritten.load(), 9600u);
+    ASSERT_TRUE(mockSite->WaitForBytesWritten(9600));
 
     mockSite->actions = SPVES_ABORT;
-    for (int attempt = 0; attempt < 25 && !returned.load(); ++attempt)
-    {
-        Sleep(20);
-    }
-
+    EXPECT_TRUE(speakJoin.Join(2000));
     EXPECT_TRUE(returned.load());
-    speakThread.join();
     CoTaskMemFree(pWaveFormat);
     EXPECT_EQ(speakResult, S_OK);
 
