@@ -28,6 +28,7 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_FrameAssemblyFailureFaultsWorkerWithoutEscapingThread_Test;
     friend class SapiEngineTests_AbortObservationRejectsPcmBeforeCancellationTransportStarts_Test;
     friend class SapiEngineTests_CancellationRejectsAnInitiallyApprovedEventAtTheSapiBoundary_Test;
+    friend class SapiEngineTests_SpeakCancelsPromptlyEvenWhenOutputSiteWriteBlocks_Test;
 public:
     /**
      * @brief Constructs a new CSapiEngine instance.

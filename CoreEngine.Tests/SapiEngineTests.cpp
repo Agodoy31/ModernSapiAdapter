@@ -2234,3 +2234,51 @@ TEST_F(SapiEngineTests, ReadControlMessage_MalformedJson) {
     }
     EXPECT_TRUE(foundParseError) << "Expected to find a JSON Parse Error log message.";
 }
+
+TEST_F(SapiEngineTests, SpeakCancelsPromptlyEvenWhenOutputSiteWriteBlocks) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+    // Simulate SAPI waveOut hardware buffer backpressure by delaying Write() for 300ms on first write
+    mockSite->writeDelayMs = 300;
+
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(mockSite.get(), 42));
+
+    // Send an audio chunk to trigger the blocking Write()
+    ASSERT_TRUE(server.WriteAudio({ 0x10, 0x20, 0x30, 0x40 }));
+
+    // Wait a brief moment to ensure AudioThread is actively blocked in Write()
+    Sleep(30);
+
+    // Now issue SPVES_ABORT from SAPI
+    mockSite->actions = SPVES_ABORT;
+
+    const auto cancelStart = std::chrono::steady_clock::now();
+    
+    // Concurrently wait for cancellation request to be read by server
+    std::thread serverThread([&] {
+        std::string request;
+        if (server.ReadControl(request)) {
+            server.WriteControl("{\"event\":\"synthesis_cancelled\",\"speak_id\":42,\"audio_bytes_written\":4}\n");
+        }
+    });
+
+    HRESULT cancelHr = worker.WaitUntilFinished(mockSite.get());
+    const auto cancelDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - cancelStart).count();
+
+    if (serverThread.joinable()) {
+        serverThread.join();
+    }
+
+    EXPECT_EQ(cancelHr, S_OK);
+    // Cancellation MUST return promptly (< 100ms), NOT waiting for the 300ms Write() sleep to finish
+    EXPECT_LT(cancelDuration, 100);
+}
+

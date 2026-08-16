@@ -38,6 +38,7 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
     std::atomic<ULONG> writeCallCount = 0;
     std::atomic<ULONG> bytesAcceptedAfterRejectedWrite = 0;
     std::atomic_bool rejectNextWrite = false;
+    std::atomic<DWORD> writeDelayMs = 0;
     std::atomic<DWORD> actions = SPVES_CONTINUE;
     std::function<DWORD()> getActionsCallback;
     std::mutex eventsMutex;
@@ -61,6 +62,10 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
         return getActionsCallback ? getActionsCallback() : actions.load();
     }
     IFACEMETHODIMP Write(const void* data, ULONG cb, ULONG* pcbWritten) noexcept override {
+        const DWORD delay = writeDelayMs.load();
+        if (delay > 0) {
+            Sleep(delay);
+        }
         writeCallCount++;
         {
             std::lock_guard<std::mutex> lock(writesMutex);

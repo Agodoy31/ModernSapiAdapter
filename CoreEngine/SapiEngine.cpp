@@ -228,11 +228,15 @@ catch (...) { CoreLog(L"[CoreEngine] Speak unknown exception."); return winrt::t
 
 bool CSapiEngine::OnAudioData(const uint8_t* pAudioBytes, uint32_t byteCount)
 {
-    std::lock_guard<std::mutex> lock(m_siteMutex);
-    if (!m_cpSite) return false;
+    winrt::com_ptr<ISpTTSEngineSite> site;
+    {
+        std::lock_guard<std::mutex> lock(m_siteMutex);
+        if (!m_cpSite) return false;
+        site = m_cpSite;
+    }
 
     ULONG bytesWritten = 0;
-    HRESULT hr = m_cpSite->Write(pAudioBytes, byteCount, &bytesWritten);
+    HRESULT hr = site->Write(pAudioBytes, byteCount, &bytesWritten);
     return SUCCEEDED(hr) && (bytesWritten == byteCount);
 }
 
@@ -271,8 +275,12 @@ uint64_t CSapiEngine::AudioOffsetMsToBytes(uint32_t audioMs) const
 
 void CSapiEngine::OnSpeechEvent(const nlohmann::json& eventJson) try
 {
-    std::lock_guard<std::mutex> lock(m_siteMutex);
-    if (!m_cpSite) return;
+    winrt::com_ptr<ISpTTSEngineSite> site;
+    {
+        std::lock_guard<std::mutex> lock(m_siteMutex);
+        if (!m_cpSite) return;
+        site = m_cpSite;
+    }
 
     if (!eventJson.contains("event") || !eventJson["event"].is_string()) return;
     const std::string_view eventStr = eventJson["event"].get<std::string_view>();
@@ -310,7 +318,7 @@ void CSapiEngine::OnSpeechEvent(const nlohmann::json& eventJson) try
         spEvent.wParam = static_cast<WPARAM>(textLength);
         spEvent.lParam = static_cast<LPARAM>(textOffset);
         
-        m_cpSite->AddEvents(&spEvent, 1);
+        site->AddEvents(&spEvent, 1);
     }
     else if (eventStr == "sentence_boundary")
     {
@@ -332,7 +340,7 @@ void CSapiEngine::OnSpeechEvent(const nlohmann::json& eventJson) try
         spEvent.wParam = static_cast<WPARAM>(textLength);
         spEvent.lParam = static_cast<LPARAM>(textOffset);
         
-        m_cpSite->AddEvents(&spEvent, 1);
+        site->AddEvents(&spEvent, 1);
     }
     else if (eventStr == "bookmark_reached")
     {
@@ -383,7 +391,7 @@ void CSapiEngine::OnSpeechEvent(const nlohmann::json& eventJson) try
             spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
         }
         
-        m_cpSite->AddEvents(&spEvent, 1);
+        site->AddEvents(&spEvent, 1);
     }
     else if (eventStr == "log")
     {

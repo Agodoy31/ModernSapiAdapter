@@ -638,6 +638,9 @@ void SpeechWorker::AudioThreadProc()
 
         uint64_t cancellationToSend = 0;
         bool protocolBoundaryFailed = false;
+        bool shouldDeliverAudio = false;
+        PcmFrameBatch spansToWrite{};
+
         {
             std::lock_guard<std::mutex> lock(m_requestMutex);
             if (m_requestState == RequestState::Speaking || m_requestState == RequestState::Cancelling)
@@ -655,7 +658,6 @@ void SpeechWorker::AudioThreadProc()
                     bytesToFrame = static_cast<size_t>((std::min)(static_cast<uint64_t>(bytesRead), remainingDeclaredBytes));
                 }
                 m_rawAudioBytesRead += bytesRead;
-                bool writeAccepted = true;
 #if defined(_DEBUG)
                 if (m_failNextFrameAssemblyForTest)
                 {
@@ -663,31 +665,14 @@ void SpeechWorker::AudioThreadProc()
                     throw std::bad_alloc();
                 }
 #endif
-                const auto spans = m_frameAssembler.Process(buffer.data(), bytesToFrame);
-                for (const auto& span : spans)
+                spansToWrite = m_frameAssembler.Process(buffer.data(), bytesToFrame);
+                if (spansToWrite.empty())
                 {
-                    if (!m_pEngine->OnAudioData(span.data, static_cast<uint32_t>(span.size)))
-                    {
-                        writeAccepted = false;
-                        break;
-                    }
-                    m_deliveredAudioBytes += span.size;
-                }
-
-                if (!writeAccepted)
-                {
-                    CoreLog(L"[SpeechWorker] SAPI rejected an audio write; cancelling active synthesis.");
-                    cancellationToSend = m_activeSpeakId;
-                    m_cancelledAudioBytes = 0;
-                    m_cancellationComplete = false;
-                    m_cancellationFailed = false;
-                    m_cancellationDeadlineTick = GetTickCount64() + CancellationTimeoutMs;
-                    m_frameAssembler.Reset();
-                    m_requestState = RequestState::Cancelling;
+                    protocolBoundaryFailed = CompleteIfAudioBoundaryReached();
                 }
                 else
                 {
-                    protocolBoundaryFailed = CompleteIfAudioBoundaryReached();
+                    shouldDeliverAudio = true;
                 }
             }
             else if (m_requestState == RequestState::Cancelling)
@@ -719,6 +704,54 @@ void SpeechWorker::AudioThreadProc()
             if (protocolBoundaryFailed)
             {
                 m_faultPending = true;
+            }
+        }
+
+        if (shouldDeliverAudio && !spansToWrite.empty())
+        {
+            bool writeAccepted = true;
+            size_t totalBytesDeliveredInBatch = 0;
+
+            for (const auto& span : spansToWrite)
+            {
+                if (!m_pEngine->OnAudioData(span.data, static_cast<uint32_t>(span.size)))
+                {
+                    writeAccepted = false;
+                    break;
+                }
+                totalBytesDeliveredInBatch += span.size;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(m_requestMutex);
+                if (m_requestState == RequestState::Speaking)
+                {
+                    m_deliveredAudioBytes += totalBytesDeliveredInBatch;
+                    if (!writeAccepted)
+                    {
+                        CoreLog(L"[SpeechWorker] SAPI rejected an audio write; cancelling active synthesis.");
+                        cancellationToSend = m_activeSpeakId;
+                        m_cancelledAudioBytes = 0;
+                        m_cancellationComplete = false;
+                        m_cancellationFailed = false;
+                        m_cancellationDeadlineTick = GetTickCount64() + CancellationTimeoutMs;
+                        m_frameAssembler.Reset();
+                        m_requestState = RequestState::Cancelling;
+                    }
+                    else
+                    {
+                        protocolBoundaryFailed = CompleteIfAudioBoundaryReached();
+                    }
+                }
+                else if (m_requestState == RequestState::Cancelling)
+                {
+                    protocolBoundaryFailed = CompleteCancellationIfAudioBoundaryReached();
+                }
+
+                if (protocolBoundaryFailed)
+                {
+                    m_faultPending = true;
+                }
             }
         }
 
