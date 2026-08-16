@@ -103,14 +103,9 @@ private:
     void ControlThreadProc();
 
     /**
-     * @brief Completes speech only when the provider-declared PCM boundary has reached SAPI.
+     * @brief Checks if the terminal boundary has been reached for the upstream and downstream states.
      */
-    bool CompleteIfAudioBoundaryReached();
-
-    /**
-     * @brief Completes cancellation only after all provider-committed old PCM has been discarded.
-     */
-    bool CompleteCancellationIfAudioBoundaryReached();
+    bool CheckTerminalBoundaryLocked();
 
     /**
      * @brief Publishes the active request's cancellation state while m_requestMutex is held.
@@ -138,12 +133,22 @@ private:
 
     void ForwardEventToSapi(const nlohmann::json& json);
 
-    enum class RequestState
+    enum class UpstreamState : uint8_t
     {
-        Idle,
-        Speaking,
-        Cancelling,
-        Faulted
+        Idle = 0,
+        Active = 1,       // Request dispatched; provider synthesizing
+        Completed = 2,    // Provider sent synthesis_complete with total_audio_bytes
+        Cancelled = 3,    // Provider sent synthesis_cancelled with audio_bytes_written
+        Failed = 4,       // Provider sent severity="error" for this speak_id
+        Faulted = 5       // Fatal provider crash or broken pipe
+    };
+
+    enum class DownstreamState : uint8_t
+    {
+        Idle = 0,
+        Speaking = 1,     // Delivering audio frames to SAPI pOutputSite->Write()
+        Cancelling = 2,   // SAPI requested SPVES_ABORT; draining pipe without Write()
+        Faulted = 3       // Fatal engine fault
     };
 
     CSapiEngine* m_pEngine;                  /**< Pointer to parent SAPI engine. */
@@ -158,15 +163,14 @@ private:
     std::atomic_bool m_faultPublicationStarted{false}; /**< Ensures concurrent pipe failures publish quarantine once. */
     std::atomic_bool m_faultVisible{false};  /**< Prevents new SAPI event callbacks once a fault is visible. */
     std::condition_variable m_requestChanged;/**< Wakes synchronous Speak and purge callers at terminal boundaries. */
-    RequestState m_requestState{RequestState::Idle}; /**< Active request lifecycle state. */
+    UpstreamState m_upstreamState{UpstreamState::Idle}; /**< Active request upstream lifecycle state. */
+    DownstreamState m_downstreamState{DownstreamState::Idle}; /**< Active request downstream lifecycle state. */
     bool m_faultPending{false};              /**< A protocol violation was detected before full Faulted publication. */
     uint64_t m_activeSpeakId{0};             /**< Identifier for the active request. */
-    bool m_synthesisComplete{false};         /**< Provider has declared the final PCM byte count. */
-    bool m_cancellationComplete{false};      /**< Provider has declared the final cancellation byte count. */
-    bool m_cancellationFailed{false};        /**< Cancellation could not reach a valid terminal boundary. */
+    uint64_t m_upstreamTerminalBytes{0};     /**< Declared raw PCM byte count for normal completion or cancellation. */
+    bool m_upstreamFinished{false};          /**< Provider has declared the final PCM byte count. */
+    HRESULT m_requestCompletionHr{S_OK};     /**< Result of the active request. */
     ULONGLONG m_cancellationDeadlineTick{0}; /**< Absolute deadline for the active cancellation transaction. */
-    uint64_t m_expectedAudioBytes{0};        /**< Declared raw PCM byte count for normal completion. */
-    uint64_t m_cancelledAudioBytes{0};       /**< Raw PCM bytes committed before cancellation. */
     uint64_t m_rawAudioBytesRead{0};         /**< Raw bytes consumed from the audio pipe for the active request. */
     uint64_t m_deliveredAudioBytes{0};       /**< Bytes successfully written to ISpTTSEngineSite. */
     PcmFrameAssembler m_frameAssembler;      /**< Reassembles provider-native PCM frames under m_requestMutex. */

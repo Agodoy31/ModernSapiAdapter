@@ -2282,3 +2282,127 @@ TEST_F(SapiEngineTests, SpeakCancelsPromptlyEvenWhenOutputSiteWriteBlocks) {
     EXPECT_LT(cancelDuration, 100);
 }
 
+TEST_F(SapiEngineTests, SynthesisCompleteWhileCancellingCompletesPromptly) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(mockSite.get(), 42));
+
+    mockSite->actions = SPVES_ABORT;
+
+    const auto cancelStart = std::chrono::steady_clock::now();
+
+    std::thread serverThread([&] {
+        std::string request;
+        if (server.ReadControl(request)) {
+            server.WriteAudio({ 1, 2, 3, 4 });
+            server.WriteControl("{\"event\":\"synthesis_complete\",\"speak_id\":42,\"total_audio_bytes\":4}\n");
+        }
+    });
+
+    HRESULT hr = worker.WaitUntilFinished(mockSite.get());
+    const auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - cancelStart).count();
+
+    if (serverThread.joinable()) {
+        serverThread.join();
+    }
+
+    EXPECT_EQ(hr, S_OK);
+    EXPECT_LT(durationMs, 200);
+}
+
+TEST_F(SapiEngineTests, WarningLogDoesNotFaultSession) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(mockSite.get(), 43));
+
+    std::thread serverThread([&] {
+        server.WriteControl("{\"event\":\"log\",\"speak_id\":43,\"severity\":\"warning\",\"message\":\"Cancel ignored: speak_id 43 already completed\"}\n");
+        server.WriteAudio({ 1, 2, 3, 4 });
+        server.WriteControl("{\"event\":\"synthesis_complete\",\"speak_id\":43,\"total_audio_bytes\":4}\n");
+    });
+
+    HRESULT hr = worker.WaitUntilFinished(mockSite.get());
+
+    if (serverThread.joinable()) {
+        serverThread.join();
+    }
+
+    EXPECT_EQ(hr, S_OK);
+    EXPECT_FALSE(worker.IsFaulted());
+}
+
+TEST_F(SapiEngineTests, RequestErrorFailsUtteranceWithoutKillingProvider) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(mockSite.get(), 44));
+
+    const auto cancelStart = std::chrono::steady_clock::now();
+
+    std::thread serverThread([&] {
+        server.WriteControl("{\"event\":\"log\",\"speak_id\":44,\"severity\":\"error\",\"message\":\"Synthesis failed: 400 Bad Request\"}\n");
+    });
+
+    HRESULT hr = worker.WaitUntilFinished(mockSite.get());
+    const auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - cancelStart).count();
+
+    if (serverThread.joinable()) {
+        serverThread.join();
+    }
+
+    EXPECT_TRUE(FAILED(hr));
+    EXPECT_LT(durationMs, 200);
+    EXPECT_FALSE(worker.IsFaulted());
+}
+
+TEST_F(SapiEngineTests, FatalErrorFaultsSessionAndTriggersRestart) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(mockSite.get(), 45));
+
+    std::thread serverThread([&] {
+        server.WriteControl("{\"event\":\"log\",\"speak_id\":45,\"severity\":\"fatal\",\"message\":\"Fatal provider crash\"}\n");
+    });
+
+    HRESULT hr = worker.WaitUntilFinished(mockSite.get());
+
+    if (serverThread.joinable()) {
+        serverThread.join();
+    }
+
+    EXPECT_EQ(hr, E_FAIL);
+    EXPECT_TRUE(worker.IsFaulted());
+}

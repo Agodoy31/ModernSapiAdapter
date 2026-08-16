@@ -29,6 +29,10 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_AbortObservationRejectsPcmBeforeCancellationTransportStarts_Test;
     friend class SapiEngineTests_CancellationRejectsAnInitiallyApprovedEventAtTheSapiBoundary_Test;
     friend class SapiEngineTests_SpeakCancelsPromptlyEvenWhenOutputSiteWriteBlocks_Test;
+    friend class SapiEngineTests_SynthesisCompleteWhileCancellingCompletesPromptly_Test;
+    friend class SapiEngineTests_WarningLogDoesNotFaultSession_Test;
+    friend class SapiEngineTests_RequestErrorFailsUtteranceWithoutKillingProvider_Test;
+    friend class SapiEngineTests_FatalErrorFaultsSessionAndTriggersRestart_Test;
 public:
     /**
      * @brief Constructs a new CSapiEngine instance.
