@@ -206,15 +206,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private void LstVoices_KeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Space && LstVoices.SelectedItem is VoiceViewModel voice)
-        {
-            voice.IsRegistered = !voice.IsRegistered;
-            e.Handled = true;
-        }
-    }
-
     private void BtnSaveVoices_Click(object sender, RoutedEventArgs e)
     {
         if (LstProviders.SelectedItem is ProviderViewModel selectedProvider)

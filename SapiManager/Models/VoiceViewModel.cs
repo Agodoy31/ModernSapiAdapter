@@ -22,6 +22,7 @@ public class VoiceViewModel : INotifyPropertyChanged
             {
                 _name = value;
                 OnPropertyChanged();
+                OnPropertyChanged(nameof(AccessibleDescription));
                 OnPropertyChanged(nameof(FullAccessibilityLabel));
             }
         }
@@ -36,6 +37,7 @@ public class VoiceViewModel : INotifyPropertyChanged
             {
                 _language = value;
                 OnPropertyChanged();
+                OnPropertyChanged(nameof(AccessibleDescription));
                 OnPropertyChanged(nameof(FullAccessibilityLabel));
             }
         }
@@ -50,6 +52,7 @@ public class VoiceViewModel : INotifyPropertyChanged
             {
                 _gender = value;
                 OnPropertyChanged();
+                OnPropertyChanged(nameof(AccessibleDescription));
                 OnPropertyChanged(nameof(FullAccessibilityLabel));
             }
         }
@@ -64,6 +67,7 @@ public class VoiceViewModel : INotifyPropertyChanged
             {
                 _vendor = value;
                 OnPropertyChanged();
+                OnPropertyChanged(nameof(AccessibleDescription));
                 OnPropertyChanged(nameof(FullAccessibilityLabel));
             }
         }
@@ -78,10 +82,13 @@ public class VoiceViewModel : INotifyPropertyChanged
             {
                 _isRegistered = value;
                 OnPropertyChanged();
+                OnPropertyChanged(nameof(AccessibleDescription));
                 OnPropertyChanged(nameof(FullAccessibilityLabel));
             }
         }
     }
+
+    public string AccessibleDescription => $"{Name}, {Language}, {Gender}, {Vendor}";
 
     /// <summary>
     /// Critical JAWS screen reader override property.

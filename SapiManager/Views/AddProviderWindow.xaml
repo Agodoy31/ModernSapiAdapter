@@ -18,7 +18,7 @@
 
         <!-- Header -->
         <StackPanel Grid.Row="0" Margin="0,0,0,16">
-            <TextBlock x:Name="TxtTitle" Text="Add Speech Provider Package" FontSize="20" FontWeight="Bold" Foreground="#0F172A" Focusable="True" KeyboardNavigation.TabIndex="0" AutomationProperties.Name="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+            <TextBlock x:Name="TxtTitle" Text="Add Speech Provider Package" FontSize="20" FontWeight="Bold" Foreground="#0F172A"/>
             <TextBlock Text="Select a ZIP package containing a TTS provider to inspect and install." FontSize="12" Foreground="#64748B" Margin="0,4,0,0"/>
         </StackPanel>
 
@@ -28,7 +28,7 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBox x:Name="TxtZipPath" Grid.Column="0" Height="36" Padding="8,8" VerticalContentAlignment="Center" Background="White" BorderBrush="#CBD5E1" BorderThickness="1" IsReadOnly="True" AutomationProperties.Name="Zip Package Path" Margin="0,0,8,0"/>
+            <TextBox x:Name="TxtZipPath" Grid.Column="0" Height="36" Padding="8,8" VerticalContentAlignment="Center" Background="White" BorderBrush="#CBD5E1" BorderThickness="1" IsReadOnly="True" AutomationProperties.Name="Selected Package" Margin="0,0,8,0"/>
             <Button x:Name="BtnBrowse" Grid.Column="1" Content="Browse..." Height="36" Width="90" Background="#3B82F6" Foreground="White" FontWeight="SemiBold" Click="BtnBrowse_Click" AutomationProperties.Name="Browse"/>
         </Grid>
 
@@ -47,16 +47,16 @@
                 </Grid.ColumnDefinitions>
 
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Name:" FontWeight="SemiBold" Foreground="#475569" Margin="0,4"/>
-                <TextBlock x:Name="TxtPkgName" Grid.Row="0" Grid.Column="1" Text="-" Foreground="#0F172A" Margin="0,4"/>
+                <TextBlock x:Name="TxtPkgName" Grid.Row="0" Grid.Column="1" Text="-" Foreground="#0F172A" Margin="0,4" AutomationProperties.Name="Provider Name"/>
 
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="Version:" FontWeight="SemiBold" Foreground="#475569" Margin="0,4"/>
-                <TextBlock x:Name="TxtPkgVersion" Grid.Row="1" Grid.Column="1" Text="-" Foreground="#0F172A" Margin="0,4"/>
+                <TextBlock x:Name="TxtPkgVersion" Grid.Row="1" Grid.Column="1" Text="-" Foreground="#0F172A" Margin="0,4" AutomationProperties.Name="Version"/>
 
                 <TextBlock Grid.Row="2" Grid.Column="0" Text="Publisher:" FontWeight="SemiBold" Foreground="#475569" Margin="0,4"/>
-                <TextBlock x:Name="TxtPkgPublisher" Grid.Row="2" Grid.Column="1" Text="-" Foreground="#0F172A" Margin="0,4"/>
+                <TextBlock x:Name="TxtPkgPublisher" Grid.Row="2" Grid.Column="1" Text="-" Foreground="#0F172A" Margin="0,4" AutomationProperties.Name="Publisher"/>
 
                 <TextBlock Grid.Row="3" Grid.Column="0" Text="Executable:" FontWeight="SemiBold" Foreground="#475569" Margin="0,4"/>
-                <TextBlock x:Name="TxtPkgExe" Grid.Row="3" Grid.Column="1" Text="-" Foreground="#0F172A" Margin="0,4"/>
+                <TextBlock x:Name="TxtPkgExe" Grid.Row="3" Grid.Column="1" Text="-" Foreground="#0F172A" Margin="0,4" AutomationProperties.Name="Executable"/>
             </Grid>
         </Border>
 
@@ -73,7 +73,7 @@
         </Border>
 
         <!-- Status Text -->
-        <TextBlock x:Name="TxtStatus" Grid.Row="4" Text="" FontSize="12" Foreground="#2563EB" TextWrapping="Wrap" Margin="0,0,0,16" VerticalAlignment="Top" AutomationProperties.Name="Status"/>
+        <TextBlock x:Name="TxtStatus" Grid.Row="4" Text="" FontSize="12" Foreground="#2563EB" TextWrapping="Wrap" Margin="0,0,0,16" VerticalAlignment="Top"/>
 
         <!-- Action Controls -->
         <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right">

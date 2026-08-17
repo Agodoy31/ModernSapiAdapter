@@ -74,27 +74,25 @@
                                         <TextBlock Text="Check voices to register them as SAPI 5 system tokens." FontSize="12" Foreground="#64748B" Margin="0,2,0,0"/>
                                     </StackPanel>
 
-                                    <ListBox x:Name="LstVoices" BorderThickness="0" Background="Transparent" VerticalAlignment="Stretch" HorizontalContentAlignment="Stretch" KeyDown="LstVoices_KeyDown">
+                                    <ListBox x:Name="LstVoices" BorderThickness="0" Background="Transparent" VerticalAlignment="Stretch" HorizontalContentAlignment="Stretch" AutomationProperties.Name="Available Voices">
                                         <ListBox.ItemContainerStyle>
                                             <Style TargetType="ListBoxItem">
-                                                <Setter Property="AutomationProperties.Name" Value="{Binding FullAccessibilityLabel}"/>
                                                 <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                                                <Setter Property="Padding" Value="4"/>
+                                                <Setter Property="Padding" Value="0"/>
                                                 <Setter Property="Margin" Value="0,2"/>
+                                                <Setter Property="Focusable" Value="False"/>
                                             </Style>
                                         </ListBox.ItemContainerStyle>
                                         <ListBox.ItemTemplate>
                                             <DataTemplate>
-                                                <Border Background="#F8FAFC" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="6" Padding="12">
-                                                    <Grid>
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="*"/>
-                                                        </Grid.ColumnDefinitions>
-
-                                                        <CheckBox Grid.Column="0" IsChecked="{Binding IsRegistered, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,12,0" Focusable="False" AutomationProperties.Name="{Binding Name}"/>
-
-                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                <CheckBox IsChecked="{Binding IsRegistered, Mode=TwoWay}"
+                                                          AutomationProperties.Name="{Binding AccessibleDescription}"
+                                                          Margin="2"
+                                                          Padding="8,6"
+                                                          VerticalContentAlignment="Center"
+                                                          HorizontalContentAlignment="Stretch">
+                                                    <Border Background="#F8FAFC" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="6" Padding="10">
+                                                        <StackPanel>
                                                             <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="Bold" Foreground="#1E293B"/>
                                                             <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
                                                                 <TextBlock Text="{Binding Language, StringFormat='Language: {0}'}" FontSize="11" Foreground="#64748B" Margin="0,0,16,0"/>
@@ -102,8 +100,8 @@
                                                                 <TextBlock Text="{Binding Vendor, StringFormat='Vendor: {0}'}" FontSize="11" Foreground="#64748B"/>
                                                             </StackPanel>
                                                         </StackPanel>
-                                                    </Grid>
-                                                </Border>
+                                                    </Border>
+                                                </CheckBox>
                                             </DataTemplate>
                                         </ListBox.ItemTemplate>
                                     </ListBox>

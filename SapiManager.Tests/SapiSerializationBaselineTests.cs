@@ -123,4 +123,30 @@ public class SapiSerializationBaselineTests
         string lcid = SapiManager.Services.RegistryManager.LanguageTagToHexLcid(tag);
         Assert.Equal(expectedHex, lcid, ignoreCase: true);
     }
+
+    [Fact]
+    public void VoiceViewModel_AccessibleDescription_ReturnsExpectedFormat()
+    {
+        var vm = new VoiceViewModel
+        {
+            Name = "Jenny",
+            Language = "en-US",
+            Gender = "Female",
+            Vendor = "Microsoft"
+        };
+
+        Assert.Equal("Jenny, en-US, Female, Microsoft", vm.AccessibleDescription);
+    }
+
+    [Fact]
+    public void VoiceViewModel_PropertyChanged_FiresForAccessibleDescription()
+    {
+        var vm = new VoiceViewModel();
+        var changedProps = new List<string?>();
+        vm.PropertyChanged += (s, e) => changedProps.Add(e.PropertyName);
+
+        vm.Name = "David";
+
+        Assert.Contains(nameof(VoiceViewModel.AccessibleDescription), changedProps);
+    }
 }
