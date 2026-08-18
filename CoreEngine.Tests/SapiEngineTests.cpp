@@ -251,20 +251,25 @@ class ThreadJoinGuard
 public:
     explicit ThreadJoinGuard(std::thread& thread) : m_thread(thread) {}
 
+    bool Join(DWORD timeoutMs = 5000)
+    {
+        if (!m_thread.joinable())
+        {
+            return true;
+        }
+        if (WaitForSingleObject(reinterpret_cast<HANDLE>(m_thread.native_handle()), timeoutMs) != WAIT_OBJECT_0)
+        {
+            ADD_FAILURE() << "Thread failed to terminate within timeout";
+            m_thread.detach();
+            return false;
+        }
+        m_thread.join();
+        return true;
+    }
+
     ~ThreadJoinGuard()
     {
-        if (m_thread.joinable())
-        {
-            if (WaitForSingleObject(reinterpret_cast<HANDLE>(m_thread.native_handle()), 5000) != WAIT_OBJECT_0)
-            {
-                ADD_FAILURE() << "Thread failed to terminate within 5000ms";
-                m_thread.detach();
-            }
-            else
-            {
-                m_thread.join();
-            }
-        }
+        Join(5000);
     }
 
 private:
@@ -429,7 +434,7 @@ TEST_F(SapiEngineTests, ControlRecordTimeoutCoversTheWholeFragmentedMessage) {
     const auto timeoutStart = std::chrono::steady_clock::now();
     const HRESULT result = client.ReadControlMessage(response, 100);
     const auto elapsed = std::chrono::steady_clock::now() - timeoutStart;
-    writer.join();
+    EXPECT_TRUE(writerJoin.Join(1000));
 
     EXPECT_EQ(result, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
     EXPECT_GE(elapsed, std::chrono::milliseconds(80));
@@ -465,7 +470,7 @@ TEST_F(SapiEngineTests, PipeDisconnectFaultsActiveWorkerWithoutRetryingForever) 
     {
         worker.Stop();
     }
-    waitThread.join();
+    EXPECT_TRUE(waitJoin.Join(2000));
 
     EXPECT_TRUE(returnedBeforeCleanup);
     EXPECT_TRUE(FAILED(waitResult));
@@ -503,7 +508,7 @@ TEST_F(SapiEngineTests, SilentActiveRequestTimesOutInsteadOfHoldingSapiForever) 
     {
         worker.Stop();
     }
-    waitThread.join();
+    EXPECT_TRUE(waitJoin.Join(2000));
 
     EXPECT_TRUE(returnedBeforeCleanup);
     EXPECT_EQ(waitResult, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
@@ -662,7 +667,7 @@ TEST_F(SapiEngineTests, IgnoredCancellationTimesOutTheEntireTransaction) {
         ASSERT_TRUE(server.WriteControl(
             "{\"event\":\"synthesis_cancelled\",\"speak_id\":35,\"audio_bytes_written\":0}\n"));
     }
-    cancellationThread.join();
+    EXPECT_TRUE(cancellationJoin.Join(2000));
 
     EXPECT_TRUE(returnedBeforeAcknowledgement);
     EXPECT_EQ(cancellationResult, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
@@ -1410,8 +1415,8 @@ TEST_F(SapiEngineTests, ControlWriteTimeoutIncludesMutexContention) {
 
     const DWORD completionBeforeRelease = WaitForSingleObject(secondWriteFinished.get(), 500);
     client.ReleaseControlWriteForTest();
-    secondWriteThread.join();
-    firstWriteThread.join();
+    EXPECT_TRUE(secondWriteJoin.Join(1000));
+    EXPECT_TRUE(firstWriteJoin.Join(1000));
 
     EXPECT_EQ(completionBeforeRelease, WAIT_OBJECT_0)
         << "The finite control-write timeout did not bound mutex contention.";
@@ -1453,7 +1458,7 @@ TEST_F(SapiEngineTests, AbortObservationRejectsPcmBeforeCancellationTransportSta
     ASSERT_TRUE(server.ReadControl(cancellationRequest));
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_cancelled\",\"speak_id\":44,\"audio_bytes_written\":2}\n"));
-    waitThread.join();
+    EXPECT_TRUE(waitJoin.Join(2000));
 
     EXPECT_EQ(waitResult, S_OK);
     EXPECT_EQ(writesBeforeCancellationTransport, 0u)
@@ -1489,7 +1494,7 @@ TEST_F(SapiEngineTests, CancellationRejectsAnInitiallyApprovedEventAtTheSapiBoun
         "{\"event\":\"synthesis_cancelled\",\"speak_id\":45,\"audio_bytes_written\":0}\n"));
 
     worker.ReleaseEventForwardForTest();
-    cancellationThread.join();
+    EXPECT_TRUE(cancellationJoin.Join(2000));
 
     EXPECT_EQ(cancellationResult, S_OK);
     std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
@@ -1569,7 +1574,7 @@ TEST_F(SapiEngineTests, InvalidCancellationBoundaryFaultsTheWorker) {
     ASSERT_NE(cancellationRequest.find("\"command\":\"cancel\""), std::string::npos);
     ASSERT_TRUE(server.WriteControl("{\"event\":\"synthesis_cancelled\",\"speak_id\":7}\n"));
 
-    cancellationThread.join();
+    EXPECT_TRUE(cancellationJoin.Join(2000));
     EXPECT_EQ(cancellationResult, E_FAIL);
     EXPECT_TRUE(worker.IsFaulted());
 }
@@ -1832,7 +1837,7 @@ TEST_F(SapiEngineTests, AudioAfterCancellationCompletionFaultsIdleWorker) {
     ASSERT_TRUE(server.ReadControl(cancellationRequest));
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_cancelled\",\"speak_id\":25,\"audio_bytes_written\":0}\n"));
-    cancellationThread.join();
+    EXPECT_TRUE(cancellationJoin.Join(2000));
     ASSERT_EQ(cancellationResult, S_OK);
 
     ASSERT_TRUE(server.WriteAudio({ 0xB1, 0xB2 }));
@@ -1859,7 +1864,7 @@ TEST_F(SapiEngineTests, MisalignedCancellationTotalFaultsTheWorker) {
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_cancelled\",\"speak_id\":12,\"audio_bytes_written\":1}\n"));
 
-    cancellationThread.join();
+    EXPECT_TRUE(cancellationJoin.Join(2000));
     EXPECT_EQ(cancellationResult, E_FAIL);
     EXPECT_TRUE(worker.IsFaulted());
 }
@@ -1889,7 +1894,7 @@ TEST_F(SapiEngineTests, CancellationDiscardsCarriedPcmBeforeTheNextRequest) {
     ASSERT_EQ(worker.RawAudioBytesForTest(), 2u);
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_cancelled\",\"speak_id\":13,\"audio_bytes_written\":2}\n"));
-    cancellationThread.join();
+    EXPECT_TRUE(cancellationJoin.Join(2000));
     ASSERT_EQ(cancellationResult, S_OK);
 
     ASSERT_TRUE(worker.Start(nullptr, 14));
@@ -1938,7 +1943,7 @@ TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak) {
     Sleep(10);
     EXPECT_FALSE(firstSpeakReturned.load());
 
-    firstSpeakThread.join();
+    EXPECT_TRUE(firstSpeakJoin.Join(2000));
     EXPECT_EQ(firstSpeakResult, S_OK);
     EXPECT_EQ(mockSite->totalBytesWritten.load(), 0u);
 
@@ -1993,7 +1998,7 @@ TEST_F(SapiEngineTests, FaultedSessionDoesNotForwardAnEventPausedBeforeItsSapiCa
 
     worker->ReleaseEventForwardForTest();
     sessionLock.unlock();
-    speakThread.join();
+    EXPECT_TRUE(speakJoin.Join(2000));
     CoTaskMemFree(pWaveFormat);
 
     ASSERT_TRUE(pausedBeforeSapiCallback);
@@ -2057,7 +2062,7 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
     }
     ASSERT_TRUE(firstSpeakReturned.load());
 
-    firstSpeakThread.join();
+    EXPECT_TRUE(firstSpeakJoin.Join(2000));
     EXPECT_EQ(firstSpeakResult, E_FAIL);
     EXPECT_LT(std::chrono::steady_clock::now() - firstSpeakStart, std::chrono::seconds(1));
 

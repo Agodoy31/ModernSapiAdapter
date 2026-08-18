@@ -6,9 +6,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
-    <Version>2.0.13</Version>
-    <AssemblyVersion>2.0.13.0</AssemblyVersion>
-    <FileVersion>2.0.13.0</FileVersion>
+    <Version>2.0.14</Version>
+    <AssemblyVersion>2.0.14.0</AssemblyVersion>
+    <FileVersion>2.0.14.0</FileVersion>
 
     <!-- Performance & JIT Tuning -->
     <TieredPGO>true</TieredPGO>
@@ -18,10 +18,10 @@
     <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
     <EnableUnsafeBinaryFormatterSerialization>false</EnableUnsafeBinaryFormatterSerialization>
 
-    <!-- Single File & Composite R2R Settings -->
+    <!-- Single File & ReadyToRun Settings (x86-64-v3 Baseline for Windows 11) -->
     <PublishSingleFile>true</PublishSingleFile>
     <PublishReadyToRun>true</PublishReadyToRun>
-    <PublishReadyToRunComposite>true</PublishReadyToRunComposite>
+    <PublishReadyToRunCrossgen2ExtraArgs>--instruction-set:x86-64-v3</PublishReadyToRunCrossgen2ExtraArgs>
     <SelfContained>false</SelfContained>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     
