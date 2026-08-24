@@ -29,7 +29,7 @@ Detaching the worker is not safe: it could continue executing CoreEngine code af
 
 ### Lifetime
 
-`AsyncLogger::GetInstance()` will return a process-allocated singleton whose C++ destructor is never registered for static teardown. This intentionally retains only the small logger control object. Normal logger resources remain explicitly managed: the worker is stopped, the queue is drained, and the file is flushed and closed before unload.
+`AsyncLogger::GetInstance()` will return a nullable pointer to a non-throwing, process-allocated singleton whose C++ destructor is never registered for static teardown. This intentionally retains only the small logger control object. Normal logger resources remain explicitly managed: the worker is stopped, the queue is drained, and the file is flushed and closed before unload. Allocation failure disables Debug logging rather than crossing a COM boundary.
 
 Avoiding the static destructor is necessary even after adding explicit shutdown because process termination does not necessarily call `DllCanUnloadNow` first. The operating system reclaims the small control allocation during process exit.
 
