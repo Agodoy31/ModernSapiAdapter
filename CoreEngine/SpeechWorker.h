@@ -84,6 +84,8 @@ public:
     void ReleaseFaultPublicationForTest();
     void FailNextFrameAssemblyForTest();
     bool IsAudioApartmentActiveForTest() const noexcept;
+    static void FailNextControlThreadCreationForTest();
+    static void FailNextControlThreadEntryForTest();
 #endif
 
 private:

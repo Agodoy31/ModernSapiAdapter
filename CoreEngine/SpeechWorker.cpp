@@ -3,6 +3,14 @@
 #include "SapiEngine.h"
 #include "JsonValue.h"
 
+namespace
+{
+#if defined(_DEBUG)
+std::atomic_bool g_failNextControlThreadCreationForTest{false};
+std::atomic_bool g_failNextControlThreadEntryForTest{false};
+#endif
+}
+
 SpeechWorker::SpeechWorker(CSapiEngine* pEngine, PipeClient* pClient, WORD blockAlign)
     : m_pEngine(pEngine), m_pClient(pClient), m_exit(false), m_frameAssembler(blockAlign)
 {
@@ -22,7 +30,50 @@ SpeechWorker::SpeechWorker(CSapiEngine* pEngine, PipeClient* pClient, WORD block
             EnterFaultedState();
         }
     });
-    m_controlThread = std::thread(&SpeechWorker::ControlThreadProc, this);
+    try
+    {
+#if defined(_DEBUG)
+        if (g_failNextControlThreadCreationForTest.exchange(false))
+        {
+            throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again));
+        }
+#endif
+        m_controlThread = std::thread([this] {
+            try
+            {
+#if defined(_DEBUG)
+                if (g_failNextControlThreadEntryForTest.exchange(false))
+                {
+                    throw std::runtime_error("Injected control worker entry failure");
+                }
+#endif
+                ControlThreadProc();
+            }
+            catch (const std::exception& error)
+            {
+                CoreLog(L"[SpeechWorker] Unhandled control worker exception: %hs", error.what());
+                EnterFaultedState();
+            }
+            catch (...)
+            {
+                CoreLog(L"[SpeechWorker] Unhandled unknown control worker exception.");
+                EnterFaultedState();
+            }
+        });
+    }
+    catch (...)
+    {
+        m_exit.store(true);
+        if (m_pClient)
+        {
+            m_pClient->Cancel();
+        }
+        if (m_audioThread.joinable())
+        {
+            m_audioThread.join();
+        }
+        throw;
+    }
 }
 
 SpeechWorker::~SpeechWorker()
@@ -73,6 +124,16 @@ bool SpeechWorker::IsFaulted() const
 }
 
 #if defined(_DEBUG)
+void SpeechWorker::FailNextControlThreadCreationForTest()
+{
+    g_failNextControlThreadCreationForTest.store(true);
+}
+
+void SpeechWorker::FailNextControlThreadEntryForTest()
+{
+    g_failNextControlThreadEntryForTest.store(true);
+}
+
 void SpeechWorker::PauseNextEventForwardForTest()
 {
     std::lock_guard<std::mutex> lock(m_eventForwardTestMutex);
@@ -450,6 +511,9 @@ HRESULT SpeechWorker::SendCancellation(uint64_t speakId, DWORD timeoutMs)
 HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
 {
     std::unique_lock<std::mutex> lock(m_requestMutex);
+#if defined(_DEBUG)
+    ULONGLONG lastTerminalWaitLogTick = 0;
+#endif
     while (m_downstreamState != DownstreamState::Idle && m_downstreamState != DownstreamState::Faulted && !m_exit.load())
     {
         if (m_requestChanged.wait_for(lock, std::chrono::milliseconds(10), [this] {
@@ -460,6 +524,16 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
         }
 
         const ULONGLONG now = GetTickCount64();
+#if defined(_DEBUG)
+        if (m_upstreamFinished && m_downstreamState == DownstreamState::Speaking &&
+            (lastTerminalWaitLogTick == 0 || now - lastTerminalWaitLogTick >= 250))
+        {
+            CoreLog(L"[ThreadTrace] speak_id=%llu terminal_pending tick=%llu declared=%llu raw=%llu delivered=%llu carry=%u.",
+                m_activeSpeakId, now, m_upstreamTerminalBytes, m_rawAudioBytesRead,
+                m_deliveredAudioBytes, m_frameAssembler.HasCarry() ? 1u : 0u);
+            lastTerminalWaitLogTick = now;
+        }
+#endif
         if (m_downstreamState == DownstreamState::Cancelling &&
             m_cancellationDeadlineTick != 0 &&
             now >= m_cancellationDeadlineTick)
@@ -565,6 +639,11 @@ bool SpeechWorker::CheckTerminalBoundaryLocked()
             m_deliveredAudioBytes == m_upstreamTerminalBytes &&
             !m_frameAssembler.HasCarry())
         {
+#if defined(_DEBUG)
+            CoreLog(L"[ThreadTrace] speak_id=%llu terminal_boundary_reached tick=%llu declared=%llu raw=%llu delivered=%llu.",
+                m_activeSpeakId, GetTickCount64(), m_upstreamTerminalBytes,
+                m_rawAudioBytesRead, m_deliveredAudioBytes);
+#endif
             m_frameAssembler.Reset();
             m_upstreamState = UpstreamState::Idle;
             m_downstreamState = DownstreamState::Idle;
@@ -896,6 +975,13 @@ void SpeechWorker::ControlThreadProc()
                                     {
                                         m_upstreamFinished = true;
                                         m_upstreamState = isSynthesisComplete ? UpstreamState::Completed : UpstreamState::Cancelled;
+#if defined(_DEBUG)
+                                        CoreLog(L"[ThreadTrace] speak_id=%llu terminal_received tick=%llu event=%hs declared=%llu raw=%llu delivered=%llu carry=%u downstream=%u.",
+                                            eventSpeakId, GetTickCount64(), eventStr.data(), m_upstreamTerminalBytes,
+                                            m_rawAudioBytesRead, m_deliveredAudioBytes,
+                                            m_frameAssembler.HasCarry() ? 1u : 0u,
+                                            static_cast<unsigned>(m_downstreamState));
+#endif
                                         faultAfterStateUpdate = CheckTerminalBoundaryLocked();
                                     }
                                 }

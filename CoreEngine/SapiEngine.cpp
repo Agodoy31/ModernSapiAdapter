@@ -33,7 +33,16 @@ CSapiEngine::CSapiEngine()
 
 CSapiEngine::~CSapiEngine()
 {
+#if defined(_DEBUG)
+    const ULONGLONG destructionStart = GetTickCount64();
+    CoreLog(L"[ThreadTrace] engine_destructor_begin tick=%llu.", destructionStart);
+    CoreLog(L"[ThreadTrace] engine_destructor_speak_mutex_wait_begin tick=%llu.", GetTickCount64());
+#endif
     std::lock_guard<std::mutex> speakLock(m_speakMutex);
+#if defined(_DEBUG)
+    CoreLog(L"[ThreadTrace] engine_destructor_speak_mutex_acquired tick=%llu wait_ms=%llu.",
+        GetTickCount64(), GetTickCount64() - destructionStart);
+#endif
     {
         std::lock_guard<std::mutex> lock(m_siteMutex);
         m_cpSite = nullptr;
@@ -43,25 +52,52 @@ CSapiEngine::~CSapiEngine()
     m_pWorker.reset();
 
     m_pClient.reset();
+#if defined(_DEBUG)
+    CoreLog(L"[ThreadTrace] engine_destructor_end tick=%llu duration_ms=%llu.",
+        GetTickCount64(), GetTickCount64() - destructionStart);
+#endif
 }
 
 IFACEMETHODIMP CSapiEngine::SetObjectToken(ISpObjectToken* pToken) noexcept try
 {
     CoreLog(L"[CoreEngine] SetObjectToken called.");
     if (!pToken) return E_POINTER;
+#if defined(_DEBUG)
+    const ULONGLONG tokenMutexWaitStart = GetTickCount64();
+    CoreLog(L"[ThreadTrace] set_object_token_speak_mutex_wait_begin tick=%llu.", tokenMutexWaitStart);
+#endif
     std::lock_guard<std::mutex> speakLock(m_speakMutex);
-    m_cpToken.copy_from(pToken);
+#if defined(_DEBUG)
+    CoreLog(L"[ThreadTrace] set_object_token_speak_mutex_acquired tick=%llu wait_ms=%llu.",
+        GetTickCount64(), GetTickCount64() - tokenMutexWaitStart);
+#endif
+    {
+        std::lock_guard<std::mutex> tokenLock(m_tokenMutex);
+        m_cpToken.copy_from(pToken);
+    }
     return LoadProviderFromToken(pToken);
 }
 catch (const std::exception& e) { CoreLog(L"[CoreEngine] SetObjectToken exception: %hs", e.what()); return winrt::to_hresult(); }
 catch (...) { CoreLog(L"[CoreEngine] SetObjectToken unknown exception."); return winrt::to_hresult(); }
 
-IFACEMETHODIMP CSapiEngine::GetObjectToken(ISpObjectToken** ppToken) noexcept
+IFACEMETHODIMP CSapiEngine::GetObjectToken(ISpObjectToken** ppToken) noexcept try
 {
+    CoreLog(L"[CoreEngine] GetObjectToken called.");
     if (!ppToken) return E_POINTER;
+#if defined(_DEBUG)
+    const ULONGLONG tokenMutexWaitStart = GetTickCount64();
+    CoreLog(L"[ThreadTrace] get_object_token_token_mutex_wait_begin tick=%llu.", tokenMutexWaitStart);
+#endif
+    std::lock_guard<std::mutex> tokenLock(m_tokenMutex);
+#if defined(_DEBUG)
+    CoreLog(L"[ThreadTrace] get_object_token_token_mutex_acquired tick=%llu wait_ms=%llu.",
+        GetTickCount64(), GetTickCount64() - tokenMutexWaitStart);
+#endif
     m_cpToken.copy_to(ppToken);
     return S_OK;
 }
+catch (const std::exception& e) { CoreLog(L"[CoreEngine] GetObjectToken exception: %hs", e.what()); return winrt::to_hresult(); }
+catch (...) { CoreLog(L"[CoreEngine] GetObjectToken unknown exception."); return winrt::to_hresult(); }
 
 IFACEMETHODIMP CSapiEngine::GetOutputFormat(const GUID* pTargetFmtId,
                                             const WAVEFORMATEX* pTargetWaveFormatEx,
@@ -72,7 +108,15 @@ IFACEMETHODIMP CSapiEngine::GetOutputFormat(const GUID* pTargetFmtId,
     if (pOutputFormatId) *pOutputFormatId = GUID_NULL;
     if (ppCoMemOutputWaveFormatEx) *ppCoMemOutputWaveFormatEx = nullptr;
 
+#if defined(_DEBUG)
+    const ULONGLONG sessionMutexWaitStart = GetTickCount64();
+    CoreLog(L"[ThreadTrace] get_output_format_session_mutex_wait_begin tick=%llu.", sessionMutexWaitStart);
+#endif
     std::lock_guard<std::mutex> sessionLock(m_sessionMutex);
+#if defined(_DEBUG)
+    CoreLog(L"[ThreadTrace] get_output_format_session_mutex_acquired tick=%llu wait_ms=%llu.",
+        GetTickCount64(), GetTickCount64() - sessionMutexWaitStart);
+#endif
     if (!m_hasOutputFormat)
     {
         CoreLog(L"[CoreEngine] GetOutputFormat failed: Client not initialized.");
@@ -239,7 +283,17 @@ bool CSapiEngine::OnAudioData(const uint8_t* pAudioBytes, uint32_t byteCount)
     }
 
     ULONG bytesWritten = 0;
+#if defined(_DEBUG)
+    const uint64_t speakId = m_speakIdCounter.load(std::memory_order_acquire);
+    const ULONGLONG writeStartTick = GetTickCount64();
+    CoreLog(L"[ThreadTrace] speak_id=%llu sapi_write_begin tick=%llu requested=%lu.",
+        speakId, writeStartTick, byteCount);
+#endif
     HRESULT hr = site->Write(pAudioBytes, byteCount, &bytesWritten);
+#if defined(_DEBUG)
+    CoreLog(L"[ThreadTrace] speak_id=%llu sapi_write_end tick=%llu duration_ms=%llu hr=0x%08x requested=%lu written=%lu.",
+        speakId, GetTickCount64(), GetTickCount64() - writeStartTick, hr, byteCount, bytesWritten);
+#endif
     return SUCCEEDED(hr) && (bytesWritten == byteCount);
 }
 

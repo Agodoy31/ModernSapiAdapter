@@ -33,6 +33,7 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_WarningLogDoesNotFaultSession_Test;
     friend class SapiEngineTests_RequestErrorFailsUtteranceWithoutKillingProvider_Test;
     friend class SapiEngineTests_FatalErrorFaultsSessionAndTriggersRestart_Test;
+    friend class SapiEngineTests_GetObjectTokenDoesNotWaitForActiveSpeakSerialization_Test;
 public:
     /**
      * @brief Constructs a new CSapiEngine instance.
@@ -109,6 +110,7 @@ public:
 #endif
 
 private:
+    mutable std::mutex m_tokenMutex;
     winrt::com_ptr<ISpObjectToken> m_cpToken;
     winrt::com_ptr<ISpTTSEngineSite> m_cpSite;
     std::mutex m_siteMutex;

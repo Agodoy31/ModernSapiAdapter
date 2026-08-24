@@ -1227,6 +1227,35 @@ TEST_F(SapiEngineTests, SetObjectTokenConnectsToPipeAndQueriesInfo) {
     CoTaskMemFree(pWaveFormat);
 }
 
+TEST_F(SapiEngineTests, GetObjectTokenDoesNotWaitForActiveSpeakSerialization) {
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockToken = winrt::make_self<MockSpObjectToken>();
+    engine->m_cpToken.copy_from(mockToken.get());
+
+    std::unique_lock<std::mutex> tokenLock(engine->m_speakMutex);
+    std::atomic_bool getterStarted{false};
+    std::atomic_bool getterCompleted{false};
+    HRESULT getResult = E_FAIL;
+    ISpObjectToken* returnedToken = nullptr;
+    std::thread getter([&] {
+        getterStarted.store(true, std::memory_order_release);
+        getResult = engine->GetObjectToken(&returnedToken);
+        getterCompleted.store(true, std::memory_order_release);
+    });
+    ThreadJoinGuard getterJoin(getter);
+
+    for (int attempt = 0; attempt < 100 && !getterStarted.load(std::memory_order_acquire); ++attempt) Sleep(1);
+    ASSERT_TRUE(getterStarted.load(std::memory_order_acquire));
+    for (int attempt = 0; attempt < 1000 && !getterCompleted.load(std::memory_order_acquire); ++attempt) Sleep(1);
+    EXPECT_TRUE(getterCompleted.load(std::memory_order_acquire));
+
+    tokenLock.unlock();
+    ASSERT_TRUE(getterJoin.Join());
+    EXPECT_EQ(getResult, S_OK);
+    EXPECT_EQ(returnedToken, mockToken.get());
+    if (returnedToken) returnedToken->Release();
+}
+
 TEST_F(SapiEngineTests, PipeClientFailsImmediatelyWhenControlPipeAccessIsDenied) {
     static std::atomic_uint64_t nextPipeId{0};
     const std::wstring pipeName = L"CoreEngineDenied_" + std::to_wstring(GetCurrentProcessId()) + L"_" +
@@ -1818,6 +1847,32 @@ TEST_F(SapiEngineTests, FrameAssemblyFailureFaultsWorkerWithoutEscapingThread) {
     EXPECT_TRUE(worker.IsFaulted());
     EXPECT_FALSE(worker.IsAudioApartmentActiveForTest());
     EXPECT_EQ(mockSite->writeCallCount.load(), 0u);
+}
+
+TEST_F(SapiEngineTests, ControlThreadCreationFailureRollsBackAudioThread) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    SpeechWorker::FailNextControlThreadCreationForTest();
+
+    EXPECT_THROW(SpeechWorker worker(engine.get(), &client, 2), std::system_error);
+}
+
+TEST_F(SapiEngineTests, ControlThreadEntryExceptionFaultsWorkerWithoutEscapingThread) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    SpeechWorker::FailNextControlThreadEntryForTest();
+    SpeechWorker worker(engine.get(), &client, 2);
+
+    EXPECT_TRUE(worker.WaitForFaultForTest(1000));
+    EXPECT_TRUE(worker.IsFaulted());
 }
 
 TEST_F(SapiEngineTests, AudioAfterCancellationCompletionFaultsIdleWorker) {
