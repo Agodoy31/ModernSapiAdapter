@@ -30,6 +30,16 @@ namespace {
         }
         return TryGetJsonUnsignedInteger(json["speak_id"], outSpeakId);
     }
+
+    [[nodiscard]] bool IsPipeBusy(DWORD error) noexcept
+    {
+        return error == ERROR_PIPE_BUSY;
+    }
+
+    [[nodiscard]] bool ShouldSpawnProvider(DWORD connectError, bool controlPipeOpened, const std::wstring& exePath) noexcept
+    {
+        return !exePath.empty() && !controlPipeOpened && connectError == ERROR_FILE_NOT_FOUND;
+    }
 }
 
 PipeClient::PipeClient() = default;
@@ -42,6 +52,38 @@ PipeClient::~PipeClient()
     Cancel();
     m_controlPipe.reset();
     m_audioPipe.reset();
+}
+
+HRESULT PipeClient::LaunchProviderProcess(const std::wstring& exePath)
+{
+    wil::unique_process_information processInfo;
+    STARTUPINFOW si = { sizeof(si) };
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+
+    std::wstring fullCmdLine = L"\"" + exePath + L"\"";
+    std::vector<wchar_t> cmdLine(fullCmdLine.begin(), fullCmdLine.end());
+    cmdLine.push_back(L'\0');
+
+    std::wstring exeDir = exePath.substr(0, exePath.find_last_of(L"\\/"));
+
+    if (!CreateProcessW(
+        nullptr,
+        cmdLine.data(),
+        nullptr,
+        nullptr,
+        FALSE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        exeDir.c_str(),
+        &si,
+        &processInfo))
+    {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    m_providerProcess = std::move(processInfo);
+    return S_OK;
 }
 
 HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& exePath)
@@ -73,35 +115,13 @@ HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& ex
     // A missing control pipe cannot become available without its provider. In contrast,
     // a control pipe that is already open means the provider is starting and its audio
     // pipe must be given the bounded readiness window rather than launching a duplicate.
-    if (!controlPipeOpened && HRESULT_CODE(hr) == ERROR_FILE_NOT_FOUND)
+    if (ShouldSpawnProvider(HRESULT_CODE(hr), controlPipeOpened, exePath))
     {
-        wil::unique_process_information processInfo;
-        STARTUPINFOW si = { sizeof(si) };
-        si.dwFlags = STARTF_USESHOWWINDOW;
-        si.wShowWindow = SW_HIDE;
-
-        std::wstring fullCmdLine = L"\"" + exePath + L"\"";
-        std::vector<wchar_t> cmdLine(fullCmdLine.begin(), fullCmdLine.end());
-        cmdLine.push_back(L'\0');
-
-        std::wstring exeDir = exePath.substr(0, exePath.find_last_of(L"\\/"));
-
-        if (!CreateProcessW(
-            nullptr,
-            cmdLine.data(),
-            nullptr,
-            nullptr,
-            FALSE,
-            CREATE_NO_WINDOW,
-            nullptr,
-            exeDir.c_str(),
-            &si,
-            &processInfo))
+        HRESULT launchHr = LaunchProviderProcess(exePath);
+        if (FAILED(launchHr))
         {
-            return HRESULT_FROM_WIN32(GetLastError());
+            return launchHr;
         }
-
-        m_providerProcess = std::move(processInfo);
     }
 
     const ULONGLONG deadline = GetTickCount64() + pipeReadyTimeoutMs;
@@ -114,7 +134,7 @@ HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& ex
 
         const ULONGLONG remaining = deadline - GetTickCount64();
         const DWORD waitMs = static_cast<DWORD>(remaining < pipeProbeIntervalMs ? remaining : pipeProbeIntervalMs);
-        if (HRESULT_CODE(hr) == ERROR_PIPE_BUSY)
+        if (IsPipeBusy(HRESULT_CODE(hr)))
         {
             const std::wstring& busyPipePath = controlPipeOpened ? audioPipePath : controlPipePath;
             WaitNamedPipeW(busyPipePath.c_str(), waitMs);

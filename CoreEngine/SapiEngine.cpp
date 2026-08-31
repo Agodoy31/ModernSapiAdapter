@@ -163,7 +163,7 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
     std::wstring voiceId;
     {
         std::lock_guard<std::mutex> sessionLock(m_sessionMutex);
-        if (!m_pClient || !m_pWorker || m_pWorker->IsFaulted())
+        if (!IsSessionActiveLocked())
         {
 #if defined(_DEBUG)
             const ULONGLONG sessionRecoveryStart = GetTickCount64();
@@ -204,8 +204,10 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
     while (pFrag)
     {
         nlohmann::json fragJson;
-        
-        if (pFrag->State.eAction == SPVA_Bookmark)
+
+        switch (pFrag->State.eAction)
+        {
+        case SPVA_Bookmark:
         {
             if (pFrag->pTextStart && pFrag->ulTextLen > 0)
             {
@@ -215,12 +217,20 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
                     fragJson["bookmark"] = textStr;
                 }
             }
+            break;
         }
-        else if (pFrag->State.eAction == SPVA_Silence)
+
+        case SPVA_Silence:
         {
             fragJson["silence_ms"] = pFrag->State.SilenceMSecs;
+            break;
         }
-        else // SPVA_Speak, SPVA_Pronounce, etc.
+
+        case SPVA_Speak:
+        case SPVA_Pronounce:
+        case SPVA_SpellOut:
+        case SPVA_Section:
+        case SPVA_ParseUnknownTag:
         {
             if (pFrag->pTextStart && pFrag->ulTextLen > 0)
             {
@@ -234,8 +244,10 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
             fragJson["volume"] = pFrag->State.Volume;
             fragJson["pitch"] = pFrag->State.PitchAdj.MiddleAdj;
             fragJson["rate"] = pFrag->State.RateAdj;
+            break;
         }
-        
+        }
+
         fragments.push_back(fragJson);
         pFrag = pFrag->pNext;
     }
@@ -559,6 +571,11 @@ bool CSapiEngine::IsFormatCompatible(const WAVEFORMATEX& candidate) const noexce
            candidate.wBitsPerSample == m_audioFormat.wBitsPerSample &&
            candidate.nChannels == m_audioFormat.nChannels &&
            candidate.nBlockAlign == m_audioFormat.nBlockAlign;
+}
+
+bool CSapiEngine::IsSessionActiveLocked() const noexcept
+{
+    return m_pClient && m_pWorker && !m_pWorker->IsFaulted();
 }
 
 HRESULT CSapiEngine::CreateProviderSessionLocked()

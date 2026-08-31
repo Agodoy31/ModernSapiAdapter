@@ -31,8 +31,11 @@ enum class ProviderEventType : uint8_t
     WordBoundary = 0,
     SentenceBoundary = 1,
     Bookmark = 2,
-    Log = 3,
-    Unknown = 4
+    SynthesisComplete = 3,
+    SynthesisCancelled = 4,
+    Log = 5,
+    LegacyCompleted = 6,
+    Unknown = 7
 };
 
 enum class SapiSpeechEventType : uint8_t

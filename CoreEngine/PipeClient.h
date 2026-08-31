@@ -95,6 +95,8 @@ private:
      * @param[out] controlPipeOpened True when the control pipe opened before a later failure.
      * @return S_OK on success, or HRESULT error code on failure.
      */
+    HRESULT LaunchProviderProcess(const std::wstring& exePath);
+
     HRESULT TryConnectPipes(
         const std::wstring& controlPipePath,
         const std::wstring& audioPipePath,

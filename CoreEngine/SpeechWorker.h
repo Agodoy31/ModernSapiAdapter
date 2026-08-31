@@ -105,6 +105,28 @@ private:
      */
     void ControlThreadProc();
 
+    struct AudioIngestResult
+    {
+        bool protocolBoundaryFailed = false;
+        bool shouldDeliverAudio = false;
+        PcmFrameBatch spansToWrite{};
+    };
+
+    [[nodiscard]] AudioIngestResult IngestAudioChunkLocked(const uint8_t* pChunkData, DWORD bytesRead);
+    [[nodiscard]] bool UpdateAfterAudioDeliveryLocked(
+        size_t deliveredBytes,
+        bool writeAccepted,
+        uint64_t& outCancellationToSend);
+
+    [[nodiscard]] bool HandleTerminalEventLocked(
+        ProviderEventType eventType,
+        uint64_t eventSpeakId,
+        uint64_t terminalAudioBytes,
+        bool hasValidTerminalBytes,
+        std::string_view eventStr);
+
+    [[nodiscard]] bool HandleLogEventLocked(uint64_t eventSpeakId, const nlohmann::json& json);
+
     /**
      * @brief Checks if the terminal boundary has been reached for the upstream and downstream states.
      */

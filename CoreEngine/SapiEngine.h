@@ -131,6 +131,7 @@ private:
     HRESULT LoadProviderFromToken(ISpObjectToken* pToken);
     HRESULT CreateProviderSessionLocked();
     void RetireFaultedSessionLocked();
+    [[nodiscard]] bool IsSessionActiveLocked() const noexcept;
 
     [[nodiscard]] static SapiSpeechEventType ParseSpeechEventType(std::string_view name) noexcept;
     void DispatchBoundaryEvent(const nlohmann::json& json, SPEVENTENUM eventId);

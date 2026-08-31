@@ -10,6 +10,144 @@ namespace
 std::atomic_bool g_failNextControlThreadCreationForTest{false};
 std::atomic_bool g_failNextControlThreadEntryForTest{false};
 #endif
+
+[[nodiscard]] ProviderEventType ParseProviderEventType(std::string_view name) noexcept
+{
+    if (name == "word_boundary")
+    {
+        return ProviderEventType::WordBoundary;
+    }
+    if (name == "sentence_boundary")
+    {
+        return ProviderEventType::SentenceBoundary;
+    }
+    if (name == "bookmark_reached")
+    {
+        return ProviderEventType::Bookmark;
+    }
+    if (name == "synthesis_complete")
+    {
+        return ProviderEventType::SynthesisComplete;
+    }
+    if (name == "synthesis_cancelled")
+    {
+        return ProviderEventType::SynthesisCancelled;
+    }
+    if (name == "log")
+    {
+        return ProviderEventType::Log;
+    }
+    if (name == "completed")
+    {
+        return ProviderEventType::LegacyCompleted;
+    }
+    return ProviderEventType::Unknown;
+}
+
+[[nodiscard]] bool IsSpeechBoundaryEvent(ProviderEventType type) noexcept
+{
+    return type == ProviderEventType::WordBoundary ||
+           type == ProviderEventType::SentenceBoundary ||
+           type == ProviderEventType::Bookmark;
+}
+
+[[nodiscard]] bool IsTerminalEvent(ProviderEventType type) noexcept
+{
+    return type == ProviderEventType::SynthesisComplete ||
+           type == ProviderEventType::SynthesisCancelled;
+}
+
+[[nodiscard]] bool IsProgressEvent(ProviderEventType type) noexcept
+{
+    return IsSpeechBoundaryEvent(type) ||
+           IsTerminalEvent(type) ||
+           type == ProviderEventType::Log;
+}
+
+[[nodiscard]] bool TryParseSpeechOffsets(
+    const nlohmann::json& json,
+    ProviderEventType type,
+    SpeechEventOffsets& outOffsets) noexcept
+{
+    if (!json.is_object())
+    {
+        return false;
+    }
+
+    if (!json.contains("audio_offset_ms") || !TryGetJsonUnsignedInteger(json["audio_offset_ms"], outOffsets.audioOffsetMs))
+    {
+        return false;
+    }
+
+    if (type == ProviderEventType::Bookmark)
+    {
+        return true;
+    }
+
+    if (!json.contains("text_offset") || !TryGetJsonUnsignedInteger(json["text_offset"], outOffsets.textOffset))
+    {
+        return false;
+    }
+
+    if (!json.contains("text_length") || !TryGetJsonUnsignedInteger(json["text_length"], outOffsets.textLength))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+[[nodiscard]] bool TryParseTerminalBytes(
+    const nlohmann::json& json,
+    ProviderEventType type,
+    uint64_t& outBytes) noexcept
+{
+    outBytes = 0;
+    if (!json.is_object())
+    {
+        return false;
+    }
+
+    if (type == ProviderEventType::SynthesisComplete)
+    {
+        if (json.contains("total_audio_bytes"))
+        {
+            return TryGetJsonUnsignedInteger(json["total_audio_bytes"], outBytes);
+        }
+        return false;
+    }
+
+    if (type == ProviderEventType::SynthesisCancelled)
+    {
+        if (json.contains("audio_bytes_written"))
+        {
+            return TryGetJsonUnsignedInteger(json["audio_bytes_written"], outBytes);
+        }
+        return false;
+    }
+
+    return false;
+}
+
+[[nodiscard]] bool HasSynthesisInactivityTimedOut(
+    ULONGLONG now,
+    ULONGLONG lastProgressTick,
+    ULONGLONG timeoutMs) noexcept
+{
+    return now >= lastProgressTick && (now - lastProgressTick) >= timeoutMs;
+}
+
+[[nodiscard]] bool HasCancellationTimedOut(
+    ULONGLONG now,
+    ULONGLONG deadlineTick) noexcept
+{
+    return deadlineTick != 0 && now >= deadlineTick;
+}
+
+[[nodiscard]] bool IsAbortRequested(DWORD actionFlags) noexcept
+{
+    return (actionFlags & SPVES_ABORT) != 0;
+}
 }
 
 SpeechWorker::SpeechWorker(CSapiEngine* pEngine, PipeClient* pClient, WORD blockAlign)
@@ -513,10 +651,14 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
 #if defined(_DEBUG)
     ULONGLONG lastTerminalWaitLogTick = 0;
 #endif
-    while (m_downstreamState != DownstreamState::Idle && m_downstreamState != DownstreamState::Faulted && !m_exit.load())
+    while (m_downstreamState != DownstreamState::Idle &&
+           m_downstreamState != DownstreamState::Faulted &&
+           !m_exit.load())
     {
         if (m_requestChanged.wait_for(lock, std::chrono::milliseconds(10), [this] {
-            return m_downstreamState == DownstreamState::Idle || m_downstreamState == DownstreamState::Faulted || m_exit.load();
+            return m_downstreamState == DownstreamState::Idle ||
+                   m_downstreamState == DownstreamState::Faulted ||
+                   m_exit.load();
         }))
         {
             break;
@@ -534,8 +676,7 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
         }
 #endif
         if (m_downstreamState == DownstreamState::Cancelling &&
-            m_cancellationDeadlineTick != 0 &&
-            now >= m_cancellationDeadlineTick)
+            HasCancellationTimedOut(now, m_cancellationDeadlineTick))
         {
             const uint64_t speakId = m_activeSpeakId;
             lock.unlock();
@@ -547,7 +688,7 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
 
         const ULONGLONG lastProgress = m_lastProviderProgressTick.load(std::memory_order_acquire);
         if (m_upstreamState == UpstreamState::Active &&
-            now - lastProgress >= SynthesisInactivityTimeoutMs)
+            HasSynthesisInactivityTimedOut(now, lastProgress, SynthesisInactivityTimeoutMs))
         {
             const uint64_t speakId = m_activeSpeakId;
             lock.unlock();
@@ -566,7 +707,7 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
         const DWORD actions = pOutputSite->GetActions();
         lock.lock();
 
-        if ((actions & SPVES_ABORT) != 0 && m_downstreamState == DownstreamState::Speaking)
+        if (IsAbortRequested(actions) && m_downstreamState == DownstreamState::Speaking)
         {
             const ULONGLONG cancellationEntryTick = GetTickCount64();
             const ULONGLONG cancellationDeadline = cancellationEntryTick + CancellationTimeoutMs;
@@ -585,7 +726,7 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
 #if defined(_DEBUG)
             {
                 std::lock_guard<std::mutex> testLock(m_abortTransitionTestMutex);
-                m_wasCancellingAtAbortUnlockForTest = m_downstreamState == DownstreamState::Cancelling;
+                m_wasCancellingAtAbortUnlockForTest = (m_downstreamState == DownstreamState::Cancelling);
             }
 #endif
             lock.unlock();
@@ -732,6 +873,140 @@ bool SpeechWorker::CheckTerminalBoundaryLocked()
     return false;
 }
 
+SpeechWorker::AudioIngestResult SpeechWorker::IngestAudioChunkLocked(const uint8_t* pChunkData, DWORD bytesRead)
+{
+    AudioIngestResult result{};
+
+    if (m_downstreamState == DownstreamState::Speaking || m_downstreamState == DownstreamState::Cancelling)
+    {
+        m_lastProviderProgressTick.store(GetTickCount64(), std::memory_order_release);
+    }
+
+    switch (m_downstreamState)
+    {
+    case DownstreamState::Speaking:
+    {
+        size_t bytesToFrame = bytesRead;
+        if (m_upstreamFinished)
+        {
+            const uint64_t remainingDeclaredBytes = m_upstreamTerminalBytes > m_rawAudioBytesRead
+                ? m_upstreamTerminalBytes - m_rawAudioBytesRead
+                : 0;
+            bytesToFrame = static_cast<size_t>((std::min)(static_cast<uint64_t>(bytesRead), remainingDeclaredBytes));
+        }
+        m_rawAudioBytesRead += bytesRead;
+#if defined(_DEBUG)
+        if (m_failNextFrameAssemblyForTest)
+        {
+            m_failNextFrameAssemblyForTest = false;
+            throw std::bad_alloc();
+        }
+#endif
+        result.spansToWrite = m_frameAssembler.Process(pChunkData, bytesToFrame);
+        if (result.spansToWrite.empty())
+        {
+            result.protocolBoundaryFailed = CheckTerminalBoundaryLocked();
+        }
+        else
+        {
+            result.shouldDeliverAudio = true;
+        }
+        break;
+    }
+
+    case DownstreamState::Cancelling:
+    {
+#if defined(_DEBUG)
+        const uint64_t rawBeforeRead = m_rawAudioBytesRead;
+#endif
+        m_rawAudioBytesRead += bytesRead;
+#if defined(_DEBUG)
+        if (m_upstreamFinished)
+        {
+            CoreLog(L"[CancelTrace] speak_id=%llu cancellation_audio_read tick=%llu chunk=%lu raw_before=%llu raw_after=%llu declared=%llu.",
+                m_activeSpeakId, GetTickCount64(), bytesRead, rawBeforeRead,
+                m_rawAudioBytesRead, m_upstreamTerminalBytes);
+        }
+#endif
+        result.protocolBoundaryFailed = CheckTerminalBoundaryLocked();
+        break;
+    }
+
+    case DownstreamState::Idle:
+    {
+        CoreLog(L"[SpeechWorker] Provider sent audio after the active request reached its terminal boundary.");
+        result.protocolBoundaryFailed = true;
+        break;
+    }
+
+    case DownstreamState::Faulted:
+    case DownstreamState::Drained:
+    {
+        // Continue draining provider PCM so its audio pipe cannot fill, but never call SAPI.
+        break;
+    }
+    }
+
+    if (result.protocolBoundaryFailed)
+    {
+        m_faultPending = true;
+    }
+
+    return result;
+}
+
+bool SpeechWorker::UpdateAfterAudioDeliveryLocked(
+    size_t deliveredBytes,
+    bool writeAccepted,
+    uint64_t& outCancellationToSend)
+{
+    outCancellationToSend = 0;
+    bool protocolBoundaryFailed = false;
+
+    switch (m_downstreamState)
+    {
+    case DownstreamState::Speaking:
+    {
+        m_deliveredAudioBytes += deliveredBytes;
+        if (!writeAccepted)
+        {
+            CoreLog(L"[SpeechWorker] SAPI rejected an audio write; cancelling active synthesis.");
+            outCancellationToSend = m_activeSpeakId;
+            m_upstreamFinished = false;
+            m_upstreamTerminalBytes = 0;
+            m_cancellationDeadlineTick = GetTickCount64() + CancellationTimeoutMs;
+            m_frameAssembler.Reset();
+            m_downstreamState = DownstreamState::Cancelling;
+        }
+        else
+        {
+            protocolBoundaryFailed = CheckTerminalBoundaryLocked();
+        }
+        break;
+    }
+
+    case DownstreamState::Cancelling:
+    {
+        protocolBoundaryFailed = CheckTerminalBoundaryLocked();
+        break;
+    }
+
+    case DownstreamState::Idle:
+    case DownstreamState::Drained:
+    case DownstreamState::Faulted:
+    {
+        break;
+    }
+    }
+
+    if (protocolBoundaryFailed)
+    {
+        m_faultPending = true;
+    }
+
+    return protocolBoundaryFailed;
+}
+
 void SpeechWorker::AudioThreadProc()
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -751,7 +1026,10 @@ void SpeechWorker::AudioThreadProc()
         HRESULT hr = m_pClient->ReadAudioChunk(buffer, bytesRead);
         if (FAILED(hr))
         {
-            if (m_exit.load()) break;
+            if (m_exit.load())
+            {
+                break;
+            }
             CoreLog(L"[SpeechWorker] Audio pipe failed; quarantining provider session: 0x%08x.", hr);
             EnterFaultedState();
             break;
@@ -762,83 +1040,21 @@ void SpeechWorker::AudioThreadProc()
             continue;
         }
 
-        uint64_t cancellationToSend = 0;
-        bool protocolBoundaryFailed = false;
-        bool shouldDeliverAudio = false;
-        PcmFrameBatch spansToWrite{};
-
+        AudioIngestResult ingestResult{};
         {
             std::lock_guard<std::mutex> lock(m_requestMutex);
-            if (m_downstreamState == DownstreamState::Speaking || m_downstreamState == DownstreamState::Cancelling)
-            {
-                m_lastProviderProgressTick.store(GetTickCount64(), std::memory_order_release);
-            }
-            if (m_downstreamState == DownstreamState::Speaking)
-            {
-                size_t bytesToFrame = bytesRead;
-                if (m_upstreamFinished)
-                {
-                    const uint64_t remainingDeclaredBytes = m_upstreamTerminalBytes > m_rawAudioBytesRead
-                        ? m_upstreamTerminalBytes - m_rawAudioBytesRead
-                        : 0;
-                    bytesToFrame = static_cast<size_t>((std::min)(static_cast<uint64_t>(bytesRead), remainingDeclaredBytes));
-                }
-                m_rawAudioBytesRead += bytesRead;
-#if defined(_DEBUG)
-                if (m_failNextFrameAssemblyForTest)
-                {
-                    m_failNextFrameAssemblyForTest = false;
-                    throw std::bad_alloc();
-                }
-#endif
-                spansToWrite = m_frameAssembler.Process(buffer.data(), bytesToFrame);
-                if (spansToWrite.empty())
-                {
-                    protocolBoundaryFailed = CheckTerminalBoundaryLocked();
-                }
-                else
-                {
-                    shouldDeliverAudio = true;
-                }
-            }
-            else if (m_downstreamState == DownstreamState::Cancelling)
-            {
-#if defined(_DEBUG)
-                const uint64_t rawBeforeRead = m_rawAudioBytesRead;
-#endif
-                m_rawAudioBytesRead += bytesRead;
-#if defined(_DEBUG)
-                if (m_upstreamFinished)
-                {
-                    CoreLog(L"[CancelTrace] speak_id=%llu cancellation_audio_read tick=%llu chunk=%lu raw_before=%llu raw_after=%llu declared=%llu.",
-                        m_activeSpeakId, GetTickCount64(), bytesRead, rawBeforeRead,
-                        m_rawAudioBytesRead, m_upstreamTerminalBytes);
-                }
-#endif
-                protocolBoundaryFailed = CheckTerminalBoundaryLocked();
-            }
-            else if (m_downstreamState == DownstreamState::Idle)
-            {
-                CoreLog(L"[SpeechWorker] Provider sent audio after the active request reached its terminal boundary.");
-                protocolBoundaryFailed = true;
-            }
-            else if (m_downstreamState == DownstreamState::Faulted)
-            {
-                // Continue draining provider PCM so its audio pipe cannot fill, but never call SAPI.
-            }
-
-            if (protocolBoundaryFailed)
-            {
-                m_faultPending = true;
-            }
+            ingestResult = IngestAudioChunkLocked(buffer.data(), bytesRead);
         }
 
-        if (shouldDeliverAudio && !spansToWrite.empty())
+        uint64_t cancellationToSend = 0;
+        bool deliveryFaulted = false;
+
+        if (ingestResult.shouldDeliverAudio && !ingestResult.spansToWrite.empty())
         {
             bool writeAccepted = true;
             size_t totalBytesDeliveredInBatch = 0;
 
-            for (const auto& span : spansToWrite)
+            for (const auto& span : ingestResult.spansToWrite)
             {
                 if (!m_pEngine->OnAudioData(span.data, static_cast<uint32_t>(span.size)))
                 {
@@ -850,44 +1066,8 @@ void SpeechWorker::AudioThreadProc()
 
             {
                 std::lock_guard<std::mutex> lock(m_requestMutex);
-                switch (m_downstreamState)
-                {
-                case DownstreamState::Speaking:
-                {
-                    m_deliveredAudioBytes += totalBytesDeliveredInBatch;
-                    if (!writeAccepted)
-                    {
-                        CoreLog(L"[SpeechWorker] SAPI rejected an audio write; cancelling active synthesis.");
-                        cancellationToSend = m_activeSpeakId;
-                        m_upstreamFinished = false;
-                        m_upstreamTerminalBytes = 0;
-                        m_cancellationDeadlineTick = GetTickCount64() + CancellationTimeoutMs;
-                        m_frameAssembler.Reset();
-                        m_downstreamState = DownstreamState::Cancelling;
-                    }
-                    else
-                    {
-                        protocolBoundaryFailed = CheckTerminalBoundaryLocked();
-                    }
-                    break;
-                }
-
-                case DownstreamState::Cancelling:
-                {
-                    protocolBoundaryFailed = CheckTerminalBoundaryLocked();
-                    break;
-                }
-
-                case DownstreamState::Idle:
-                case DownstreamState::Drained:
-                case DownstreamState::Faulted:
-                    break;
-                }
-
-                if (protocolBoundaryFailed)
-                {
-                    m_faultPending = true;
-                }
+                deliveryFaulted = UpdateAfterAudioDeliveryLocked(
+                    totalBytesDeliveredInBatch, writeAccepted, cancellationToSend);
             }
         }
 
@@ -898,16 +1078,103 @@ void SpeechWorker::AudioThreadProc()
             {
                 CoreLog(L"[SpeechWorker] Failed to cancel speak_id %llu after SAPI rejected audio: 0x%08x.",
                     cancellationToSend, cancellationHr);
-
                 EnterFaultedState();
             }
         }
 
-        if (protocolBoundaryFailed)
+        if (ingestResult.protocolBoundaryFailed || deliveryFaulted)
         {
             EnterFaultedState();
         }
     }
+}
+
+bool SpeechWorker::HandleTerminalEventLocked(
+    ProviderEventType eventType,
+    uint64_t eventSpeakId,
+    uint64_t terminalAudioBytes,
+    bool hasValidTerminalBytes,
+    std::string_view eventStr)
+{
+    if (m_upstreamFinished)
+    {
+        CoreLog(L"[SpeechWorker] Duplicate terminal event for speak_id %llu.", eventSpeakId);
+        m_upstreamState = UpstreamState::Faulted;
+        m_downstreamState = DownstreamState::Faulted;
+        m_requestCompletionHr = E_FAIL;
+        m_requestChanged.notify_all();
+        return true;
+    }
+
+    if (!hasValidTerminalBytes)
+    {
+        CoreLog(L"[SpeechWorker] terminal event for speak_id %llu has an invalid audio bytes value.", eventSpeakId);
+        m_upstreamState = UpstreamState::Faulted;
+        m_downstreamState = DownstreamState::Faulted;
+        m_requestCompletionHr = E_FAIL;
+        m_requestChanged.notify_all();
+        return true;
+    }
+
+    if (terminalAudioBytes % m_frameAssembler.BlockAlign() != 0)
+    {
+        CoreLog(L"[SpeechWorker] terminal event for speak_id %llu is not PCM-frame aligned.", eventSpeakId);
+        m_upstreamState = UpstreamState::Faulted;
+        m_downstreamState = DownstreamState::Faulted;
+        m_requestCompletionHr = E_FAIL;
+        m_requestChanged.notify_all();
+        return true;
+    }
+
+    m_upstreamTerminalBytes = terminalAudioBytes;
+    m_upstreamFinished = true;
+    m_upstreamState = (eventType == ProviderEventType::SynthesisComplete)
+        ? UpstreamState::Completed
+        : UpstreamState::Cancelled;
+#if defined(_DEBUG)
+    CoreLog(L"[ThreadTrace] speak_id=%llu terminal_received tick=%llu event=%hs declared=%llu raw=%llu delivered=%llu carry=%u downstream=%u.",
+        eventSpeakId, GetTickCount64(), eventStr.data(), m_upstreamTerminalBytes,
+        m_rawAudioBytesRead, m_deliveredAudioBytes,
+        m_frameAssembler.HasCarry() ? 1u : 0u,
+        static_cast<unsigned>(m_downstreamState));
+#endif
+    return CheckTerminalBoundaryLocked();
+}
+
+bool SpeechWorker::HandleLogEventLocked(uint64_t eventSpeakId, const nlohmann::json& json)
+{
+    std::string_view severity = "info";
+    if (json.contains("severity") && json["severity"].is_string())
+    {
+        severity = json["severity"].get<std::string_view>();
+    }
+
+    std::string_view message = "";
+    if (json.contains("message") && json["message"].is_string())
+    {
+        message = json["message"].get<std::string_view>();
+    }
+
+    CoreLog(L"[SpeechWorker] Provider log (severity=%.*hs, speak_id=%llu): %.*hs",
+        static_cast<int>(severity.size()), severity.data(),
+        eventSpeakId,
+        static_cast<int>(message.size()), message.data());
+
+    if (severity == "fatal")
+    {
+        return true;
+    }
+
+    if (severity == "error")
+    {
+        m_upstreamState = UpstreamState::Failed;
+        m_upstreamFinished = true;
+        m_requestCompletionHr = E_FAIL;
+        m_upstreamTerminalBytes = m_rawAudioBytesRead;
+        return CheckTerminalBoundaryLocked();
+    }
+
+    return false;
 }
 
 void SpeechWorker::ControlThreadProc()
@@ -919,174 +1186,116 @@ void SpeechWorker::ControlThreadProc()
         HRESULT hr = m_pClient->ReadControlMessage(json);
         if (FAILED(hr))
         {
-            if (m_exit.load()) break;
+            if (m_exit.load())
+            {
+                break;
+            }
             CoreLog(L"[SpeechWorker] Control pipe failed; quarantining provider session: 0x%08x.", hr);
             EnterFaultedState();
             break;
         }
 
-        if (json.is_null() || !json.is_object())
+        if (json.is_null() || !json.is_object() || !json.contains("event") || !json["event"].is_string())
         {
             continue;
         }
 
         try
         {
+            const std::string_view eventStr = json["event"].get<std::string_view>();
+            const ProviderEventType eventType = ParseProviderEventType(eventStr);
+
+            uint64_t eventSpeakId = 0;
+            if (!json.contains("speak_id") || !TryGetJsonUnsignedInteger(json["speak_id"], eventSpeakId))
+            {
+                {
+                    std::lock_guard<std::mutex> lock(m_requestMutex);
+                    if (m_upstreamState != UpstreamState::Faulted && m_downstreamState != DownstreamState::Faulted)
+                    {
+                        m_faultPending = true;
+                    }
+                }
+                EnterFaultedState();
+                continue;
+            }
+
             bool forwardToSapi = false;
             bool faultAfterStateUpdate = false;
-            if (json.contains("event"))
+
+            SpeechEventOffsets speechOffsets{};
+            const bool isSpeech = IsSpeechBoundaryEvent(eventType);
+            const bool hasValidSpeechNumbers = !isSpeech || TryParseSpeechOffsets(json, eventType, speechOffsets);
+
+            uint64_t terminalAudioBytes = 0;
+            const bool isTerminal = IsTerminalEvent(eventType);
+            const bool hasValidTerminalBytes = !isTerminal || TryParseTerminalBytes(json, eventType, terminalAudioBytes);
+
             {
-                if (json["event"].is_string())
+                std::lock_guard<std::mutex> lock(m_requestMutex);
+                forwardToSapi = (m_upstreamState != UpstreamState::Faulted &&
+                                 m_downstreamState != DownstreamState::Faulted &&
+                                 !m_faultPending);
+
+                if (eventSpeakId == m_activeSpeakId)
                 {
-                    std::string_view eventStr = json["event"].get<std::string_view>();
-                    uint64_t eventSpeakId = 0;
-                    if (!json.contains("speak_id") || !TryGetJsonUnsignedInteger(json["speak_id"], eventSpeakId))
+                    const bool isProgress = IsProgressEvent(eventType);
+                    if (isProgress && hasValidSpeechNumbers && hasValidTerminalBytes &&
+                        (m_downstreamState == DownstreamState::Speaking || m_downstreamState == DownstreamState::Cancelling))
                     {
-                        std::lock_guard<std::mutex> lock(m_requestMutex);
-                        if (m_upstreamState != UpstreamState::Faulted && m_downstreamState != DownstreamState::Faulted)
-                        {
-                            m_faultPending = true;
-                            faultAfterStateUpdate = true;
-                        }
+                        m_lastProviderProgressTick.store(GetTickCount64(), std::memory_order_release);
                     }
-                    else
+
+                    if (isSpeech && !hasValidSpeechNumbers)
                     {
-                        const bool isWordBoundary = eventStr == "word_boundary";
-                        const bool isSentenceBoundary = eventStr == "sentence_boundary";
-                        const bool isBookmarkReached = eventStr == "bookmark_reached";
-                        const bool isSpeechEvent = isWordBoundary || isSentenceBoundary || isBookmarkReached;
-                        uint32_t audioOffsetMs = 0;
-                        uint32_t textOffset = 0;
-                        uint32_t textLength = 0;
-                        const bool hasValidSpeechEventNumbers = !isSpeechEvent ||
-                            (json.contains("audio_offset_ms") &&
-                             TryGetJsonUnsignedInteger(json["audio_offset_ms"], audioOffsetMs) &&
-                             (isBookmarkReached ||
-                              (json.contains("text_offset") && TryGetJsonUnsignedInteger(json["text_offset"], textOffset) &&
-                               json.contains("text_length") && TryGetJsonUnsignedInteger(json["text_length"], textLength))));
-                        const bool isSynthesisComplete = eventStr == "synthesis_complete";
-                        const bool isSynthesisCancelled = eventStr == "synthesis_cancelled";
-                        uint64_t terminalAudioBytes = 0;
-                        const bool hasValidTerminalAudioBytes =
-                            (!isSynthesisComplete && !isSynthesisCancelled) ||
-                            ((isSynthesisComplete ? json.contains("total_audio_bytes") : json.contains("audio_bytes_written")) &&
-                             TryGetJsonUnsignedInteger(
-                                 json[isSynthesisComplete ? "total_audio_bytes" : "audio_bytes_written"], terminalAudioBytes));
+                        forwardToSapi = false;
+                        faultAfterStateUpdate = true;
+                    }
+                    else if (isSpeech && m_downstreamState != DownstreamState::Speaking)
+                    {
+                        // SAPI has aborted this request, so delayed provider callbacks must not move focus.
+                        forwardToSapi = false;
+                    }
 
-                        std::lock_guard<std::mutex> lock(m_requestMutex);
-                        forwardToSapi = m_upstreamState != UpstreamState::Faulted && m_downstreamState != DownstreamState::Faulted && !m_faultPending;
-                        if (eventSpeakId == m_activeSpeakId)
-                        {
-                            const bool isProviderProgress = eventStr == "word_boundary" ||
-                                eventStr == "sentence_boundary" || eventStr == "bookmark_reached" ||
-                                eventStr == "synthesis_complete" || eventStr == "synthesis_cancelled" ||
-                                eventStr == "log";
-                            if (isProviderProgress && hasValidSpeechEventNumbers && hasValidTerminalAudioBytes &&
-                                (m_downstreamState == DownstreamState::Speaking || m_downstreamState == DownstreamState::Cancelling))
-                            {
-                                m_lastProviderProgressTick.store(GetTickCount64(), std::memory_order_release);
-                            }
+                    switch (eventType)
+                    {
+                    case ProviderEventType::WordBoundary:
+                    case ProviderEventType::SentenceBoundary:
+                    case ProviderEventType::Bookmark:
+                    {
+                        break;
+                    }
 
-                            if (isSpeechEvent && !hasValidSpeechEventNumbers)
-                            {
-                                forwardToSapi = false;
-                                faultAfterStateUpdate = true;
-                            }
-                            else if (isSpeechEvent && m_downstreamState != DownstreamState::Speaking)
-                            {
-                                // SAPI has aborted this request, so delayed provider callbacks must not move focus.
-                                forwardToSapi = false;
-                            }
+                    case ProviderEventType::SynthesisComplete:
+                    case ProviderEventType::SynthesisCancelled:
+                    {
+                        faultAfterStateUpdate = HandleTerminalEventLocked(
+                            eventType, eventSpeakId, terminalAudioBytes, hasValidTerminalBytes, eventStr);
+                        break;
+                    }
 
-                            if (eventStr == "synthesis_complete" || eventStr == "synthesis_cancelled")
-                            {
-                                if (m_upstreamFinished)
-                                {
-                                    CoreLog(L"[SpeechWorker] Duplicate terminal event for speak_id %llu.", eventSpeakId);
-                                    m_upstreamState = UpstreamState::Faulted;
-                                    m_downstreamState = DownstreamState::Faulted;
-                                    m_requestCompletionHr = E_FAIL;
-                                    m_requestChanged.notify_all();
-                                    faultAfterStateUpdate = true;
-                                }
-                                else if (!hasValidTerminalAudioBytes)
-                                {
-                                    CoreLog(L"[SpeechWorker] terminal event for speak_id %llu has an invalid audio bytes value.", eventSpeakId);
-                                    m_upstreamState = UpstreamState::Faulted;
-                                    m_downstreamState = DownstreamState::Faulted;
-                                    m_requestCompletionHr = E_FAIL;
-                                    m_requestChanged.notify_all();
-                                    faultAfterStateUpdate = true;
-                                }
-                                else
-                                {
-                                    m_upstreamTerminalBytes = terminalAudioBytes;
-                                    if (m_upstreamTerminalBytes % m_frameAssembler.BlockAlign() != 0)
-                                    {
-                                        CoreLog(L"[SpeechWorker] terminal event for speak_id %llu is not PCM-frame aligned.", eventSpeakId);
-                                        m_upstreamState = UpstreamState::Faulted;
-                                        m_downstreamState = DownstreamState::Faulted;
-                                        m_requestCompletionHr = E_FAIL;
-                                        m_requestChanged.notify_all();
-                                        faultAfterStateUpdate = true;
-                                    }
-                                    else
-                                    {
-                                        m_upstreamFinished = true;
-                                        m_upstreamState = isSynthesisComplete ? UpstreamState::Completed : UpstreamState::Cancelled;
-#if defined(_DEBUG)
-                                        CoreLog(L"[ThreadTrace] speak_id=%llu terminal_received tick=%llu event=%hs declared=%llu raw=%llu delivered=%llu carry=%u downstream=%u.",
-                                            eventSpeakId, GetTickCount64(), eventStr.data(), m_upstreamTerminalBytes,
-                                            m_rawAudioBytesRead, m_deliveredAudioBytes,
-                                            m_frameAssembler.HasCarry() ? 1u : 0u,
-                                            static_cast<unsigned>(m_downstreamState));
-#endif
-                                        faultAfterStateUpdate = CheckTerminalBoundaryLocked();
-                                    }
-                                }
-                            }
-                            else if (eventStr == "completed")
-                            {
-                                CoreLog(L"[SpeechWorker] Ignoring legacy completed event for speak_id %llu.", eventSpeakId);
-                            }
-                            else if (eventStr == "log")
-                            {
-                                std::string_view severity = "info";
-                                if (json.contains("severity") && json["severity"].is_string())
-                                {
-                                    severity = json["severity"].get<std::string_view>();
-                                }
+                    case ProviderEventType::LegacyCompleted:
+                    {
+                        CoreLog(L"[SpeechWorker] Ignoring legacy completed event for speak_id %llu.", eventSpeakId);
+                        break;
+                    }
 
-                                std::string_view message = "";
-                                if (json.contains("message") && json["message"].is_string())
-                                {
-                                    message = json["message"].get<std::string_view>();
-                                }
+                    case ProviderEventType::Log:
+                    {
+                        faultAfterStateUpdate = HandleLogEventLocked(eventSpeakId, json);
+                        break;
+                    }
 
-                                CoreLog(L"[SpeechWorker] Provider log (severity=%.*hs, speak_id=%llu): %.*hs",
-                                    static_cast<int>(severity.size()), severity.data(),
-                                    eventSpeakId,
-                                    static_cast<int>(message.size()), message.data());
+                    case ProviderEventType::Unknown:
+                    {
+                        CoreLog(L"[SpeechWorker] Unknown event received: %.*hs",
+                            static_cast<int>(eventStr.size()), eventStr.data());
+                        break;
+                    }
+                    }
 
-                                if (severity == "fatal")
-                                {
-                                    faultAfterStateUpdate = true;
-                                }
-                                else if (severity == "error")
-                                {
-                                    m_upstreamState = UpstreamState::Failed;
-                                    m_upstreamFinished = true;
-                                    m_requestCompletionHr = E_FAIL;
-                                    m_upstreamTerminalBytes = m_rawAudioBytesRead;
-                                    faultAfterStateUpdate = CheckTerminalBoundaryLocked();
-                                }
-                            }
-
-                            if (faultAfterStateUpdate)
-                            {
-                                m_faultPending = true;
-                            }
-                        }
+                    if (faultAfterStateUpdate)
+                    {
+                        m_faultPending = true;
                     }
                 }
             }
