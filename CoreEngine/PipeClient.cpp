@@ -1,6 +1,36 @@
 #include "pch.h"
 #include "PipeClient.h"
 #include "PipeSecurityUtils.h"
+#include "JsonValue.h"
+
+namespace {
+    [[nodiscard]] bool IsCommand(const nlohmann::json& json, std::string_view commandName) noexcept
+    {
+        if (!json.is_object())
+        {
+            return false;
+        }
+        if (!json.contains("command") || !json["command"].is_string())
+        {
+            return false;
+        }
+        return json["command"].get<std::string_view>() == commandName;
+    }
+
+    [[nodiscard]] bool TryExtractSpeakId(const nlohmann::json& json, uint64_t& outSpeakId) noexcept
+    {
+        outSpeakId = 0;
+        if (!json.is_object())
+        {
+            return false;
+        }
+        if (!json.contains("speak_id"))
+        {
+            return false;
+        }
+        return TryGetJsonUnsignedInteger(json["speak_id"], outSpeakId);
+    }
+}
 
 PipeClient::PipeClient() = default;
 
@@ -413,11 +443,12 @@ HRESULT PipeClient::SendControlMessage(
 {
     const ULONGLONG deadline = timeoutMs == INFINITE ? 0 : GetTickCount64() + timeoutMs;
 #if defined(_DEBUG)
-    const bool traceCancellation = json.contains("command") && json["command"].is_string() &&
-        json["command"].get<std::string_view>() == "cancel";
-    const uint64_t traceSpeakId = traceCancellation && json.contains("speak_id") && json["speak_id"].is_number_unsigned()
-        ? json["speak_id"].get<uint64_t>()
-        : 0;
+    const bool traceCancellation = IsCommand(json, "cancel");
+    uint64_t traceSpeakId = 0;
+    if (traceCancellation)
+    {
+        (void)TryExtractSpeakId(json, traceSpeakId);
+    }
     const ULONGLONG controlMutexWaitStart = GetTickCount64();
 #endif
     std::unique_lock<std::timed_mutex> lock(m_controlWriteMutex, std::defer_lock);
@@ -465,19 +496,13 @@ HRESULT PipeClient::SendControlMessage(
     if (!m_controlPipe) return E_UNEXPECTED;
 
 #if defined(_DEBUG)
-    if (m_failNextSpeakMessageForTest &&
-        json.contains("command") &&
-        json["command"].is_string() &&
-        json["command"].get<std::string>() == "sapi_speak")
+    if (m_failNextSpeakMessageForTest && IsCommand(json, "sapi_speak"))
     {
         m_failNextSpeakMessageForTest = false;
         return E_FAIL;
     }
 
-    if (m_failNextCancellationMessageForTest &&
-        json.contains("command") &&
-        json["command"].is_string() &&
-        json["command"].get<std::string>() == "cancel")
+    if (m_failNextCancellationMessageForTest && IsCommand(json, "cancel"))
     {
         m_failNextCancellationMessageForTest = false;
         return E_FAIL;

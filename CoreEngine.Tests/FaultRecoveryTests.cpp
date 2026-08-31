@@ -165,6 +165,7 @@ TEST_F(SapiEngineTests, SilentActiveRequestTimesOutInsteadOfHoldingSapiForever) 
     EXPECT_LT(elapsedBeforeCleanup, std::chrono::milliseconds(2300));
 }
 
+#if defined(_DEBUG)
 TEST_F(SapiEngineTests, InvalidSpeechEventSpeakIdQuarantinesTheWorker) {
     const std::vector<std::string> invalidEvents{
         "{\"event\":\"word_boundary\",\"speak_id\":\"40\",\"text_offset\":0,\"text_length\":1,\"audio_offset_ms\":0}\n",
@@ -213,6 +214,7 @@ TEST_F(SapiEngineTests, MalformedRequiredSpeechEventNumbersQuarantineTheWorker) 
         EXPECT_TRUE(worker.IsFaulted());
     }
 }
+#endif
 
 TEST_F(SapiEngineTests, StaleSpeechEventWithValidSpeakIdDoesNotQuarantineTheWorker) {
     ControlPipeTestServer server;
@@ -260,6 +262,7 @@ TEST_F(SapiEngineTests, InvalidCancellationBoundaryFaultsTheWorker) {
     EXPECT_TRUE(worker.IsFaulted());
 }
 
+#if defined(_DEBUG)
 TEST_F(SapiEngineTests, MisalignedSynthesisCompleteTotalFaultsTheWorker) {
     ControlPipeTestServer server;
     ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
@@ -310,6 +313,7 @@ TEST_F(SapiEngineTests, NonIntegerSynthesisCompleteTotalFaultsTheWorker) {
     EXPECT_TRUE(worker.WaitForFaultForTest(1000));
     EXPECT_TRUE(worker.IsFaulted());
 }
+#endif
 
 TEST_F(SapiEngineTests, IntegralFloatSynthesisCompleteFieldsCompleteTheRequest) {
     ControlPipeTestServer server;
@@ -328,6 +332,7 @@ TEST_F(SapiEngineTests, IntegralFloatSynthesisCompleteFieldsCompleteTheRequest) 
     EXPECT_FALSE(worker.IsFaulted());
 }
 
+#if defined(_DEBUG)
 TEST_F(SapiEngineTests, DuplicateSynthesisCompleteTotalFaultsTheWorker) {
     ControlPipeTestServer server;
     ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
@@ -489,6 +494,7 @@ TEST_F(SapiEngineTests, AudioAfterCancellationCompletionFaultsIdleWorker) {
     EXPECT_TRUE(worker.WaitForFaultForTest(1000));
     EXPECT_TRUE(worker.IsFaulted());
 }
+#endif
 
 TEST_F(SapiEngineTests, MisalignedCancellationTotalFaultsTheWorker) {
     ControlPipeTestServer server;

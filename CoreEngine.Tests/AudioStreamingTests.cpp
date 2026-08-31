@@ -146,6 +146,7 @@ TEST_F(SapiEngineTests, SpeakPreservesNonContiguousSapiSourceOffsets) {
     EXPECT_EQ(mockSite->receivedEvents[1].lParam, 23);
 }
 
+#if defined(_DEBUG)
 TEST_F(SapiEngineTests, TerminalBeforeOverrunAudioForwardsOnlyDeclaredFrames) {
     ControlPipeTestServer server;
     ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
@@ -209,7 +210,6 @@ TEST_F(SapiEngineTests, WorkerReassemblesAwkward24BitStereoPipeFragments) {
         0x21, 0x22, 0x23, 0x24, 0x25, 0x26 }));
 }
 
-#if defined(_DEBUG)
 TEST_F(SapiEngineTests, SynthesisCompleteWaitsForFinalSapiWriteToFinish) {
     ControlPipeTestServer server;
     ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);

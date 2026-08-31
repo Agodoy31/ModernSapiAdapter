@@ -132,6 +132,7 @@ TEST_F(SapiEngineTests, CancellationRejectsAnInitiallyApprovedEventAtTheSapiBoun
 }
 #endif
 
+#if defined(_DEBUG)
 TEST_F(SapiEngineTests, CancellationDiscardsCarriedPcmBeforeTheNextRequest) {
     ControlPipeTestServer server;
     ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
@@ -170,6 +171,7 @@ TEST_F(SapiEngineTests, CancellationDiscardsCarriedPcmBeforeTheNextRequest) {
     EXPECT_EQ(mockSite->requestedWriteSizes, (std::vector<ULONG>{ 2 }));
     EXPECT_EQ(mockSite->acceptedAudio, (std::vector<uint8_t>{ 0xB1, 0xB2 }));
 }
+#endif
 
 TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak) {
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();

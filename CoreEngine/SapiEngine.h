@@ -131,5 +131,13 @@ private:
     HRESULT LoadProviderFromToken(ISpObjectToken* pToken);
     HRESULT CreateProviderSessionLocked();
     void RetireFaultedSessionLocked();
+
+    [[nodiscard]] static SapiSpeechEventType ParseSpeechEventType(std::string_view name) noexcept;
+    void DispatchBoundaryEvent(const nlohmann::json& json, SPEVENTENUM eventId);
+    void DispatchBookmarkEvent(const nlohmann::json& json);
+    void DispatchLogEvent(const nlohmann::json& json);
+
+    [[nodiscard]] static bool IsValidInfoResponse(const nlohmann::json& response) noexcept;
+    [[nodiscard]] bool IsFormatCompatible(const WAVEFORMATEX& candidate) const noexcept;
 };
 

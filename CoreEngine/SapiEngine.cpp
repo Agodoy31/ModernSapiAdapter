@@ -331,18 +331,136 @@ uint64_t CSapiEngine::AudioOffsetMsToBytes(uint32_t audioMs) const
 
 
 
-void CSapiEngine::OnSpeechEvent(const nlohmann::json& eventJson) try
+SapiSpeechEventType CSapiEngine::ParseSpeechEventType(std::string_view name) noexcept
+{
+    if (name == "word_boundary")
+    {
+        return SapiSpeechEventType::WordBoundary;
+    }
+    if (name == "sentence_boundary")
+    {
+        return SapiSpeechEventType::SentenceBoundary;
+    }
+    if (name == "bookmark_reached")
+    {
+        return SapiSpeechEventType::BookmarkReached;
+    }
+    if (name == "log")
+    {
+        return SapiSpeechEventType::Log;
+    }
+    return SapiSpeechEventType::Unknown;
+}
+
+void CSapiEngine::DispatchBoundaryEvent(const nlohmann::json& json, SPEVENTENUM eventId)
 {
     winrt::com_ptr<ISpTTSEngineSite> site;
     {
         std::lock_guard<std::mutex> lock(m_siteMutex);
-        if (!m_cpSite) return;
+        if (!m_cpSite)
+        {
+            return;
+        }
         site = m_cpSite;
     }
 
-    if (!eventJson.contains("event") || !eventJson["event"].is_string()) return;
-    const std::string_view eventStr = eventJson["event"].get<std::string_view>();
-    
+    uint32_t audioMs = 0;
+    uint32_t textOffset = 0;
+    uint32_t textLength = 0;
+    if (!json.contains("audio_offset_ms") || !TryGetJsonUnsignedInteger(json["audio_offset_ms"], audioMs) ||
+        !json.contains("text_offset") || !TryGetJsonUnsignedInteger(json["text_offset"], textOffset) ||
+        !json.contains("text_length") || !TryGetJsonUnsignedInteger(json["text_length"], textLength))
+    {
+        return;
+    }
+
+    SPEVENT spEvent = {};
+    spEvent.eEventId = eventId;
+    spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
+    spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
+    spEvent.wParam = static_cast<WPARAM>(textLength);
+    spEvent.lParam = static_cast<LPARAM>(textOffset);
+
+    site->AddEvents(&spEvent, 1);
+}
+
+void CSapiEngine::DispatchBookmarkEvent(const nlohmann::json& json)
+{
+    winrt::com_ptr<ISpTTSEngineSite> site;
+    {
+        std::lock_guard<std::mutex> lock(m_siteMutex);
+        if (!m_cpSite)
+        {
+            return;
+        }
+        site = m_cpSite;
+    }
+
+    uint32_t audioMs = 0;
+    if (!json.contains("audio_offset_ms") || !TryGetJsonUnsignedInteger(json["audio_offset_ms"], audioMs))
+    {
+        return;
+    }
+
+    SPEVENT spEvent = {};
+    spEvent.eEventId = SPEI_TTS_BOOKMARK;
+    spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
+    spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
+
+    if (json.contains("bookmark_name") && json["bookmark_name"].is_string())
+    {
+        const auto bNameStr = json["bookmark_name"].get<std::string>();
+        if (!bNameStr.empty())
+        {
+            wchar_t* pStr = static_cast<wchar_t*>(CoTaskMemAlloc((bNameStr.size() + 1) * sizeof(wchar_t)));
+            if (pStr)
+            {
+                const int written = MultiByteToWideChar(
+                    CP_UTF8, 0, bNameStr.c_str(), static_cast<int>(bNameStr.size()), pStr, static_cast<int>(bNameStr.size()));
+                if (written > 0)
+                {
+                    pStr[written] = L'\0';
+                    spEvent.elParamType = SPET_LPARAM_IS_STRING;
+                    spEvent.wParam = static_cast<WPARAM>(_wtol(pStr));
+                    spEvent.lParam = reinterpret_cast<LPARAM>(pStr);
+                }
+                else
+                {
+                    CoTaskMemFree(pStr);
+                }
+            }
+        }
+    }
+
+    site->AddEvents(&spEvent, 1);
+}
+
+void CSapiEngine::DispatchLogEvent(const nlohmann::json& json)
+{
+    auto getUtf16String = [](const nlohmann::json& j, const char* key, const wchar_t* defaultVal) -> std::wstring {
+        if (!j.contains(key) || !j[key].is_string())
+        {
+            return defaultVal;
+        }
+        const std::string s = j[key].get<std::string>();
+        const std::wstring w = Utf8ToWide(s);
+        return w.empty() ? defaultVal : w;
+    };
+
+    const std::wstring msg = getUtf16String(json, "message", L"Unknown log");
+    const std::wstring severity = getUtf16String(json, "severity", L"error");
+    const std::wstring friendly = getUtf16String(json, "friendly_text", L"");
+
+    CoreLog(L"[CoreEngine] Provider error (%s): %s %s", severity.c_str(), msg.c_str(), friendly.c_str());
+}
+
+void CSapiEngine::OnSpeechEvent(const nlohmann::json& eventJson) try
+{
+    if (!eventJson.contains("event") || !eventJson["event"].is_string())
+    {
+        return;
+    }
+
     if (eventJson.contains("speak_id"))
     {
         uint64_t eventSpeakId = 0;
@@ -356,115 +474,26 @@ void CSapiEngine::OnSpeechEvent(const nlohmann::json& eventJson) try
         }
     }
 
-    if (eventStr == "word_boundary")
+    const std::string_view eventStr = eventJson["event"].get<std::string_view>();
+    const SapiSpeechEventType eventType = ParseSpeechEventType(eventStr);
+
+    switch (eventType)
     {
-        uint32_t audioMs = 0;
-        uint32_t textOffset = 0;
-        uint32_t textLength = 0;
-        if (!eventJson.contains("audio_offset_ms") || !TryGetJsonUnsignedInteger(eventJson["audio_offset_ms"], audioMs) ||
-            !eventJson.contains("text_offset") || !TryGetJsonUnsignedInteger(eventJson["text_offset"], textOffset) ||
-            !eventJson.contains("text_length") || !TryGetJsonUnsignedInteger(eventJson["text_length"], textLength))
-        {
-            return;
-        }
-
-        SPEVENT spEvent = {};
-        spEvent.eEventId = SPEI_WORD_BOUNDARY;
-        spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
-        spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
-
-        spEvent.wParam = static_cast<WPARAM>(textLength);
-        spEvent.lParam = static_cast<LPARAM>(textOffset);
-        
-        site->AddEvents(&spEvent, 1);
-    }
-    else if (eventStr == "sentence_boundary")
-    {
-        uint32_t audioMs = 0;
-        uint32_t textOffset = 0;
-        uint32_t textLength = 0;
-        if (!eventJson.contains("audio_offset_ms") || !TryGetJsonUnsignedInteger(eventJson["audio_offset_ms"], audioMs) ||
-            !eventJson.contains("text_offset") || !TryGetJsonUnsignedInteger(eventJson["text_offset"], textOffset) ||
-            !eventJson.contains("text_length") || !TryGetJsonUnsignedInteger(eventJson["text_length"], textLength))
-        {
-            return;
-        }
-
-        SPEVENT spEvent = {};
-        spEvent.eEventId = SPEI_SENTENCE_BOUNDARY;
-        spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
-        spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
-
-        spEvent.wParam = static_cast<WPARAM>(textLength);
-        spEvent.lParam = static_cast<LPARAM>(textOffset);
-        
-        site->AddEvents(&spEvent, 1);
-    }
-    else if (eventStr == "bookmark_reached")
-    {
-        uint32_t audioMs = 0;
-        if (!eventJson.contains("audio_offset_ms") || !TryGetJsonUnsignedInteger(eventJson["audio_offset_ms"], audioMs))
-        {
-            return;
-        }
-
-        SPEVENT spEvent = {};
-        spEvent.eEventId = SPEI_TTS_BOOKMARK;
-        spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
-
-        if (eventJson.contains("bookmark_name") && eventJson["bookmark_name"].is_string())
-        {
-            auto bNameStr = eventJson["bookmark_name"].get<std::string>();
-            if (!bNameStr.empty())
-            {
-                wchar_t* pStr = (wchar_t*)CoTaskMemAlloc((bNameStr.size() + 1) * sizeof(wchar_t));
-                if (pStr)
-                {
-                    int written = MultiByteToWideChar(CP_UTF8, 0, bNameStr.c_str(), static_cast<int>(bNameStr.size()), pStr, static_cast<int>(bNameStr.size()));
-                    if (written >= 0)
-                    {
-                        pStr[written] = L'\0';
-                        spEvent.elParamType = SPET_LPARAM_IS_STRING;
-                        spEvent.wParam = static_cast<WPARAM>(_wtol(pStr));
-                        spEvent.lParam = (LPARAM)pStr;
-                    }
-                    else
-                    {
-                        CoTaskMemFree(pStr);
-                        spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
-                    }
-                }
-                else
-                {
-                    spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
-                }
-            }
-            else
-            {
-                spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
-            }
-        }
-        else
-        {
-            spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
-        }
-        
-        site->AddEvents(&spEvent, 1);
-    }
-    else if (eventStr == "log")
-    {
-        auto getUtf16String = [](const nlohmann::json& j, const char* key, const wchar_t* defaultVal) -> std::wstring {
-            if (!j.contains(key) || !j[key].is_string()) return defaultVal;
-            std::string s = j[key].get<std::string>();
-            std::wstring w = Utf8ToWide(s);
-            return w.empty() ? defaultVal : w;
-        };
-
-        std::wstring msg = getUtf16String(eventJson, "message", L"Unknown log");
-        std::wstring severity = getUtf16String(eventJson, "severity", L"error");
-        std::wstring friendly = getUtf16String(eventJson, "friendly_text", L"");
-        
-        CoreLog(L"[CoreEngine] Provider error (%s): %s %s", severity.c_str(), msg.c_str(), friendly.c_str());
+    case SapiSpeechEventType::WordBoundary:
+        DispatchBoundaryEvent(eventJson, SPEI_WORD_BOUNDARY);
+        break;
+    case SapiSpeechEventType::SentenceBoundary:
+        DispatchBoundaryEvent(eventJson, SPEI_SENTENCE_BOUNDARY);
+        break;
+    case SapiSpeechEventType::BookmarkReached:
+        DispatchBookmarkEvent(eventJson);
+        break;
+    case SapiSpeechEventType::Log:
+        DispatchLogEvent(eventJson);
+        break;
+    case SapiSpeechEventType::Unknown:
+    default:
+        break;
     }
 }
 catch (...)
@@ -501,6 +530,37 @@ HRESULT CSapiEngine::LoadProviderFromToken(ISpObjectToken* pToken)
     return CreateProviderSessionLocked();
 }
 
+bool CSapiEngine::IsValidInfoResponse(const nlohmann::json& response) noexcept
+{
+    if (!response.is_object())
+    {
+        return false;
+    }
+    if (!response.contains("response") || !response["response"].is_string() ||
+        response["response"].get<std::string_view>() != "info")
+    {
+        return false;
+    }
+    if (!response.contains("audio_format") || !response["audio_format"].is_object())
+    {
+        return false;
+    }
+    return true;
+}
+
+bool CSapiEngine::IsFormatCompatible(const WAVEFORMATEX& candidate) const noexcept
+{
+    if (!m_hasOutputFormat)
+    {
+        return true;
+    }
+
+    return candidate.nSamplesPerSec == m_audioFormat.nSamplesPerSec &&
+           candidate.wBitsPerSample == m_audioFormat.wBitsPerSample &&
+           candidate.nChannels == m_audioFormat.nChannels &&
+           candidate.nBlockAlign == m_audioFormat.nBlockAlign;
+}
+
 HRESULT CSapiEngine::CreateProviderSessionLocked()
 {
     if (m_providerExecutablePath.empty() || m_providerPipeName.empty() || m_pClient || m_pWorker)
@@ -516,7 +576,7 @@ HRESULT CSapiEngine::CreateProviderSessionLocked()
             return E_FAIL;
         }
 
-        nlohmann::json infoRequest = {
+        const nlohmann::json infoRequest = {
             {"command", "info"}
         };
         if (FAILED(candidateClient->SendControlMessage(infoRequest)))
@@ -526,12 +586,12 @@ HRESULT CSapiEngine::CreateProviderSessionLocked()
 
         nlohmann::json infoResponse;
         if (FAILED(candidateClient->ReadControlMessage(
-                infoResponse, PipeClient::ControlOperationTimeoutMs)) ||
-            !infoResponse.contains("response") ||
-            !infoResponse["response"].is_string() ||
-            infoResponse["response"].get<std::string>() != "info" ||
-            !infoResponse.contains("audio_format") ||
-            !infoResponse["audio_format"].is_object())
+                infoResponse, PipeClient::ControlOperationTimeoutMs)))
+        {
+            return E_FAIL;
+        }
+
+        if (!IsValidInfoResponse(infoResponse))
         {
             return E_FAIL;
         }
@@ -542,11 +602,7 @@ HRESULT CSapiEngine::CreateProviderSessionLocked()
             return E_FAIL;
         }
 
-        if (m_hasOutputFormat &&
-            (candidateFormat.nSamplesPerSec != m_audioFormat.nSamplesPerSec ||
-             candidateFormat.wBitsPerSample != m_audioFormat.wBitsPerSample ||
-             candidateFormat.nChannels != m_audioFormat.nChannels ||
-             candidateFormat.nBlockAlign != m_audioFormat.nBlockAlign))
+        if (!IsFormatCompatible(candidateFormat))
         {
             CoreLog(L"[CoreEngine] Provider reconnect returned a different PCM format.");
             return E_FAIL;

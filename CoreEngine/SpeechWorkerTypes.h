@@ -35,6 +35,15 @@ enum class ProviderEventType : uint8_t
     Unknown = 4
 };
 
+enum class SapiSpeechEventType : uint8_t
+{
+    WordBoundary = 0,
+    SentenceBoundary = 1,
+    BookmarkReached = 2,
+    Log = 3,
+    Unknown = 4
+};
+
 struct SpeechEventOffsets
 {
     uint32_t audioOffsetMs = 0;
