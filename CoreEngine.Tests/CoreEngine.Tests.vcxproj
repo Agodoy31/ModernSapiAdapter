@@ -45,6 +45,8 @@
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -62,6 +64,8 @@
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -78,6 +82,8 @@
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>None</DebugInformationFormat>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>false</GenerateDebugInformation>
@@ -96,6 +102,8 @@
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>None</DebugInformationFormat>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>false</GenerateDebugInformation>
@@ -106,25 +114,40 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="pch.h" />
-    <ClInclude Include="MockSapiInterfaces.h" />
+    <ClInclude Include="TestFixtureBase.h" />
+    <ClInclude Include="TestPathUtils.h" />
+    <ClInclude Include="MockSpTTSEngineSite.h" />
+    <ClInclude Include="MockSpObjectToken.h" />
+    <ClInclude Include="ControlPipeTestServer.h" />
+    <ClInclude Include="CoreEngineDllFixture.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="SapiEngineTests.cpp" />
+    <ClCompile Include="SessionLifecycleTests.cpp" />
+    <ClCompile Include="AudioStreamingTests.cpp" />
+    <ClCompile Include="CancellationTests.cpp" />
+    <ClCompile Include="SpeechEventTests.cpp" />
+    <ClCompile Include="FaultRecoveryTests.cpp" />
+    <ClCompile Include="JsonValueTests.cpp" />
 
     <ClCompile Include="..\CoreEngine\SapiEngine.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
     </ClCompile>
     <ClCompile Include="..\CoreEngine\PipeClient.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
     </ClCompile>
     <ClCompile Include="..\CoreEngine\PcmFrameAssembler.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
     </ClCompile>
     <ClCompile Include="..\CoreEngine\SpeechWorker.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
     </ClCompile>
     <ClCompile Include="..\CoreEngine\AsyncLogger.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
     </ClCompile>
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Create</PrecompiledHeader>
