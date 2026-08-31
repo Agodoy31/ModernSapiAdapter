@@ -2282,6 +2282,67 @@ TEST_F(SapiEngineTests, ReadControlMessage_MalformedJson) {
     EXPECT_TRUE(foundParseError) << "Expected to find a JSON Parse Error log message.";
 }
 
+#if defined(_DEBUG)
+TEST_F(SapiEngineTests, SynthesisCompleteWaitsForFinalSapiWriteToFinish) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(mockSite.get(), 42));
+
+    mockSite->PauseNextWrite();
+    ASSERT_TRUE(server.WriteAudio({ 0x10, 0x20, 0x30, 0x40 }));
+    auto releaseWrite = wil::scope_exit([&] { mockSite->ReleaseWrite(); });
+    ASSERT_TRUE(mockSite->WaitForWritePause(1000));
+    worker.PauseNextEventForwardForTest();
+    auto releaseEventForward = wil::scope_exit([&] { worker.ReleaseEventForwardForTest(); });
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":42,\"total_audio_bytes\":4}\n"));
+    ASSERT_TRUE(worker.WaitForEventForwardPauseForTest(1000));
+
+    std::mutex completionMutex;
+    std::condition_variable completionCondition;
+    bool waitReturned = false;
+    HRESULT waitResult = E_UNEXPECTED;
+    std::thread waitThread([&] {
+        waitResult = worker.WaitUntilFinished(nullptr);
+        {
+            std::lock_guard<std::mutex> lock(completionMutex);
+            waitReturned = true;
+        }
+        completionCondition.notify_all();
+    });
+    auto releaseWriteBeforeJoin = wil::scope_exit([&] {
+        mockSite->ReleaseWrite();
+        if (waitThread.joinable()) {
+            waitThread.join();
+        }
+    });
+
+    {
+        std::unique_lock<std::mutex> lock(completionMutex);
+        EXPECT_FALSE(completionCondition.wait_for(lock, std::chrono::milliseconds(100), [&] {
+            return waitReturned;
+        }));
+    }
+    EXPECT_FALSE(worker.IsFaulted());
+
+    worker.ReleaseEventForwardForTest();
+    mockSite->ReleaseWrite();
+    waitThread.join();
+
+    EXPECT_EQ(waitResult, S_OK);
+    EXPECT_EQ(mockSite->totalBytesWritten.load(), 4u);
+    EXPECT_FALSE(worker.IsFaulted());
+}
+#endif
+
 TEST_F(SapiEngineTests, SpeakCancelsPromptlyEvenWhenOutputSiteWriteBlocks) {
     ControlPipeTestServer server;
     ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);

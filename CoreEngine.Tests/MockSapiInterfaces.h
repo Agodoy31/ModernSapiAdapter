@@ -55,6 +55,29 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
         });
     }
 
+    void PauseNextWrite() {
+        std::lock_guard<std::mutex> lock(m_writePauseMutex);
+        m_pauseNextWrite = true;
+        m_writePaused = false;
+        m_releaseWrite = false;
+    }
+
+    bool WaitForWritePause(DWORD timeoutMs) {
+        std::unique_lock<std::mutex> lock(m_writePauseMutex);
+        return m_writePauseCondition.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&] {
+            return m_writePaused;
+        });
+    }
+
+    void ReleaseWrite() {
+        {
+            std::lock_guard<std::mutex> lock(m_writePauseMutex);
+            m_pauseNextWrite = false;
+            m_releaseWrite = true;
+        }
+        m_writePauseCondition.notify_all();
+    }
+
     IFACEMETHODIMP AddEvents(const SPEVENT* pEventArray, ULONG ulCount) noexcept override {
         std::lock_guard<std::mutex> lock(eventsMutex);
         if (pEventArray && ulCount > 0) {
@@ -70,6 +93,17 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
         return getActionsCallback ? getActionsCallback() : actions.load();
     }
     IFACEMETHODIMP Write(const void* data, ULONG cb, ULONG* pcbWritten) noexcept override {
+        {
+            std::unique_lock<std::mutex> lock(m_writePauseMutex);
+            if (m_pauseNextWrite) {
+                m_pauseNextWrite = false;
+                m_writePaused = true;
+                m_writePauseCondition.notify_all();
+                m_writePauseCondition.wait(lock, [&] { return m_releaseWrite; });
+                m_writePaused = false;
+                m_releaseWrite = false;
+            }
+        }
         const DWORD delay = writeDelayMs.load();
         if (delay > 0) {
             Sleep(delay);
@@ -105,6 +139,11 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
 
 private:
     std::atomic_bool m_rejectedWriteObserved = false;
+    std::mutex m_writePauseMutex;
+    std::condition_variable m_writePauseCondition;
+    bool m_pauseNextWrite = false;
+    bool m_writePaused = false;
+    bool m_releaseWrite = false;
 };
 
 struct MockSpDataKey : winrt::implements<MockSpDataKey, ISpDataKey>
