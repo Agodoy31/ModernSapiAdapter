@@ -65,7 +65,7 @@ TEST_F(SapiEngineTests, AbortObservationRejectsPcmBeforeCancellationTransportSta
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     engine->m_cpSite.copy_from(mockSite.get());
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 44));
+    ASSERT_TRUE(worker.Start(44));
     worker.PauseNextAbortTransitionForTest();
     mockSite->actions = SPVES_ABORT;
 
@@ -105,7 +105,7 @@ TEST_F(SapiEngineTests, CancellationRejectsAnInitiallyApprovedEventAtTheSapiBoun
     engine->m_cpSite.copy_from(mockSite.get());
     engine->m_speakIdCounter = 45;
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 45));
+    ASSERT_TRUE(worker.Start(45));
     worker.PauseNextEventForwardForTest();
 
     ASSERT_TRUE(server.WriteControl(
@@ -143,7 +143,7 @@ TEST_F(SapiEngineTests, CancellationDiscardsCarriedPcmBeforeTheNextRequest) {
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     engine->m_cpSite.copy_from(mockSite.get());
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 13));
+    ASSERT_TRUE(worker.Start(13));
     ASSERT_TRUE(server.WriteAudio({ 0xA1 }));
     for (int attempt = 0; attempt < 100 && worker.RawAudioBytesForTest() != 1; ++attempt) Sleep(1);
     ASSERT_EQ(worker.RawAudioBytesForTest(), 1u);
@@ -161,7 +161,7 @@ TEST_F(SapiEngineTests, CancellationDiscardsCarriedPcmBeforeTheNextRequest) {
     EXPECT_TRUE(cancellationJoin.Join(2000));
     ASSERT_EQ(cancellationResult, S_OK);
 
-    ASSERT_TRUE(worker.Start(nullptr, 14));
+    ASSERT_TRUE(worker.Start(14));
     ASSERT_TRUE(server.WriteAudio({ 0xB1, 0xB2 }));
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":14,\"total_audio_bytes\":2}\n"));
@@ -331,7 +331,7 @@ TEST_F(SapiEngineTests, SpeakCancelsPromptlyEvenWhenOutputSiteWriteBlocks) {
     mockSite->writeDelayMs = 300;
 
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(mockSite.get(), 42));
+    ASSERT_TRUE(worker.Start(42));
 
     // Send an audio chunk to trigger the blocking Write()
     ASSERT_TRUE(server.WriteAudio({ 0x10, 0x20, 0x30, 0x40 }));
@@ -376,7 +376,7 @@ TEST_F(SapiEngineTests, SynthesisCompleteWhileCancellingCompletesPromptly) {
     engine->m_cpSite.copy_from(mockSite.get());
 
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(mockSite.get(), 42));
+    ASSERT_TRUE(worker.Start(42));
 
     mockSite->actions = SPVES_ABORT;
 
@@ -410,7 +410,7 @@ TEST_F(SapiEngineTests, IgnoredCancellationTimesOutTheEntireTransaction) {
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 35));
+    ASSERT_TRUE(worker.Start(35));
 
     HRESULT cancellationResult = S_OK;
     std::atomic_bool cancellationReturned{false};

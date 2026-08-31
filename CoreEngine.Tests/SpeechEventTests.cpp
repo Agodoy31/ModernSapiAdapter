@@ -154,7 +154,7 @@ TEST_F(SapiEngineTests, MatchingProviderEventsKeepLongRequestAlive) {
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 34));
+    ASSERT_TRUE(worker.Start(34));
 
     HRESULT waitResult = E_FAIL;
     std::thread waitThread([&] {
@@ -186,7 +186,7 @@ TEST_F(SapiEngineTests, WarningLogDoesNotFaultSession) {
     engine->m_cpSite.copy_from(mockSite.get());
 
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(mockSite.get(), 43));
+    ASSERT_TRUE(worker.Start(43));
 
     std::thread serverThread([&] {
         server.WriteControl("{\"event\":\"log\",\"speak_id\":43,\"severity\":\"warning\",\"message\":\"Cancel ignored: speak_id 43 already completed\"}\n");

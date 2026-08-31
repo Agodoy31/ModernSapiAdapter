@@ -157,7 +157,7 @@ TEST_F(SapiEngineTests, TerminalBeforeOverrunAudioForwardsOnlyDeclaredFrames) {
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     engine->m_cpSite.copy_from(mockSite.get());
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 26));
+    ASSERT_TRUE(worker.Start(26));
     worker.PauseNextEventForwardForTest();
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":26,\"total_audio_bytes\":2}\n"));
@@ -182,7 +182,7 @@ TEST_F(SapiEngineTests, WorkerReassemblesAwkward24BitStereoPipeFragments) {
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     engine->m_cpSite.copy_from(mockSite.get());
     SpeechWorker worker(engine.get(), &client, 6);
-    ASSERT_TRUE(worker.Start(nullptr, 27));
+    ASSERT_TRUE(worker.Start(27));
 
     ASSERT_TRUE(server.WriteAudio({ 0x01 }));
     for (int attempt = 0; attempt < 100 && worker.RawAudioBytesForTest() != 1; ++attempt) Sleep(1);
@@ -221,7 +221,7 @@ TEST_F(SapiEngineTests, SynthesisCompleteWaitsForFinalSapiWriteToFinish) {
     engine->m_cpSite.copy_from(mockSite.get());
 
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(mockSite.get(), 42));
+    ASSERT_TRUE(worker.Start(42));
 
     mockSite->PauseNextWrite();
     ASSERT_TRUE(server.WriteAudio({ 0x10, 0x20, 0x30, 0x40 }));

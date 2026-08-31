@@ -97,7 +97,7 @@ TEST_F(SapiEngineTests, PipeDisconnectFaultsActiveWorkerWithoutRetryingForever) 
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 31));
+    ASSERT_TRUE(worker.Start(31));
 
     HRESULT waitResult = S_OK;
     std::atomic_bool waitReturned{false};
@@ -133,7 +133,7 @@ TEST_F(SapiEngineTests, SilentActiveRequestTimesOutInsteadOfHoldingSapiForever) 
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 32));
+    ASSERT_TRUE(worker.Start(32));
 
     HRESULT waitResult = S_OK;
     std::atomic_bool waitReturned{false};
@@ -181,7 +181,7 @@ TEST_F(SapiEngineTests, InvalidSpeechEventSpeakIdQuarantinesTheWorker) {
         ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
         auto engine = winrt::make_self<CSapiEngine>();
         SpeechWorker worker(engine.get(), &client, 2);
-        ASSERT_TRUE(worker.Start(nullptr, 40));
+        ASSERT_TRUE(worker.Start(40));
 
         ASSERT_TRUE(server.WriteControl(invalidEvent));
 
@@ -206,7 +206,7 @@ TEST_F(SapiEngineTests, MalformedRequiredSpeechEventNumbersQuarantineTheWorker) 
         ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
         auto engine = winrt::make_self<CSapiEngine>();
         SpeechWorker worker(engine.get(), &client, 2);
-        ASSERT_TRUE(worker.Start(nullptr, 41));
+        ASSERT_TRUE(worker.Start(41));
 
         ASSERT_TRUE(server.WriteControl(malformedEvent));
 
@@ -224,7 +224,7 @@ TEST_F(SapiEngineTests, StaleSpeechEventWithValidSpeakIdDoesNotQuarantineTheWork
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 43));
+    ASSERT_TRUE(worker.Start(43));
 
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"word_boundary\",\"speak_id\":42,\"text_offset\":0,\"text_length\":1,\"audio_offset_ms\":0}\n"));
@@ -244,7 +244,7 @@ TEST_F(SapiEngineTests, InvalidCancellationBoundaryFaultsTheWorker) {
 
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 7));
+    ASSERT_TRUE(worker.Start(7));
 
     HRESULT cancellationResult = S_OK;
     std::thread cancellationThread([&] {
@@ -271,7 +271,7 @@ TEST_F(SapiEngineTests, MisalignedSynthesisCompleteTotalFaultsTheWorker) {
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 11));
+    ASSERT_TRUE(worker.Start(11));
 
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":11,\"total_audio_bytes\":1}\n"));
@@ -288,7 +288,7 @@ TEST_F(SapiEngineTests, MissingSynthesisCompleteTotalFaultsTheWorker) {
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 21));
+    ASSERT_TRUE(worker.Start(21));
 
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":21}\n"));
@@ -305,7 +305,7 @@ TEST_F(SapiEngineTests, NonIntegerSynthesisCompleteTotalFaultsTheWorker) {
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 22));
+    ASSERT_TRUE(worker.Start(22));
 
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":22,\"total_audio_bytes\":2.5}\n"));
@@ -323,7 +323,7 @@ TEST_F(SapiEngineTests, IntegralFloatSynthesisCompleteFieldsCompleteTheRequest) 
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 22));
+    ASSERT_TRUE(worker.Start(22));
 
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":22.0,\"total_audio_bytes\":0.0}\n"));
@@ -341,7 +341,7 @@ TEST_F(SapiEngineTests, DuplicateSynthesisCompleteTotalFaultsTheWorker) {
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 23));
+    ASSERT_TRUE(worker.Start(23));
 
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":23,\"total_audio_bytes\":0}\n"));
@@ -361,7 +361,7 @@ TEST_F(SapiEngineTests, StaleSynthesisCompleteForDifferentSpeakIdDoesNotFaultIdl
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 32));
+    ASSERT_TRUE(worker.Start(32));
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":32,\"total_audio_bytes\":0}\n"));
     ASSERT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
@@ -374,7 +374,7 @@ TEST_F(SapiEngineTests, StaleSynthesisCompleteForDifferentSpeakIdDoesNotFaultIdl
 
     EXPECT_TRUE(eventPaused);
     EXPECT_FALSE(worker.IsFaulted());
-    EXPECT_TRUE(worker.Start(nullptr, 33));
+    EXPECT_TRUE(worker.Start(33));
     worker.Stop();
 }
 
@@ -386,7 +386,7 @@ TEST_F(SapiEngineTests, AudioAfterNormalCompletionFaultsIdleWorker) {
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 24));
+    ASSERT_TRUE(worker.Start(24));
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":24,\"total_audio_bytes\":0}\n"));
     ASSERT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
@@ -405,7 +405,7 @@ TEST_F(SapiEngineTests, FaultPendingRejectsStartBeforeFaultPublicationCompletes)
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 28));
+    ASSERT_TRUE(worker.Start(28));
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":28,\"total_audio_bytes\":0}\n"));
     ASSERT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
@@ -415,7 +415,7 @@ TEST_F(SapiEngineTests, FaultPendingRejectsStartBeforeFaultPublicationCompletes)
     const bool publicationPaused = worker.WaitForFaultPublicationPauseForTest(1000);
     EXPECT_TRUE(publicationPaused);
     EXPECT_TRUE(worker.IsFaulted());
-    EXPECT_FALSE(worker.Start(nullptr, 29));
+    EXPECT_FALSE(worker.Start(29));
     worker.ReleaseFaultPublicationForTest();
 
     EXPECT_TRUE(worker.WaitForFaultForTest(1000));
@@ -432,7 +432,7 @@ TEST_F(SapiEngineTests, FrameAssemblyFailureFaultsWorkerWithoutEscapingThread) {
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     engine->m_cpSite.copy_from(mockSite.get());
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 30));
+    ASSERT_TRUE(worker.Start(30));
     worker.FailNextFrameAssemblyForTest();
 
     ASSERT_TRUE(server.WriteAudio({ 0xF1, 0xF2 }));
@@ -477,7 +477,7 @@ TEST_F(SapiEngineTests, AudioAfterCancellationCompletionFaultsIdleWorker) {
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 25));
+    ASSERT_TRUE(worker.Start(25));
 
     HRESULT cancellationResult = E_FAIL;
     std::thread cancellationThread([&] { cancellationResult = worker.CancelAndDrain(); });
@@ -504,7 +504,7 @@ TEST_F(SapiEngineTests, MisalignedCancellationTotalFaultsTheWorker) {
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
     auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(nullptr, 12));
+    ASSERT_TRUE(worker.Start(12));
 
     HRESULT cancellationResult = S_OK;
     std::thread cancellationThread([&] { cancellationResult = worker.CancelAndDrain(); });
@@ -530,7 +530,7 @@ TEST_F(SapiEngineTests, RequestErrorFailsUtteranceWithoutKillingProvider) {
     engine->m_cpSite.copy_from(mockSite.get());
 
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(mockSite.get(), 44));
+    ASSERT_TRUE(worker.Start(44));
 
     const auto cancelStart = std::chrono::steady_clock::now();
 
@@ -562,7 +562,7 @@ TEST_F(SapiEngineTests, FatalErrorFaultsSessionAndTriggersRestart) {
     engine->m_cpSite.copy_from(mockSite.get());
 
     SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(mockSite.get(), 45));
+    ASSERT_TRUE(worker.Start(45));
 
     std::thread serverThread([&] {
         server.WriteControl("{\"event\":\"log\",\"speak_id\":45,\"severity\":\"fatal\",\"message\":\"Fatal provider crash\"}\n");

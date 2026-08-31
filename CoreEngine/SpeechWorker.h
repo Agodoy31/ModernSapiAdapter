@@ -41,11 +41,10 @@ public:
 
     /**
      * @brief Starts background worker thread operations for a speech synthesis request when the pipe session is usable.
-     * @param pSite Opaque output site pointer (tracked internally by engine).
      * @param speakId The unique identifier for this speech request.
      * @return True when the request entered the speaking state; false when the pipe session is quarantined.
      */
-    bool Start(void* pSite, uint64_t speakId);
+    bool Start(uint64_t speakId);
 
     /**
      * @brief Signals worker threads to stop and cancels pending I/O.
@@ -107,6 +106,7 @@ private:
 
     struct AudioIngestResult
     {
+        RequestToken token{};
         bool protocolBoundaryFailed = false;
         bool shouldDeliverAudio = false;
         PcmFrameBatch spansToWrite{};
@@ -114,6 +114,7 @@ private:
 
     [[nodiscard]] AudioIngestResult IngestAudioChunkLocked(const uint8_t* pChunkData, DWORD bytesRead);
     [[nodiscard]] bool UpdateAfterAudioDeliveryLocked(
+        const RequestToken& batchToken,
         size_t deliveredBytes,
         bool writeAccepted,
         uint64_t& outCancellationToSend);
@@ -176,16 +177,8 @@ private:
     std::atomic_bool m_faultPublicationStarted{false}; /**< Ensures concurrent pipe failures publish quarantine once. */
     std::atomic_bool m_faultVisible{false};  /**< Prevents new SAPI event callbacks once a fault is visible. */
     std::condition_variable m_requestChanged;/**< Wakes synchronous Speak and purge callers at terminal boundaries. */
-    UpstreamState m_upstreamState{UpstreamState::Idle}; /**< Active request upstream lifecycle state. */
-    DownstreamState m_downstreamState{DownstreamState::Idle}; /**< Active request downstream lifecycle state. */
-    bool m_faultPending{false};              /**< A protocol violation was detected before full Faulted publication. */
-    uint64_t m_activeSpeakId{0};             /**< Identifier for the active request. */
-    uint64_t m_upstreamTerminalBytes{0};     /**< Declared raw PCM byte count for normal completion or cancellation. */
-    bool m_upstreamFinished{false};          /**< Provider has declared the final PCM byte count. */
-    HRESULT m_requestCompletionHr{S_OK};     /**< Result of the active request. */
-    ULONGLONG m_cancellationDeadlineTick{0}; /**< Absolute deadline for the active cancellation transaction. */
-    uint64_t m_rawAudioBytesRead{0};         /**< Raw bytes consumed from the audio pipe for the active request. */
-    uint64_t m_deliveredAudioBytes{0};       /**< Bytes successfully written to ISpTTSEngineSite. */
+    RequestContext m_context{};              /**< Active request execution context and generation token. */
+    uint64_t m_generationCounter{0};         /**< Monotonically increasing generation sequence counter. */
     PcmFrameAssembler m_frameAssembler;      /**< Reassembles provider-native PCM frames under m_requestMutex. */
 #if defined(_DEBUG)
     std::mutex m_eventForwardTestMutex;

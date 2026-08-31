@@ -254,7 +254,7 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
 
     speakReq["fragments"] = fragments;
 
-    if (!worker->Start(pOutputSite, speakId))
+    if (!worker->Start(speakId))
     {
         return E_FAIL;
     }

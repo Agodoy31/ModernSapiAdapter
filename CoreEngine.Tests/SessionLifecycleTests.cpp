@@ -332,7 +332,7 @@ TEST_F(SapiEngineTests, IdleProviderRemainsUsableBeyondTheActiveRequestDeadline)
 
     Sleep(1700);
 
-    ASSERT_TRUE(worker.Start(nullptr, 33));
+    ASSERT_TRUE(worker.Start(33));
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":33,\"total_audio_bytes\":0}\n"));
     EXPECT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
