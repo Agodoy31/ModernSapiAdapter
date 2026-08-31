@@ -130,6 +130,7 @@
     <ClCompile Include="JsonValueTests.cpp" />
     <ClCompile Include="AudioFormatUtilsTests.cpp" />
     <ClCompile Include="PipeSecurityUtilsTests.cpp" />
+    <ClCompile Include="AsyncLoggerTests.cpp" />
 
     <ClCompile Include="..\CoreEngine\SapiEngine.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
