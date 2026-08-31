@@ -689,13 +689,16 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
         }
 
         const ULONGLONG lastProgress = m_lastProviderProgressTick.load(std::memory_order_acquire);
-        if (m_context.upstreamState == UpstreamState::Active &&
+        const bool isActivelySynthesizing = (m_context.upstreamState == UpstreamState::Active);
+        const bool isAwaitingTerminalAudio = (m_context.upstreamFinished && m_context.downstreamState == DownstreamState::Speaking);
+
+        if ((isActivelySynthesizing || isAwaitingTerminalAudio) &&
             HasSynthesisInactivityTimedOut(now, lastProgress, SynthesisInactivityTimeoutMs))
         {
             const uint64_t speakId = m_context.token.speakId;
             lock.unlock();
-            CoreLog(L"[SpeechWorker] Provider made no progress for %llu ms during speak_id %llu; quarantining session.",
-                SynthesisInactivityTimeoutMs, speakId);
+            CoreLog(L"[SpeechWorker] Provider made no progress for %llu ms during speak_id %llu (awaiting_terminal=%d); quarantining session.",
+                SynthesisInactivityTimeoutMs, speakId, isAwaitingTerminalAudio ? 1 : 0);
             EnterFaultedState();
             return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
         }
