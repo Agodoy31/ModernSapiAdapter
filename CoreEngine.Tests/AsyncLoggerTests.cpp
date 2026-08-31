@@ -25,38 +25,72 @@ namespace
         std::to_wstring(GetTickCount64()) + L"-" + suffix;
 }
 
-[[nodiscard]] bool FileContains(const std::filesystem::path& path, const std::wstring& marker)
+[[nodiscard]] std::string ReadLogTail(const std::filesystem::path& path)
 {
-    std::wifstream stream(path);
-    const std::wstring contents{
-        std::istreambuf_iterator<wchar_t>(stream),
-        std::istreambuf_iterator<wchar_t>()};
-    return contents.find(marker) != std::wstring::npos;
+    constexpr std::streamoff maximumTailBytes = 4 * 1024 * 1024;
+    std::ifstream stream(path, std::ios::binary | std::ios::ate);
+    if (!stream)
+    {
+        return {};
+    }
+
+    const std::streamoff fileSize = stream.tellg();
+    if (fileSize < 0)
+    {
+        return {};
+    }
+
+    const std::streamoff readStart = fileSize > maximumTailBytes
+        ? fileSize - maximumTailBytes
+        : 0;
+    stream.seekg(readStart, std::ios::beg);
+    return {
+        std::istreambuf_iterator<char>(stream),
+        std::istreambuf_iterator<char>()};
+}
+
+[[nodiscard]] std::string MarkerBytes(const std::wstring& marker)
+{
+    std::string markerBytes;
+    markerBytes.reserve(marker.size());
+    for (const wchar_t character : marker)
+    {
+        if (character > L'\x7f')
+        {
+            ADD_FAILURE() << "AsyncLogger test marker is not ASCII";
+            return {};
+        }
+        markerBytes.push_back(static_cast<char>(character));
+    }
+    return markerBytes;
 }
 
 } // namespace
 
 TEST(AsyncLoggerTests, ShutdownDrainsEveryAcceptedMessage)
 {
-    auto& logger = AsyncLogger::GetInstance();
+    auto* logger = AsyncLogger::GetInstance();
+    ASSERT_NE(nullptr, logger);
     const std::wstring first = UniqueMarker(L"drain-first");
     const std::wstring second = UniqueMarker(L"drain-second");
 
-    logger.Log(first);
-    logger.Log(second);
+    logger->Log(first);
+    logger->Log(second);
 
-    ASSERT_TRUE(logger.Shutdown());
-    EXPECT_TRUE(FileContains(CoreEngineLogPath(), first));
-    EXPECT_TRUE(FileContains(CoreEngineLogPath(), second));
+    ASSERT_TRUE(logger->Shutdown());
+    const std::string logTail = ReadLogTail(CoreEngineLogPath());
+    EXPECT_NE(logTail.find(MarkerBytes(first)), std::string::npos);
+    EXPECT_NE(logTail.find(MarkerBytes(second)), std::string::npos);
 }
 
 TEST(AsyncLoggerTests, ConcurrentShutdownCallsAreIdempotent)
 {
-    auto& logger = AsyncLogger::GetInstance();
+    auto* logger = AsyncLogger::GetInstance();
+    ASSERT_NE(nullptr, logger);
     const std::wstring pendingMessage(32 * 1024, L'x');
     for (size_t messageIndex = 0; messageIndex < 16; ++messageIndex)
     {
-        logger.Log(pendingMessage);
+        logger->Log(pendingMessage);
     }
 
     wil::unique_event startShutdown(CreateEventW(nullptr, TRUE, FALSE, nullptr));
@@ -74,7 +108,7 @@ TEST(AsyncLoggerTests, ConcurrentShutdownCallsAreIdempotent)
         }
 
         WaitForSingleObject(startShutdown.get(), INFINITE);
-        shutdownSucceeded.store(logger.Shutdown(), std::memory_order_release);
+        shutdownSucceeded.store(logger->Shutdown(), std::memory_order_release);
     };
     std::thread firstCaller(shutdownCaller, std::ref(firstShutdownSucceeded));
     std::thread secondCaller(shutdownCaller, std::ref(secondShutdownSucceeded));
@@ -103,7 +137,8 @@ TEST(AsyncLoggerTests, ShutdownDrainsMessagesFromConcurrentProducers)
 {
     constexpr size_t producerCount = 4;
     constexpr size_t messagesPerProducer = 8;
-    auto& logger = AsyncLogger::GetInstance();
+    auto* logger = AsyncLogger::GetInstance();
+    ASSERT_NE(nullptr, logger);
     std::atomic_bool startProducing{false};
     std::vector<std::wstring> markers;
     markers.reserve(producerCount * messagesPerProducer);
@@ -121,7 +156,7 @@ TEST(AsyncLoggerTests, ShutdownDrainsMessagesFromConcurrentProducers)
         }
 
         markers.insert(markers.end(), producerMarkers.begin(), producerMarkers.end());
-        producers.emplace_back([&logger, &startProducing, producerMarkers = std::move(producerMarkers)] {
+        producers.emplace_back([logger, &startProducing, producerMarkers = std::move(producerMarkers)] {
             while (!startProducing.load(std::memory_order_acquire))
             {
                 std::this_thread::yield();
@@ -129,7 +164,7 @@ TEST(AsyncLoggerTests, ShutdownDrainsMessagesFromConcurrentProducers)
 
             for (const std::wstring& marker : producerMarkers)
             {
-                logger.Log(marker);
+                logger->Log(marker);
             }
         });
     }
@@ -140,22 +175,25 @@ TEST(AsyncLoggerTests, ShutdownDrainsMessagesFromConcurrentProducers)
         producer.join();
     }
 
-    ASSERT_TRUE(logger.Shutdown());
+    ASSERT_TRUE(logger->Shutdown());
+    const std::string logTail = ReadLogTail(CoreEngineLogPath());
     for (const std::wstring& marker : markers)
     {
-        EXPECT_TRUE(FileContains(CoreEngineLogPath(), marker));
+        EXPECT_NE(logTail.find(MarkerBytes(marker)), std::string::npos);
     }
 }
 
 TEST(AsyncLoggerTests, LoggingAfterShutdownStartsANewSession)
 {
-    auto& logger = AsyncLogger::GetInstance();
-    ASSERT_TRUE(logger.Shutdown());
+    auto* logger = AsyncLogger::GetInstance();
+    ASSERT_NE(nullptr, logger);
+    ASSERT_TRUE(logger->Shutdown());
     const std::wstring marker = UniqueMarker(L"restart");
 
-    logger.Log(marker);
+    logger->Log(marker);
 
-    ASSERT_TRUE(logger.Shutdown());
-    EXPECT_TRUE(FileContains(CoreEngineLogPath(), marker));
+    ASSERT_TRUE(logger->Shutdown());
+    const std::string logTail = ReadLogTail(CoreEngineLogPath());
+    EXPECT_NE(logTail.find(MarkerBytes(marker)), std::string::npos);
 }
 #endif

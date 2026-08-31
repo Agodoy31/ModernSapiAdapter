@@ -36,10 +36,11 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <functional>
 
 #include "gtest/gtest.h"
 
-void CoreLog(const wchar_t* fmt, ...);
+void CoreLog(const wchar_t* fmt, ...) noexcept;
 std::vector<std::wstring> GetTestLogs();
 void ClearTestLogs();

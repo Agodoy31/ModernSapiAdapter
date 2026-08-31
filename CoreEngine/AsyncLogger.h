@@ -3,35 +3,37 @@
 
 #ifdef _DEBUG
 
-#include <queue>
-#include <mutex>
-#include <condition_variable>
-#include <thread>
-#include <string>
-#include <atomic>
-#include <fstream>
-
 class AsyncLogger
 {
 public:
-    static AsyncLogger& GetInstance();
-    
-    void Log(const std::wstring& message);
+    static AsyncLogger* GetInstance() noexcept;
+    void Log(const std::wstring& message) noexcept;
+    [[nodiscard]] bool Shutdown() noexcept;
 
     AsyncLogger(const AsyncLogger&) = delete;
     AsyncLogger& operator=(const AsyncLogger&) = delete;
 
 private:
-    AsyncLogger();
-    ~AsyncLogger();
+    enum class State
+    {
+        Stopped,
+        Running,
+        Stopping,
+        StopFailed
+    };
 
-    void WorkerThread();
+    AsyncLogger() noexcept = default;
+    ~AsyncLogger() = default;
+
+    [[nodiscard]] bool StartLocked() noexcept;
+    void WorkerThread() noexcept;
 
     std::queue<std::wstring> m_queue;
     std::mutex m_mutex;
     std::condition_variable m_cv;
     std::thread m_worker;
-    std::atomic<bool> m_exit;
+    State m_state = State::Stopped;
+    bool m_stopRequested = false;
     std::wofstream m_file;
 };
 

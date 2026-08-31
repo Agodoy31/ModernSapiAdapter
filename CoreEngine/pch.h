@@ -49,8 +49,11 @@
 #include <regex>
 #include <cwctype>
 #include <fstream>
+#include <queue>
+#include <condition_variable>
+#include <new>
 #include <ShlObj.h>
 
-void CoreLog(const wchar_t* fmt, ...);
+void CoreLog(const wchar_t* fmt, ...) noexcept;
 
 #endif // PCH_H
