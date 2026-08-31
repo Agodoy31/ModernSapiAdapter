@@ -328,3 +328,46 @@ TEST_F(SapiEngineTests, SpeakDoesNotHoldTheSessionLockAcrossReentrantGetActions)
     EXPECT_EQ(speakResult, S_OK);
     EXPECT_LT(std::chrono::steady_clock::now() - speakStart, std::chrono::seconds(2));
 }
+
+TEST_F(SapiEngineTests, InFlightAudioFromCancelledRequestDoesNotIncrementNextRequestBytes) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(50));
+
+    mockSite->PauseNextWrite();
+    auto releaseWriteGuard = wil::scope_exit([&] {
+        mockSite->ReleaseWrite();
+    });
+
+    ASSERT_TRUE(server.WriteAudio({ 0x11, 0x22, 0x33, 0x44 }));
+    ASSERT_TRUE(mockSite->WaitForWritePause(1000));
+
+    worker.Stop();
+    ASSERT_TRUE(worker.Start(51));
+
+    mockSite->ReleaseWrite();
+
+    ASSERT_TRUE(server.WriteAudio({ 0x55, 0x66, 0x77, 0x88 }));
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":51,\"total_audio_bytes\":4}\n"));
+
+    EXPECT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
+    EXPECT_FALSE(worker.IsFaulted());
+    EXPECT_EQ(mockSite->totalBytesWritten.load(), 8u);
+    {
+        std::lock_guard<std::mutex> lock(mockSite->writesMutex);
+        EXPECT_EQ(mockSite->acceptedAudio, (std::vector<uint8_t>{
+            0x11, 0x22, 0x33, 0x44,
+            0x55, 0x66, 0x77, 0x88
+        }));
+    }
+}
+

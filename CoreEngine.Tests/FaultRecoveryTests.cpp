@@ -577,3 +577,53 @@ TEST_F(SapiEngineTests, FatalErrorFaultsSessionAndTriggersRestart) {
     EXPECT_EQ(hr, E_FAIL);
     EXPECT_TRUE(worker.IsFaulted());
 }
+
+TEST_F(SapiEngineTests, StalledTerminalAudioDrainTimesOut) {
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+
+    SpeechWorker worker(engine.get(), &client, 2);
+    ASSERT_TRUE(worker.Start(60));
+
+    ASSERT_TRUE(server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":60,\"total_audio_bytes\":10000}\n"));
+
+    std::vector<uint8_t> partialAudio(2000, 0x1A);
+    ASSERT_TRUE(server.WriteAudio(partialAudio));
+
+    HRESULT waitResult = S_OK;
+    std::atomic_bool waitReturned{false};
+    const auto waitStart = std::chrono::steady_clock::now();
+    std::thread waitThread([&] {
+        waitResult = worker.WaitUntilFinished(mockSite.get());
+        waitReturned = true;
+    });
+    ThreadJoinGuard waitJoin(waitThread);
+
+    const auto cleanupDeadline = waitStart + std::chrono::milliseconds(3000);
+    while (!waitReturned.load() && std::chrono::steady_clock::now() < cleanupDeadline)
+    {
+        Sleep(10);
+    }
+
+    const bool returnedBeforeCleanup = waitReturned.load();
+    const auto elapsedBeforeCleanup = std::chrono::steady_clock::now() - waitStart;
+    if (!returnedBeforeCleanup)
+    {
+        worker.Stop();
+    }
+    EXPECT_TRUE(waitJoin.Join(2000));
+
+    EXPECT_TRUE(returnedBeforeCleanup);
+    EXPECT_EQ(waitResult, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+    EXPECT_TRUE(worker.IsFaulted());
+    EXPECT_GE(elapsedBeforeCleanup, std::chrono::milliseconds(1300));
+    EXPECT_LT(elapsedBeforeCleanup, std::chrono::milliseconds(3000));
+}
+

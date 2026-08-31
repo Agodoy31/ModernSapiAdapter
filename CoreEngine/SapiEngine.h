@@ -35,6 +35,8 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_RequestErrorFailsUtteranceWithoutKillingProvider_Test;
     friend class SapiEngineTests_FatalErrorFaultsSessionAndTriggersRestart_Test;
     friend class SapiEngineTests_GetObjectTokenDoesNotWaitForActiveSpeakSerialization_Test;
+    friend class SapiEngineTests_InFlightAudioFromCancelledRequestDoesNotIncrementNextRequestBytes_Test;
+    friend class SapiEngineTests_StalledTerminalAudioDrainTimesOut_Test;
 public:
     /**
      * @brief Constructs a new CSapiEngine instance.
