@@ -617,42 +617,63 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
     return m_requestCompletionHr;
 }
 
+bool SpeechWorker::HasSpeakingAudioOverrunLocked() const noexcept
+{
+    return m_rawAudioBytesRead > m_upstreamTerminalBytes ||
+           m_deliveredAudioBytes > m_upstreamTerminalBytes;
+}
+
+bool SpeechWorker::IsSpeakingTerminalReachedLocked() const noexcept
+{
+    return m_rawAudioBytesRead == m_upstreamTerminalBytes &&
+           m_deliveredAudioBytes == m_upstreamTerminalBytes &&
+           !m_frameAssembler.HasCarry();
+}
+
+bool SpeechWorker::IsCancellingTerminalReachedLocked() const noexcept
+{
+    return m_rawAudioBytesRead >= m_upstreamTerminalBytes;
+}
+
+void SpeechWorker::ResetToIdleLocked() noexcept
+{
+    m_frameAssembler.Reset();
+    m_upstreamState = UpstreamState::Idle;
+    m_downstreamState = DownstreamState::Idle;
+    m_requestChanged.notify_all();
+}
+
 bool SpeechWorker::CheckTerminalBoundaryLocked()
 {
     if (m_upstreamState == UpstreamState::Failed)
     {
-        m_frameAssembler.Reset();
-        m_upstreamState = UpstreamState::Idle;
-        m_downstreamState = DownstreamState::Idle;
-        m_requestChanged.notify_all();
+        ResetToIdleLocked();
         return false;
     }
-    else if (!m_upstreamFinished)
+
+    if (!m_upstreamFinished)
     {
         return false;
     }
-    else if (m_downstreamState == DownstreamState::Speaking)
+
+    switch (m_downstreamState)
     {
-        if (m_rawAudioBytesRead > m_upstreamTerminalBytes ||
-            m_deliveredAudioBytes > m_upstreamTerminalBytes)
+    case DownstreamState::Speaking:
+    {
+        if (HasSpeakingAudioOverrunLocked())
         {
             CoreLog(L"[SpeechWorker] Provider audio overrun: raw=%llu delivered=%llu declared=%llu",
                 m_rawAudioBytesRead, m_deliveredAudioBytes, m_upstreamTerminalBytes);
             return true;
         }
-        else if (m_rawAudioBytesRead == m_upstreamTerminalBytes &&
-                 m_deliveredAudioBytes == m_upstreamTerminalBytes &&
-                 !m_frameAssembler.HasCarry())
+        else if (IsSpeakingTerminalReachedLocked())
         {
 #if defined(_DEBUG)
             CoreLog(L"[ThreadTrace] speak_id=%llu terminal_boundary_reached tick=%llu declared=%llu raw=%llu delivered=%llu.",
                 m_activeSpeakId, GetTickCount64(), m_upstreamTerminalBytes,
                 m_rawAudioBytesRead, m_deliveredAudioBytes);
 #endif
-            m_frameAssembler.Reset();
-            m_upstreamState = UpstreamState::Idle;
-            m_downstreamState = DownstreamState::Idle;
-            m_requestChanged.notify_all();
+            ResetToIdleLocked();
             return false;
         }
         else
@@ -660,9 +681,10 @@ bool SpeechWorker::CheckTerminalBoundaryLocked()
             return false;
         }
     }
-    else if (m_downstreamState == DownstreamState::Cancelling)
+
+    case DownstreamState::Cancelling:
     {
-        if (m_rawAudioBytesRead >= m_upstreamTerminalBytes)
+        if (IsCancellingTerminalReachedLocked())
         {
 #if defined(_DEBUG)
             const ULONGLONG cancellationStartTick = m_cancellationDeadlineTick >= CancellationTimeoutMs
@@ -673,10 +695,7 @@ bool SpeechWorker::CheckTerminalBoundaryLocked()
                 cancellationStartTick == 0 ? 0 : GetTickCount64() - cancellationStartTick,
                 m_upstreamTerminalBytes, m_rawAudioBytesRead);
 #endif
-            m_frameAssembler.Reset();
-            m_upstreamState = UpstreamState::Idle;
-            m_downstreamState = DownstreamState::Idle;
-            m_requestChanged.notify_all();
+            ResetToIdleLocked();
             return false;
         }
         else
@@ -684,10 +703,13 @@ bool SpeechWorker::CheckTerminalBoundaryLocked()
             return false;
         }
     }
-    else
-    {
+
+    case DownstreamState::Idle:
+    case DownstreamState::Faulted:
         return false;
     }
+
+    return false;
 }
 
 void SpeechWorker::AudioThreadProc()
@@ -808,7 +830,9 @@ void SpeechWorker::AudioThreadProc()
 
             {
                 std::lock_guard<std::mutex> lock(m_requestMutex);
-                if (m_downstreamState == DownstreamState::Speaking)
+                switch (m_downstreamState)
+                {
+                case DownstreamState::Speaking:
                 {
                     m_deliveredAudioBytes += totalBytesDeliveredInBatch;
                     if (!writeAccepted)
@@ -825,10 +849,18 @@ void SpeechWorker::AudioThreadProc()
                     {
                         protocolBoundaryFailed = CheckTerminalBoundaryLocked();
                     }
+                    break;
                 }
-                else if (m_downstreamState == DownstreamState::Cancelling)
+
+                case DownstreamState::Cancelling:
                 {
                     protocolBoundaryFailed = CheckTerminalBoundaryLocked();
+                    break;
+                }
+
+                case DownstreamState::Idle:
+                case DownstreamState::Faulted:
+                    break;
                 }
 
                 if (protocolBoundaryFailed)

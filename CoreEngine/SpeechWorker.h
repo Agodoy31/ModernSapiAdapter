@@ -109,6 +109,11 @@ private:
      */
     bool CheckTerminalBoundaryLocked();
 
+    [[nodiscard]] bool HasSpeakingAudioOverrunLocked() const noexcept;
+    [[nodiscard]] bool IsSpeakingTerminalReachedLocked() const noexcept;
+    [[nodiscard]] bool IsCancellingTerminalReachedLocked() const noexcept;
+    void ResetToIdleLocked() noexcept;
+
     /**
      * @brief Publishes the active request's cancellation state while m_requestMutex is held.
      */
