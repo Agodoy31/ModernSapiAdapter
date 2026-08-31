@@ -106,6 +106,7 @@ bool SpeechWorker::Start(void* /*pSite*/, uint64_t speakId)
     m_activeSpeakId = speakId;
     m_deliveredAudioBytes = 0;
     m_rawAudioBytesRead = 0;
+    m_sapiWriteBatchActive = false;
     m_upstreamTerminalBytes = 0;
     m_upstreamFinished = false;
     m_requestCompletionHr = S_OK;
@@ -652,7 +653,8 @@ bool SpeechWorker::CheckTerminalBoundaryLocked()
         }
         else if (m_rawAudioBytesRead > m_upstreamTerminalBytes ||
                  m_deliveredAudioBytes > m_upstreamTerminalBytes ||
-                 (m_rawAudioBytesRead == m_upstreamTerminalBytes &&
+                 (!m_sapiWriteBatchActive &&
+                  m_rawAudioBytesRead == m_upstreamTerminalBytes &&
                   (m_deliveredAudioBytes != m_upstreamTerminalBytes || m_frameAssembler.HasCarry())))
         {
             CoreLog(L"[SpeechWorker] Provider audio boundary disagrees with raw (%llu), delivered (%llu), or carried PCM.",
@@ -751,6 +753,7 @@ void SpeechWorker::AudioThreadProc()
                 else
                 {
                     shouldDeliverAudio = true;
+                    m_sapiWriteBatchActive = true;
                 }
             }
             else if (m_downstreamState == DownstreamState::Cancelling)
@@ -802,6 +805,7 @@ void SpeechWorker::AudioThreadProc()
 
             {
                 std::lock_guard<std::mutex> lock(m_requestMutex);
+                m_sapiWriteBatchActive = false;
                 if (m_downstreamState == DownstreamState::Speaking)
                 {
                     m_deliveredAudioBytes += totalBytesDeliveredInBatch;

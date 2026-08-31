@@ -175,6 +175,7 @@ private:
     ULONGLONG m_cancellationDeadlineTick{0}; /**< Absolute deadline for the active cancellation transaction. */
     uint64_t m_rawAudioBytesRead{0};         /**< Raw bytes consumed from the audio pipe for the active request. */
     uint64_t m_deliveredAudioBytes{0};       /**< Bytes successfully written to ISpTTSEngineSite. */
+    bool m_sapiWriteBatchActive = false;     /**< m_requestMutex makes terminal checks observe the unlocked SAPI delivery handoff atomically. */
     PcmFrameAssembler m_frameAssembler;      /**< Reassembles provider-native PCM frames under m_requestMutex. */
 #if defined(_DEBUG)
     std::mutex m_eventForwardTestMutex;
