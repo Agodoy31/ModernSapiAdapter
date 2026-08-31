@@ -53,17 +53,50 @@ TEST(AsyncLoggerTests, ShutdownDrainsEveryAcceptedMessage)
 TEST(AsyncLoggerTests, ConcurrentShutdownCallsAreIdempotent)
 {
     auto& logger = AsyncLogger::GetInstance();
-    logger.Log(UniqueMarker(L"concurrent-shutdown"));
+    const std::wstring pendingMessage(32 * 1024, L'x');
+    for (size_t messageIndex = 0; messageIndex < 16; ++messageIndex)
+    {
+        logger.Log(pendingMessage);
+    }
+
+    wil::unique_event startShutdown(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    wil::unique_event callersReady(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    ASSERT_TRUE(startShutdown);
+    ASSERT_TRUE(callersReady);
+    std::atomic_uint shutdownCallerCount{0};
     std::atomic_bool firstShutdownSucceeded{false};
     std::atomic_bool secondShutdownSucceeded{false};
 
-    std::thread firstCaller([&] { firstShutdownSucceeded = logger.Shutdown(); });
-    std::thread secondCaller([&] { secondShutdownSucceeded = logger.Shutdown(); });
+    const auto shutdownCaller = [&](std::atomic_bool& shutdownSucceeded) {
+        if (shutdownCallerCount.fetch_add(1, std::memory_order_acq_rel) + 1 == 2)
+        {
+            SetEvent(callersReady.get());
+        }
+
+        WaitForSingleObject(startShutdown.get(), INFINITE);
+        shutdownSucceeded.store(logger.Shutdown(), std::memory_order_release);
+    };
+    std::thread firstCaller(shutdownCaller, std::ref(firstShutdownSucceeded));
+    std::thread secondCaller(shutdownCaller, std::ref(secondShutdownSucceeded));
+    auto releaseAndJoinCallers = wil::scope_exit([&] {
+        SetEvent(startShutdown.get());
+        if (firstCaller.joinable())
+        {
+            firstCaller.join();
+        }
+        if (secondCaller.joinable())
+        {
+            secondCaller.join();
+        }
+    });
+
+    ASSERT_EQ(WaitForSingleObject(callersReady.get(), 1000), WAIT_OBJECT_0);
+    ASSERT_TRUE(SetEvent(startShutdown.get()));
     firstCaller.join();
     secondCaller.join();
 
-    EXPECT_TRUE(firstShutdownSucceeded.load());
-    EXPECT_TRUE(secondShutdownSucceeded.load());
+    EXPECT_TRUE(firstShutdownSucceeded.load(std::memory_order_acquire));
+    EXPECT_TRUE(secondShutdownSucceeded.load(std::memory_order_acquire));
 }
 
 TEST(AsyncLoggerTests, ShutdownDrainsMessagesFromConcurrentProducers)
