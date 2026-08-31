@@ -5,6 +5,9 @@
 
 #include "pch.h"
 #include "SapiEngine.h"
+#ifdef _DEBUG
+#include "AsyncLogger.h"
+#endif
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
@@ -75,7 +78,19 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
 
 STDAPI DllCanUnloadNow(void)
 {
-    return winrt::get_module_lock() ? S_FALSE : S_OK;
+    if (winrt::get_module_lock() != 0)
+    {
+        return S_FALSE;
+    }
+
+#ifdef _DEBUG
+    if (auto* logger = AsyncLogger::GetInstance())
+    {
+        static_cast<void>(logger->Shutdown());
+    }
+#endif
+
+    return S_OK;
 }
 
 STDAPI DllRegisterServer(void)
