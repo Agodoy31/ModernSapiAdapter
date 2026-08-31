@@ -13,42 +13,10 @@
 #include <thread>
 #include <atomic>
 #include "TestPathUtils.h"
+#include "PipeSecurityUtils.h"
 
 namespace TestInfrastructure
 {
-
-inline std::wstring GetCurrentUserSidForTest()
-{
-    HANDLE token = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
-    {
-        return L"DefaultUser";
-    }
-
-    wil::unique_handle tokenHandle(token);
-    DWORD bytesRequired = 0;
-    GetTokenInformation(tokenHandle.get(), TokenUser, nullptr, 0, &bytesRequired);
-    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
-    {
-        return L"DefaultUser";
-    }
-
-    std::vector<BYTE> tokenBuffer(bytesRequired);
-    if (!GetTokenInformation(tokenHandle.get(), TokenUser, tokenBuffer.data(), bytesRequired, &bytesRequired))
-    {
-        return L"DefaultUser";
-    }
-
-    auto tokenUser = reinterpret_cast<TOKEN_USER*>(tokenBuffer.data());
-    LPWSTR sidText = nullptr;
-    if (!ConvertSidToStringSidW(tokenUser->User.Sid, &sidText))
-    {
-        return L"DefaultUser";
-    }
-
-    wil::unique_hlocal_string sid(sidText);
-    return sid.get();
-}
 
 class ControlPipeTestServer
 {
@@ -58,9 +26,12 @@ public:
         static std::atomic_uint64_t nextPipeId{0};
         m_pipeName = L"CoreEngineTests_" + std::to_wstring(GetCurrentProcessId()) + L"_" + std::to_wstring(++nextPipeId);
 
-        const std::wstring basePath = L"\\\\.\\pipe\\" + m_pipeName + L"\\" + GetCurrentUserSidForTest();
+        const std::wstring sid = PipeSecurityUtils::GetCurrentUserSidString();
+        const std::wstring controlPath = PipeSecurityUtils::BuildPipePath(m_pipeName, sid, L"control");
+        const std::wstring audioPath = PipeSecurityUtils::BuildPipePath(m_pipeName, sid, L"audio");
+
         m_controlPipe.reset(CreateNamedPipeW(
-            (basePath + L"\\control").c_str(),
+            controlPath.c_str(),
             PIPE_ACCESS_DUPLEX,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
             1,
@@ -69,7 +40,7 @@ public:
             0,
             nullptr));
         m_audioPipe.reset(CreateNamedPipeW(
-            (basePath + L"\\audio").c_str(),
+            audioPath.c_str(),
             PIPE_ACCESS_DUPLEX,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
             1,

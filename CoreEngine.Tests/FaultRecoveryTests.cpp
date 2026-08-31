@@ -14,7 +14,8 @@ TEST_F(SapiEngineTests, PipeClientFailsImmediatelyWhenControlPipeAccessIsDenied)
     static std::atomic_uint64_t nextPipeId{0};
     const std::wstring pipeName = L"CoreEngineDenied_" + std::to_wstring(GetCurrentProcessId()) + L"_" +
         std::to_wstring(++nextPipeId);
-    const std::wstring controlPipePath = L"\\\\.\\pipe\\" + pipeName + L"\\" + GetCurrentUserSidForTest() + L"\\control";
+    const std::wstring controlPipePath = PipeSecurityUtils::BuildPipePath(
+        pipeName, PipeSecurityUtils::GetCurrentUserSidString(), L"control");
 
     PSECURITY_DESCRIPTOR securityDescriptor = nullptr;
     ASSERT_TRUE(ConvertStringSecurityDescriptorToSecurityDescriptorW(

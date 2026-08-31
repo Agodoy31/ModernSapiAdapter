@@ -128,12 +128,22 @@
     <ClCompile Include="SpeechEventTests.cpp" />
     <ClCompile Include="FaultRecoveryTests.cpp" />
     <ClCompile Include="JsonValueTests.cpp" />
+    <ClCompile Include="AudioFormatUtilsTests.cpp" />
+    <ClCompile Include="PipeSecurityUtilsTests.cpp" />
 
     <ClCompile Include="..\CoreEngine\SapiEngine.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
     </ClCompile>
+    <ClCompile Include="..\CoreEngine\AudioFormatUtils.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
+    </ClCompile>
     <ClCompile Include="..\CoreEngine\PipeClient.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
+    </ClCompile>
+    <ClCompile Include="..\CoreEngine\PipeSecurityUtils.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
     </ClCompile>

@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "SapiEngine.h"
+#include "AudioFormatUtils.h"
 #include "JsonValue.h"
 
 namespace {
@@ -535,46 +536,11 @@ HRESULT CSapiEngine::CreateProviderSessionLocked()
             return E_FAIL;
         }
 
-        const auto& format = infoResponse["audio_format"];
-        const auto isPositiveInteger = [&format](const char* name, uint64_t maximum, uint64_t& value) {
-            if (!format.contains(name) || !TryGetJsonUnsignedInteger(format[name], value))
-            {
-                return false;
-            }
-
-            if (value == 0 || value > maximum)
-            {
-                return false;
-            }
-            return true;
-        };
-
-        uint64_t sampleRate = 0;
-        uint64_t bitsPerSample = 0;
-        uint64_t channels = 0;
-        if (!isPositiveInteger("sample_rate", (std::numeric_limits<DWORD>::max)(), sampleRate) ||
-            !isPositiveInteger("bits_per_sample", (std::numeric_limits<WORD>::max)(), bitsPerSample) ||
-            !isPositiveInteger("channels", (std::numeric_limits<WORD>::max)(), channels))
-        {
-            return E_FAIL;
-        }
-
-        const uint64_t blockAlignment = (channels * bitsPerSample) / 8;
-        if (blockAlignment == 0 || blockAlignment > (std::numeric_limits<WORD>::max)() ||
-            channels * bitsPerSample != blockAlignment * 8 ||
-            sampleRate > (std::numeric_limits<DWORD>::max)() / blockAlignment)
-        {
-            return E_FAIL;
-        }
-
         WAVEFORMATEX candidateFormat = {};
-        candidateFormat.wFormatTag = WAVE_FORMAT_PCM;
-        candidateFormat.nSamplesPerSec = static_cast<DWORD>(sampleRate);
-        candidateFormat.wBitsPerSample = static_cast<WORD>(bitsPerSample);
-        candidateFormat.nChannels = static_cast<WORD>(channels);
-        candidateFormat.nBlockAlign = static_cast<WORD>(blockAlignment);
-        candidateFormat.nAvgBytesPerSec = candidateFormat.nSamplesPerSec * candidateFormat.nBlockAlign;
-        candidateFormat.cbSize = 0;
+        if (!AudioFormatUtils::TryParseAudioFormatJson(infoResponse["audio_format"], candidateFormat))
+        {
+            return E_FAIL;
+        }
 
         if (m_hasOutputFormat &&
             (candidateFormat.nSamplesPerSec != m_audioFormat.nSamplesPerSec ||

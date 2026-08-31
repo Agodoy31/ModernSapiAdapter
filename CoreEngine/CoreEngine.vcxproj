@@ -165,16 +165,21 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="AsyncLogger.h" />
+    <ClInclude Include="AudioFormatUtils.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="PipeClient.h" />
+    <ClInclude Include="PipeSecurityUtils.h" />
     <ClInclude Include="PcmFrameAssembler.h" />
     <ClInclude Include="SapiEngine.h" />
     <ClInclude Include="SpeechWorker.h" />
+    <ClInclude Include="SpeechWorkerTypes.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AsyncLogger.cpp" />
+    <ClCompile Include="AudioFormatUtils.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="PipeClient.cpp" />
+    <ClCompile Include="PipeSecurityUtils.cpp" />
     <ClCompile Include="PcmFrameAssembler.cpp" />
     <ClCompile Include="SapiEngine.cpp" />
     <ClCompile Include="SpeechWorker.cpp" />

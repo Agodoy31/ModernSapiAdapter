@@ -13,6 +13,7 @@
 #include <mutex>
 #include "PipeClient.h"
 #include "PcmFrameAssembler.h"
+#include "SpeechWorkerTypes.h"
 
 class CSapiEngine;
 
@@ -139,24 +140,6 @@ private:
     void EnterFaultedState();
 
     void ForwardEventToSapi(const nlohmann::json& json);
-
-    enum class UpstreamState : uint8_t
-    {
-        Idle = 0,
-        Active = 1,       // Request dispatched; provider synthesizing
-        Completed = 2,    // Provider sent synthesis_complete with total_audio_bytes
-        Cancelled = 3,    // Provider sent synthesis_cancelled with audio_bytes_written
-        Failed = 4,       // Provider sent severity="error" for this speak_id
-        Faulted = 5       // Fatal provider crash or broken pipe
-    };
-
-    enum class DownstreamState : uint8_t
-    {
-        Idle = 0,
-        Speaking = 1,     // Delivering audio frames to SAPI pOutputSite->Write()
-        Cancelling = 2,   // SAPI requested SPVES_ABORT; draining pipe without Write()
-        Faulted = 3       // Fatal engine fault
-    };
 
     CSapiEngine* m_pEngine;                  /**< Pointer to parent SAPI engine. */
     PipeClient* m_pClient;                   /**< Engine-owned IPC PipeClient. */

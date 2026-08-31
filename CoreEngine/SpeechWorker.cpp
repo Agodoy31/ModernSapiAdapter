@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "SpeechWorker.h"
+#include "SpeechWorkerTypes.h"
 #include "SapiEngine.h"
 #include "JsonValue.h"
 
@@ -705,6 +706,7 @@ bool SpeechWorker::CheckTerminalBoundaryLocked()
     }
 
     case DownstreamState::Idle:
+    case DownstreamState::Drained:
     case DownstreamState::Faulted:
         return false;
     }
@@ -859,6 +861,7 @@ void SpeechWorker::AudioThreadProc()
                 }
 
                 case DownstreamState::Idle:
+                case DownstreamState::Drained:
                 case DownstreamState::Faulted:
                     break;
                 }
