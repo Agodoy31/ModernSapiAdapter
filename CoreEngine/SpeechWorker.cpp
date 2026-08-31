@@ -106,7 +106,6 @@ bool SpeechWorker::Start(void* /*pSite*/, uint64_t speakId)
     m_activeSpeakId = speakId;
     m_deliveredAudioBytes = 0;
     m_rawAudioBytesRead = 0;
-    m_sapiWriteBatchActive = false;
     m_upstreamTerminalBytes = 0;
     m_upstreamFinished = false;
     m_requestCompletionHr = S_OK;
@@ -628,17 +627,22 @@ bool SpeechWorker::CheckTerminalBoundaryLocked()
         m_requestChanged.notify_all();
         return false;
     }
-
-    if (!m_upstreamFinished)
+    else if (!m_upstreamFinished)
     {
         return false;
     }
-
-    if (m_downstreamState == DownstreamState::Speaking)
+    else if (m_downstreamState == DownstreamState::Speaking)
     {
-        if (m_rawAudioBytesRead == m_upstreamTerminalBytes &&
-            m_deliveredAudioBytes == m_upstreamTerminalBytes &&
-            !m_frameAssembler.HasCarry())
+        if (m_rawAudioBytesRead > m_upstreamTerminalBytes ||
+            m_deliveredAudioBytes > m_upstreamTerminalBytes)
+        {
+            CoreLog(L"[SpeechWorker] Provider audio overrun: raw=%llu delivered=%llu declared=%llu",
+                m_rawAudioBytesRead, m_deliveredAudioBytes, m_upstreamTerminalBytes);
+            return true;
+        }
+        else if (m_rawAudioBytesRead == m_upstreamTerminalBytes &&
+                 m_deliveredAudioBytes == m_upstreamTerminalBytes &&
+                 !m_frameAssembler.HasCarry())
         {
 #if defined(_DEBUG)
             CoreLog(L"[ThreadTrace] speak_id=%llu terminal_boundary_reached tick=%llu declared=%llu raw=%llu delivered=%llu.",
@@ -651,15 +655,9 @@ bool SpeechWorker::CheckTerminalBoundaryLocked()
             m_requestChanged.notify_all();
             return false;
         }
-        else if (m_rawAudioBytesRead > m_upstreamTerminalBytes ||
-                 m_deliveredAudioBytes > m_upstreamTerminalBytes ||
-                 (!m_sapiWriteBatchActive &&
-                  m_rawAudioBytesRead == m_upstreamTerminalBytes &&
-                  (m_deliveredAudioBytes != m_upstreamTerminalBytes || m_frameAssembler.HasCarry())))
+        else
         {
-            CoreLog(L"[SpeechWorker] Provider audio boundary disagrees with raw (%llu), delivered (%llu), or carried PCM.",
-                m_rawAudioBytesRead, m_deliveredAudioBytes);
-            return true;
+            return false;
         }
     }
     else if (m_downstreamState == DownstreamState::Cancelling)
@@ -681,9 +679,15 @@ bool SpeechWorker::CheckTerminalBoundaryLocked()
             m_requestChanged.notify_all();
             return false;
         }
+        else
+        {
+            return false;
+        }
     }
-
-    return false;
+    else
+    {
+        return false;
+    }
 }
 
 void SpeechWorker::AudioThreadProc()
@@ -753,7 +757,6 @@ void SpeechWorker::AudioThreadProc()
                 else
                 {
                     shouldDeliverAudio = true;
-                    m_sapiWriteBatchActive = true;
                 }
             }
             else if (m_downstreamState == DownstreamState::Cancelling)
@@ -805,7 +808,6 @@ void SpeechWorker::AudioThreadProc()
 
             {
                 std::lock_guard<std::mutex> lock(m_requestMutex);
-                m_sapiWriteBatchActive = false;
                 if (m_downstreamState == DownstreamState::Speaking)
                 {
                     m_deliveredAudioBytes += totalBytesDeliveredInBatch;
