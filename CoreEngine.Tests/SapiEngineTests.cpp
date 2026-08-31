@@ -2282,6 +2282,7 @@ TEST_F(SapiEngineTests, ReadControlMessage_MalformedJson) {
     EXPECT_TRUE(foundParseError) << "Expected to find a JSON Parse Error log message.";
 }
 
+#if defined(_DEBUG)
 TEST_F(SapiEngineTests, SynthesisCompleteWaitsForFinalSapiWriteToFinish) {
     ControlPipeTestServer server;
     ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
@@ -2299,8 +2300,11 @@ TEST_F(SapiEngineTests, SynthesisCompleteWaitsForFinalSapiWriteToFinish) {
     ASSERT_TRUE(server.WriteAudio({ 0x10, 0x20, 0x30, 0x40 }));
     auto releaseWrite = wil::scope_exit([&] { mockSite->ReleaseWrite(); });
     ASSERT_TRUE(mockSite->WaitForWritePause(1000));
+    worker.PauseNextEventForwardForTest();
+    auto releaseEventForward = wil::scope_exit([&] { worker.ReleaseEventForwardForTest(); });
     ASSERT_TRUE(server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":42,\"total_audio_bytes\":4}\n"));
+    ASSERT_TRUE(worker.WaitForEventForwardPauseForTest(1000));
 
     std::mutex completionMutex;
     std::condition_variable completionCondition;
@@ -2329,6 +2333,7 @@ TEST_F(SapiEngineTests, SynthesisCompleteWaitsForFinalSapiWriteToFinish) {
     }
     EXPECT_FALSE(worker.IsFaulted());
 
+    worker.ReleaseEventForwardForTest();
     mockSite->ReleaseWrite();
     waitThread.join();
 
@@ -2336,6 +2341,7 @@ TEST_F(SapiEngineTests, SynthesisCompleteWaitsForFinalSapiWriteToFinish) {
     EXPECT_EQ(mockSite->totalBytesWritten.load(), 4u);
     EXPECT_FALSE(worker.IsFaulted());
 }
+#endif
 
 TEST_F(SapiEngineTests, SpeakCancelsPromptlyEvenWhenOutputSiteWriteBlocks) {
     ControlPipeTestServer server;
