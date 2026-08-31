@@ -13,6 +13,11 @@ PcmFrameAssembler::PcmFrameAssembler(size_t blockAlign)
     m_completedFrame.reserve(blockAlign);
 }
 
+size_t PcmFrameAssembler::CalculateAlignedBytes(size_t byteCount) const noexcept
+{
+    return byteCount - (byteCount % m_blockAlign);
+}
+
 PcmFrameBatch PcmFrameAssembler::Process(const uint8_t* data, size_t size)
 {
     PcmFrameBatch batch;
@@ -20,43 +25,49 @@ PcmFrameBatch PcmFrameAssembler::Process(const uint8_t* data, size_t size)
     {
         return batch;
     }
-    if (!data)
+
+    if (data == nullptr)
     {
         throw std::invalid_argument("PCM input cannot be null when its size is nonzero.");
     }
 
-    if (m_carry.empty())
+    const uint8_t* currentData = data;
+    size_t remainingSize = size;
+
+    // Stage 1: Prefix carry assembly (if carry buffer is non-empty)
+    if (!m_carry.empty())
     {
-        const size_t alignedSize = size - (size % m_blockAlign);
-        if (alignedSize != 0)
+        const size_t bytesNeeded = m_blockAlign - m_carry.size();
+        if (remainingSize < bytesNeeded)
         {
-            batch.spans[batch.count++] = { data, alignedSize };
+            m_carry.insert(m_carry.end(), currentData, currentData + remainingSize);
+            return batch;
         }
 
-        m_carry.assign(data + alignedSize, data + size);
-        return batch;
+        m_completedFrame = m_carry;
+        m_completedFrame.insert(m_completedFrame.end(), currentData, currentData + bytesNeeded);
+        m_carry.clear();
+        batch.spans[batch.count++] = { m_completedFrame.data(), m_completedFrame.size() };
+
+        currentData += bytesNeeded;
+        remainingSize -= bytesNeeded;
     }
 
-    const size_t bytesNeeded = m_blockAlign - m_carry.size();
-    if (size < bytesNeeded)
+    // Stage 2: Direct aligned chunk slicing (zero-copy when carry is empty)
+    const size_t alignedSize = CalculateAlignedBytes(remainingSize);
+    if (alignedSize > 0)
     {
-        m_carry.insert(m_carry.end(), data, data + size);
-        return batch;
+        batch.spans[batch.count++] = { currentData, alignedSize };
+        currentData += alignedSize;
+        remainingSize -= alignedSize;
     }
 
-    m_completedFrame = m_carry;
-    m_completedFrame.insert(m_completedFrame.end(), data, data + bytesNeeded);
-    m_carry.clear();
-    batch.spans[batch.count++] = { m_completedFrame.data(), m_completedFrame.size() };
-
-    const uint8_t* remainingData = data + bytesNeeded;
-    const size_t remainingSize = size - bytesNeeded;
-    const size_t alignedSize = remainingSize - (remainingSize % m_blockAlign);
-    if (alignedSize != 0)
+    // Stage 3: Tail carry buffer retention
+    if (remainingSize > 0)
     {
-        batch.spans[batch.count++] = { remainingData, alignedSize };
+        m_carry.assign(currentData, currentData + remainingSize);
     }
-    m_carry.assign(remainingData + alignedSize, remainingData + remainingSize);
+
     return batch;
 }
 

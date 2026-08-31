@@ -512,24 +512,27 @@ HRESULT PipeClient::ReadControlMessage(
 {
     outJson.clear();
     std::string_view utf8View;
-    HRESULT hr = ReadControlMessageUtf8(utf8View, timeoutMs);
-    if (FAILED(hr)) return hr;
-
-    bool isEmpty = utf8View.empty();
-    HRESULT parseHr = S_OK;
-
-    if (isEmpty)
+    const HRESULT hr = ReadControlMessageUtf8(utf8View, timeoutMs);
+    if (FAILED(hr))
     {
-        parseHr = S_FALSE;
+        return hr;
     }
-    else
+
+    if (utf8View.empty())
     {
-        try {
-            outJson = nlohmann::json::parse(utf8View);
-        } catch (const nlohmann::json::exception& e) {
-            CoreLog(L"JSON Parse Error: %S", e.what());
-            parseHr = E_FAIL; 
-        }
+        CompactControlBuffer();
+        return S_FALSE;
+    }
+
+    HRESULT parseHr = S_OK;
+    try
+    {
+        outJson = nlohmann::json::parse(utf8View);
+    }
+    catch (const nlohmann::json::exception& e)
+    {
+        CoreLog(L"JSON Parse Error: %S", e.what());
+        parseHr = E_FAIL;
     }
 
     CompactControlBuffer();

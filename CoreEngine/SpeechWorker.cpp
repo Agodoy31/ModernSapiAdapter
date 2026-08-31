@@ -449,13 +449,11 @@ void SpeechWorker::ForwardEventToSapi(const nlohmann::json& json)
         return;
     }
 
-    bool isLog = json.contains("event") && json["event"].is_string() && json["event"].get<std::string_view>() == "log";
+    const bool isLog = json.contains("event") && json["event"].is_string() && json["event"].get<std::string_view>() == "log";
 
     {
         std::lock_guard<std::mutex> requestLock(m_requestMutex);
-        if ((m_downstreamState != DownstreamState::Speaking && !isLog) ||
-            (m_faultPending && !isLog) ||
-            eventSpeakId != m_activeSpeakId)
+        if (!ShouldForwardEventLocked(eventSpeakId, isLog))
         {
             return;
         }
@@ -634,6 +632,26 @@ bool SpeechWorker::IsSpeakingTerminalReachedLocked() const noexcept
 bool SpeechWorker::IsCancellingTerminalReachedLocked() const noexcept
 {
     return m_rawAudioBytesRead >= m_upstreamTerminalBytes;
+}
+
+bool SpeechWorker::ShouldForwardEventLocked(uint64_t speakId, bool isLog) const noexcept
+{
+    if (speakId != m_activeSpeakId)
+    {
+        return false;
+    }
+
+    if (isLog)
+    {
+        return true;
+    }
+
+    if (m_faultPending)
+    {
+        return false;
+    }
+
+    return m_downstreamState == DownstreamState::Speaking;
 }
 
 void SpeechWorker::ResetToIdleLocked() noexcept

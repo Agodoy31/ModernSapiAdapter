@@ -3,6 +3,29 @@
 
 #ifdef _DEBUG
 
+namespace
+{
+
+[[nodiscard]] std::wstring ResolveLogFilePath() noexcept
+{
+    wil::unique_cotaskmem_string appDataPath;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appDataPath)))
+    {
+        return {};
+    }
+
+    if (!appDataPath)
+    {
+        return {};
+    }
+
+    const std::wstring directoryPath = std::wstring(appDataPath.get()) + L"\\ModernSapiAdapter";
+    CreateDirectoryW(directoryPath.c_str(), nullptr);
+    return directoryPath + L"\\CoreEngine.log";
+}
+
+} // namespace
+
 AsyncLogger& AsyncLogger::GetInstance()
 {
     static AsyncLogger instance;
@@ -11,14 +34,9 @@ AsyncLogger& AsyncLogger::GetInstance()
 
 AsyncLogger::AsyncLogger() : m_exit(false)
 {
-    PWSTR appDataPath = nullptr;
-    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appDataPath)))
+    const std::wstring logPath = ResolveLogFilePath();
+    if (!logPath.empty())
     {
-        std::wstring logPath = std::wstring(appDataPath) + L"\\ModernSapiAdapter";
-        CreateDirectoryW(logPath.c_str(), nullptr);
-        logPath += L"\\CoreEngine.log";
-        CoTaskMemFree(appDataPath);
-
         m_file.open(logPath, std::ios::out | std::ios::app);
     }
 
@@ -59,10 +77,14 @@ void AsyncLogger::WorkerThread()
         std::wstring msg;
         {
             std::unique_lock<std::mutex> lock(m_mutex);
-            m_cv.wait(lock, [this] { return !m_queue.empty() || m_exit; });
+            m_cv.wait(lock, [this] {
+                return !m_queue.empty() || m_exit;
+            });
 
             if (m_queue.empty())
+            {
                 continue;
+            }
 
             msg = std::move(m_queue.front());
             m_queue.pop();

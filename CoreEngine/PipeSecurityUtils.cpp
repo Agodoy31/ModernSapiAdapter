@@ -37,7 +37,12 @@ std::wstring GetCurrentUserSidString()
     }
 
     wil::unique_hlocal_string sid(sidText);
-    return sid.get() ? std::wstring(sid.get()) : L"DefaultUser";
+    if (!sid)
+    {
+        return L"DefaultUser";
+    }
+
+    return std::wstring(sid.get());
 }
 
 std::wstring BuildPipePath(

@@ -47,6 +47,8 @@ public:
     size_t BlockAlign() const noexcept;
 
 private:
+    [[nodiscard]] size_t CalculateAlignedBytes(size_t byteCount) const noexcept;
+
     size_t m_blockAlign;
     std::vector<uint8_t> m_carry;
     std::vector<uint8_t> m_completedFrame;
