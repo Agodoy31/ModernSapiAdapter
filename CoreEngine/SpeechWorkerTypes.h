@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cstdint>
+#include <unknwn.h>
 
 enum class UpstreamState : uint8_t
 {
@@ -22,8 +23,7 @@ enum class DownstreamState : uint8_t
     Idle = 0,
     Speaking = 1,     // Delivering audio frames to SAPI pOutputSite->Write()
     Cancelling = 2,   // SAPI requested SPVES_ABORT; draining pipe without Write()
-    Drained = 3,      // Audio boundary drained after cancellation
-    Faulted = 4       // Fatal engine fault
+    Faulted = 3       // Fatal engine fault
 };
 
 enum class ProviderEventType : uint8_t
@@ -52,4 +52,48 @@ struct SpeechEventOffsets
     uint32_t audioOffsetMs = 0;
     uint32_t textOffset = 0;
     uint32_t textLength = 0;
+};
+
+struct RequestToken
+{
+    uint64_t speakId = 0;
+    uint64_t generation = 0;
+
+    [[nodiscard]] constexpr bool IsValid() const noexcept
+    {
+        return speakId != 0 && generation != 0;
+    }
+
+    [[nodiscard]] constexpr bool Matches(const RequestToken& other) const noexcept
+    {
+        return speakId == other.speakId && generation == other.generation;
+    }
+};
+
+struct RequestContext
+{
+    RequestToken token{};
+    UpstreamState upstreamState = UpstreamState::Idle;
+    DownstreamState downstreamState = DownstreamState::Idle;
+    uint64_t rawAudioBytesRead = 0;
+    uint64_t deliveredAudioBytes = 0;
+    uint64_t upstreamTerminalBytes = 0;
+    bool upstreamFinished = false;
+    bool faultPending = false;
+    ULONGLONG cancellationDeadlineTick = 0;
+    HRESULT completionHr = S_OK;
+
+    void Reset() noexcept
+    {
+        token.speakId = 0;
+        upstreamState = UpstreamState::Idle;
+        downstreamState = DownstreamState::Idle;
+        rawAudioBytesRead = 0;
+        deliveredAudioBytes = 0;
+        upstreamTerminalBytes = 0;
+        upstreamFinished = false;
+        faultPending = false;
+        cancellationDeadlineTick = 0;
+        completionHr = S_OK;
+    }
 };

@@ -865,7 +865,6 @@ bool SpeechWorker::CheckTerminalBoundaryLocked()
     }
 
     case DownstreamState::Idle:
-    case DownstreamState::Drained:
     case DownstreamState::Faulted:
         return false;
     }
@@ -940,7 +939,6 @@ SpeechWorker::AudioIngestResult SpeechWorker::IngestAudioChunkLocked(const uint8
     }
 
     case DownstreamState::Faulted:
-    case DownstreamState::Drained:
     {
         // Continue draining provider PCM so its audio pipe cannot fill, but never call SAPI.
         break;
@@ -992,7 +990,6 @@ bool SpeechWorker::UpdateAfterAudioDeliveryLocked(
     }
 
     case DownstreamState::Idle:
-    case DownstreamState::Drained:
     case DownstreamState::Faulted:
     {
         break;
