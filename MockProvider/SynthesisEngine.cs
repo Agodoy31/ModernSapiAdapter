@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -61,126 +62,178 @@ public class SynthesisEngine
     /// <returns>A task representing the asynchronous speak execution.</returns>
     public async Task HandleSpeakAsync(JsonElement fragments, ulong speakId, CancellationToken cancellationToken)
     {
-        long audioBytesWritten = 0;
-        bool delayCancelledEvent = false;
+        var state = new SynthesisSessionState();
         try
         {
-            int totalAudioMs = 0;
-            long totalAudioBytes = 0;
-            var audioBuffers = new List<byte[]>();
-            bool firstAudioBuffer = true;
             foreach (var fragment in fragments.EnumerateArray())
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
                 if (fragment.TryGetProperty("text", out var textProp))
                 {
-                    string text = textProp.GetString() ?? "";
-                    if (text.StartsWith("[stall-synthesis]", StringComparison.Ordinal))
-                    {
-                        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-                    }
-                    delayCancelledEvent |= text.StartsWith("[delay-cancelled-event]", StringComparison.Ordinal);
-                    string[] words = text.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-                    uint charOffset = fragment.TryGetProperty("source_offset", out var sourceOffsetProp)
-                        ? sourceOffsetProp.GetUInt32()
-                        : 0;
-                    foreach (var word in words)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-
-                        var wordBoundary = new
-                        {
-                            @event = "word_boundary",
-                            speak_id = speakId,
-                            text_offset = charOffset,
-                            text_length = word.Length,
-                            audio_offset_ms = totalAudioMs
-                        };
-                        await WriteControlEventAsync(wordBoundary, cancellationToken, speakId, "word_boundary");
-
-                        await Task.Delay(50, cancellationToken);
-
-                        byte[] audioData = GenerateSineWave(200);
-                        if (firstAudioBuffer)
-                        {
-                            await _audioPipe.WriteAsync(audioData, cancellationToken);
-                            await _audioPipe.FlushAsync(cancellationToken);
-                            audioBytesWritten += audioData.Length;
-                            RecordProviderActivityForTest(speakId, "pcm");
-                            firstAudioBuffer = false;
-                        }
-                        else
-                        {
-                            audioBuffers.Add(audioData);
-                        }
-                        totalAudioBytes += audioData.Length;
-
-                        totalAudioMs += 200;
-                        charOffset += (uint)(word.Length + 1);
-                    }
+                    await SynthesizeTextFragmentAsync(fragment, textProp, speakId, state, cancellationToken);
                 }
                 else if (fragment.TryGetProperty("bookmark", out var bookmarkProp))
                 {
-                    var bookmarkEvent = new
-                    {
-                        @event = "bookmark_reached",
-                        speak_id = speakId,
-                        bookmark_name = bookmarkProp.GetString() ?? "",
-                        audio_offset_ms = totalAudioMs
-                    };
-                    await WriteControlEventAsync(bookmarkEvent, cancellationToken, speakId, "bookmark_reached");
+                    await SynthesizeBookmarkFragmentAsync(bookmarkProp, speakId, state, cancellationToken);
                 }
             }
 
-            var completionEvent = new
-            {
-                @event = "synthesis_complete",
-                speak_id = speakId,
-                total_audio_bytes = totalAudioBytes
-            };
-            await WriteControlEventAsync(completionEvent, cancellationToken, speakId, "synthesis_complete");
-
-            foreach (byte[] audioData in audioBuffers)
-            {
-                await _audioPipe.WriteAsync(audioData, cancellationToken);
-                await _audioPipe.FlushAsync(cancellationToken);
-                audioBytesWritten += audioData.Length;
-                RecordProviderActivityForTest(speakId, "pcm");
-            }
+            await CompleteSynthesisAsync(speakId, state, cancellationToken);
         }
         catch (OperationCanceledException)
         {
-            if (delayCancelledEvent)
-            {
-                await Task.Delay(100, CancellationToken.None);
-            }
-
-            // Providers can have event callbacks already queued when cancellation arrives.
-            // The CoreEngine regression test verifies these cannot reach SAPI after abort.
-            var lateSentenceBoundary = new
-            {
-                @event = "sentence_boundary",
-                speak_id = speakId,
-                text_offset = 0,
-                text_length = 1,
-                audio_offset_ms = 0
-            };
-            await WriteControlEventAsync(lateSentenceBoundary, CancellationToken.None, speakId, "sentence_boundary");
-
-            var cancelledEvent = new
-            {
-                @event = "synthesis_cancelled",
-                speak_id = speakId,
-                audio_bytes_written = audioBytesWritten
-            };
-            await WriteControlEventAsync(cancelledEvent, CancellationToken.None, speakId, "synthesis_cancelled");
+            await EmitLateCancellationEventsAsync(speakId, state.AudioBytesWritten, state.DelayCancelledEvent);
         }
         catch (Exception ex)
         {
             var logEvent = new { @event = "log", speak_id = speakId, severity = "error", message = ex.Message };
             await WriteControlEventAsync(logEvent, CancellationToken.None, speakId, "log");
         }
+    }
+
+    private async Task SynthesizeTextFragmentAsync(
+        JsonElement fragment,
+        JsonElement textProp,
+        ulong speakId,
+        SynthesisSessionState state,
+        CancellationToken cancellationToken)
+    {
+        string text = textProp.GetString() ?? "";
+        if (text.StartsWith("[stall-synthesis]", StringComparison.Ordinal))
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+
+        if (text.StartsWith("[delay-cancelled-event]", StringComparison.Ordinal))
+        {
+            state.DelayCancelledEvent = true;
+        }
+
+        string[] words = text.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+        uint charOffset = fragment.TryGetProperty("source_offset", out var sourceOffsetProp)
+            ? sourceOffsetProp.GetUInt32()
+            : 0;
+
+        foreach (var word in words)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await SynthesizeWordAsync(word, speakId, charOffset, state, cancellationToken);
+            charOffset += (uint)(word.Length + 1);
+        }
+    }
+
+    private async Task SynthesizeWordAsync(
+        string word,
+        ulong speakId,
+        uint charOffset,
+        SynthesisSessionState state,
+        CancellationToken cancellationToken)
+    {
+        var wordBoundary = new
+        {
+            @event = "word_boundary",
+            speak_id = speakId,
+            text_offset = charOffset,
+            text_length = word.Length,
+            audio_offset_ms = state.TotalAudioMs
+        };
+        await WriteControlEventAsync(wordBoundary, cancellationToken, speakId, "word_boundary");
+
+        await Task.Delay(50, cancellationToken);
+
+        byte[] audioData = GenerateSineWave(200);
+        if (state.IsFirstAudioBuffer)
+        {
+            await _audioPipe.WriteAsync(audioData, cancellationToken);
+            await _audioPipe.FlushAsync(cancellationToken);
+            state.AudioBytesWritten += audioData.Length;
+            RecordProviderActivityForTest(speakId, "pcm");
+            state.IsFirstAudioBuffer = false;
+        }
+        else
+        {
+            state.AudioBuffers.Add(audioData);
+        }
+
+        state.TotalAudioBytes += audioData.Length;
+        state.TotalAudioMs += 200;
+    }
+
+    private async Task SynthesizeBookmarkFragmentAsync(
+        JsonElement bookmarkProp,
+        ulong speakId,
+        SynthesisSessionState state,
+        CancellationToken cancellationToken)
+    {
+        var bookmarkEvent = new
+        {
+            @event = "bookmark_reached",
+            speak_id = speakId,
+            bookmark_name = bookmarkProp.GetString() ?? "",
+            audio_offset_ms = state.TotalAudioMs
+        };
+        await WriteControlEventAsync(bookmarkEvent, cancellationToken, speakId, "bookmark_reached");
+    }
+
+    private async Task CompleteSynthesisAsync(
+        ulong speakId,
+        SynthesisSessionState state,
+        CancellationToken cancellationToken)
+    {
+        var completionEvent = new
+        {
+            @event = "synthesis_complete",
+            speak_id = speakId,
+            total_audio_bytes = state.TotalAudioBytes
+        };
+        await WriteControlEventAsync(completionEvent, cancellationToken, speakId, "synthesis_complete");
+
+        foreach (byte[] audioData in state.AudioBuffers)
+        {
+            await _audioPipe.WriteAsync(audioData, cancellationToken);
+            await _audioPipe.FlushAsync(cancellationToken);
+            state.AudioBytesWritten += audioData.Length;
+            RecordProviderActivityForTest(speakId, "pcm");
+        }
+    }
+
+    private async Task EmitLateCancellationEventsAsync(ulong speakId, long audioBytesWritten, bool delayCancelledEvent)
+    {
+        if (delayCancelledEvent)
+        {
+            await Task.Delay(100, CancellationToken.None);
+        }
+
+        // Providers can have event callbacks already queued when cancellation arrives.
+        // The CoreEngine regression test verifies these cannot reach SAPI after abort.
+        var lateSentenceBoundary = new
+        {
+            @event = "sentence_boundary",
+            speak_id = speakId,
+            text_offset = 0,
+            text_length = 1,
+            audio_offset_ms = 0
+        };
+        await WriteControlEventAsync(lateSentenceBoundary, CancellationToken.None, speakId, "sentence_boundary");
+
+        var cancelledEvent = new
+        {
+            @event = "synthesis_cancelled",
+            speak_id = speakId,
+            audio_bytes_written = audioBytesWritten
+        };
+        await WriteControlEventAsync(cancelledEvent, CancellationToken.None, speakId, "synthesis_cancelled");
+    }
+
+    private sealed class SynthesisSessionState
+    {
+        public int TotalAudioMs { get; set; }
+        public long TotalAudioBytes { get; set; }
+        public long AudioBytesWritten { get; set; }
+        public bool IsFirstAudioBuffer { get; set; } = true;
+        public bool DelayCancelledEvent { get; set; }
+        public List<byte[]> AudioBuffers { get; } = new();
     }
 
     private async Task WriteControlEventAsync(object evt, CancellationToken cancellationToken, ulong speakId, string eventName)
