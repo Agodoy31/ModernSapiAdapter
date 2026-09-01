@@ -78,4 +78,3 @@
 - [ ] Build Release x64 and record the CoreEngine DLL path.
 - [ ] Audit that no static destructor owns a worker, no join holds the mutex, and Release has no logger shutdown dependency.
 - [ ] Request code review before integration.
-

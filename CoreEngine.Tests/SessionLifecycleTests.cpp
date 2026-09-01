@@ -39,6 +39,38 @@ TEST_F(SapiEngineTests, DllCanUnloadNowTracksEngineLifetimeAfterFactoryRelease) 
     EXPECT_EQ(module.CanUnloadNow(), S_OK);
 }
 
+TEST_F(SapiEngineTests, DllCanUnloadNowDrainsLoggerAndAllowsRestartOnNextLoad) {
+    {
+        CoreEngineDll module;
+        ASSERT_TRUE(module.IsLoaded()) << "Load error: " << module.LoadError();
+
+        winrt::com_ptr<IClassFactory> factory;
+        ASSERT_EQ(module.GetClassFactory(factory.put()), S_OK);
+
+        winrt::com_ptr<ISpTTSEngine> engine;
+        ASSERT_EQ(factory->CreateInstance(nullptr, __uuidof(ISpTTSEngine), engine.put_void()), S_OK);
+        factory = nullptr;
+        engine = nullptr;
+
+        EXPECT_EQ(module.CanUnloadNow(), S_OK);
+    }
+
+    {
+        CoreEngineDll module;
+        ASSERT_TRUE(module.IsLoaded()) << "Load error: " << module.LoadError();
+
+        winrt::com_ptr<IClassFactory> factory;
+        ASSERT_EQ(module.GetClassFactory(factory.put()), S_OK);
+
+        winrt::com_ptr<ISpTTSEngine> engine;
+        ASSERT_EQ(factory->CreateInstance(nullptr, __uuidof(ISpTTSEngine), engine.put_void()), S_OK);
+        factory = nullptr;
+        engine = nullptr;
+
+        EXPECT_EQ(module.CanUnloadNow(), S_OK);
+    }
+}
+
 TEST_F(SapiEngineTests, LockServerKeepsDllResidentUntilBalancedUnlock) {
     CoreEngineDll module;
     ASSERT_TRUE(module.IsLoaded()) << "Load error: " << module.LoadError();
