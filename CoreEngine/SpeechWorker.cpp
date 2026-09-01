@@ -877,6 +877,13 @@ bool SpeechWorker::UpdateAfterAudioDeliveryLocked(
     return protocolBoundaryFailed;
 }
 
+bool SpeechWorker::IsAudioDeliveryEligibleLocked(const RequestToken& token) const noexcept
+{
+    return m_context.token.Matches(token) &&
+           m_context.downstreamState == DownstreamState::Speaking &&
+           !m_context.faultPending;
+}
+
 void SpeechWorker::AudioThreadProc()
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -926,6 +933,14 @@ void SpeechWorker::AudioThreadProc()
 
             for (const auto& span : ingestResult.spansToWrite)
             {
+                {
+                    std::lock_guard<std::mutex> lock(m_requestMutex);
+                    if (!IsAudioDeliveryEligibleLocked(ingestResult.token))
+                    {
+                        break;
+                    }
+                }
+
                 if (!m_pEngine->OnAudioData(span.data, static_cast<uint32_t>(span.size)))
                 {
                     writeAccepted = false;

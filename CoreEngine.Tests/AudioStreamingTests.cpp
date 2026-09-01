@@ -307,3 +307,42 @@ TEST_F(SapiEngineTests, InFlightAudioFromCancelledRequestDoesNotIncrementNextReq
         }));
     }
 }
+
+TEST_F(SapiEngineTests, StaleSpansAreDroppedBetweenBatchWrites) {
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(60));
+
+    fixture.mockSite->PauseNextWrite();
+    auto releaseWriteGuard = wil::scope_exit([&] {
+        fixture.mockSite->ReleaseWrite();
+    });
+
+    ASSERT_TRUE(fixture.server.WriteAudio({ 0x11 }));
+    
+    // Wait for the worker to read the first byte and put it into carry
+    EXPECT_TRUE(WaitForCondition([&] { return fixture.worker->RawAudioBytesForTest() >= 1; }, 1000, 1));
+
+    ASSERT_TRUE(fixture.server.WriteAudio({ 0x22, 0x33, 0x44 }));
+    ASSERT_TRUE(fixture.mockSite->WaitForWritePause(1000));
+
+    fixture.worker->Stop();
+    ASSERT_TRUE(fixture.worker->Start(61));
+
+    fixture.mockSite->ReleaseWrite();
+
+    ASSERT_TRUE(fixture.server.WriteAudio({ 0xAA, 0xBB, 0xCC, 0xDD }));
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":61,\"total_audio_bytes\":4}\n"));
+
+    EXPECT_EQ(fixture.worker->WaitUntilFinished(nullptr), S_OK);
+    EXPECT_FALSE(fixture.worker->IsFaulted());
+
+    {
+        std::lock_guard<std::mutex> lock(fixture.mockSite->writesMutex);
+        EXPECT_EQ(fixture.mockSite->acceptedAudio, (std::vector<uint8_t>{
+            0x11, 0x22,
+            0xAA, 0xBB, 0xCC, 0xDD
+        }));
+    }
+}

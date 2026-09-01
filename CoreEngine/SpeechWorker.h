@@ -143,6 +143,7 @@ private:
     [[nodiscard]] bool IsSpeakingTerminalReachedLocked() const noexcept;
     [[nodiscard]] bool IsCancellingTerminalReachedLocked() const noexcept;
     [[nodiscard]] bool ShouldForwardEventLocked(uint64_t speakId, bool isLog) const noexcept;
+    [[nodiscard]] bool IsAudioDeliveryEligibleLocked(const RequestToken& token) const noexcept;
     void ResetToIdleLocked() noexcept;
 
     /**
