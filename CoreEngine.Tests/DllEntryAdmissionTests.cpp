@@ -40,3 +40,14 @@ TEST(DllEntryAdmissionTests, ClosingRejectsNewEntriesUntilReopened)
     admission.Reopen();
     EXPECT_TRUE(admission.TryEnter().has_value());
 }
+
+TEST(DllEntryAdmissionTests, TimedOutClosingReopensAdmission)
+{
+    DllEntryAdmission admission;
+    auto lease = admission.TryEnter();
+    ASSERT_TRUE(lease.has_value());
+
+    EXPECT_FALSE(admission.BeginClosingAndWaitForEntries(0));
+    lease.reset();
+    EXPECT_TRUE(admission.TryEnter().has_value());
+}

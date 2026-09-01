@@ -9,6 +9,53 @@
 
 using namespace TestInfrastructure;
 
+namespace
+{
+
+class DllUnloadAdmissionBarrier final
+{
+public:
+    DllUnloadAdmissionBarrier() :
+        m_entryPaused(CreateEventW(nullptr, TRUE, FALSE, EventName(L"DllGetClassObjectPaused").c_str())),
+        m_closingStarted(CreateEventW(nullptr, TRUE, FALSE, EventName(L"DllEntryClosing").c_str())),
+        m_releaseEntry(CreateEventW(nullptr, TRUE, FALSE, EventName(L"DllGetClassObjectRelease").c_str()))
+    {
+    }
+
+    [[nodiscard]] bool IsValid() const noexcept
+    {
+        return m_entryPaused && m_closingStarted && m_releaseEntry;
+    }
+
+    [[nodiscard]] bool WaitForEntryPaused(const DWORD timeoutMs) const noexcept
+    {
+        return WaitForSingleObject(m_entryPaused.get(), timeoutMs) == WAIT_OBJECT_0;
+    }
+
+    [[nodiscard]] bool WaitForClosingStarted(const DWORD timeoutMs) const noexcept
+    {
+        return WaitForSingleObject(m_closingStarted.get(), timeoutMs) == WAIT_OBJECT_0;
+    }
+
+    void ReleaseEntry() const noexcept
+    {
+        SetEvent(m_releaseEntry.get());
+    }
+
+private:
+    [[nodiscard]] static std::wstring EventName(const wchar_t* const phase)
+    {
+        return L"Local\\ModernSapiAdapter.CoreEngine." + std::wstring(phase) + L"." +
+            std::to_wstring(GetCurrentProcessId());
+    }
+
+    wil::unique_event m_entryPaused;
+    wil::unique_event m_closingStarted;
+    wil::unique_event m_releaseEntry;
+};
+
+} // namespace
+
 TEST_F(SapiEngineTests, DllCanUnloadNowTracksFactoryLifetime) {
     CoreEngineDll module;
     ASSERT_TRUE(module.IsLoaded()) << "Load error: " << module.LoadError();
@@ -119,6 +166,43 @@ TEST_F(SapiEngineTests, CoreEngineDllDoesNotUnloadWhileServerLockIsActive) {
     factory = nullptr;
     ASSERT_EQ(dllCanUnloadNow(), S_OK);
     ASSERT_TRUE(FreeLibrary(lockedModule));
+}
+
+TEST_F(SapiEngineTests, DllCanUnloadNowRefusesUnloadAfterAnAdmittedFactoryPublishesAModuleLock) {
+    CoreEngineDll module;
+    ASSERT_TRUE(module.IsLoaded()) << "Load error: " << module.LoadError();
+
+    DllUnloadAdmissionBarrier barrier;
+    ASSERT_TRUE(barrier.IsValid());
+
+    winrt::com_ptr<IClassFactory> factory;
+    HRESULT factoryResult = E_FAIL;
+    std::thread factoryThread([&] {
+        factoryResult = module.GetClassFactory(factory.put());
+    });
+    ThreadJoinGuard factoryJoin(factoryThread);
+    auto releaseEntry = wil::scope_exit([&barrier] {
+        barrier.ReleaseEntry();
+    });
+
+    ASSERT_TRUE(barrier.WaitForEntryPaused(1000));
+
+    HRESULT unloadResult = E_FAIL;
+    std::thread unloadThread([&] {
+        unloadResult = module.CanUnloadNow();
+    });
+    ThreadJoinGuard unloadJoin(unloadThread);
+
+    ASSERT_TRUE(barrier.WaitForClosingStarted(1000));
+    barrier.ReleaseEntry();
+
+    ASSERT_TRUE(factoryJoin.Join());
+    ASSERT_EQ(factoryResult, S_OK);
+    ASSERT_TRUE(unloadJoin.Join());
+    EXPECT_EQ(unloadResult, S_FALSE);
+
+    factory = nullptr;
+    EXPECT_EQ(module.CanUnloadNow(), S_OK);
 }
 
 TEST_F(SapiEngineTests, DllGetClassObjectRejectsNewAdmissionAfterUnloadApproval) {

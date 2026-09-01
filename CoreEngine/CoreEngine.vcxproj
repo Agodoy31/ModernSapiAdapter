@@ -168,6 +168,7 @@
     <ClInclude Include="AudioFormatUtils.h" />
     <ClInclude Include="ControlStreamBuffer.h" />
     <ClInclude Include="DllEntryAdmission.h" />
+    <ClInclude Include="DllEntryAdmissionTestHooks.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="PipeClient.h" />
     <ClInclude Include="PipeClientTestHooks.h" />

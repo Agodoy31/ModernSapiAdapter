@@ -1,4 +1,5 @@
 #include "DllEntryAdmission.h"
+#include "DllEntryAdmissionTestHooks.h"
 
 DllEntryAdmission::EntryLease::EntryLease(DllEntryAdmission& admission) noexcept :
     m_admission(&admission)
@@ -57,14 +58,24 @@ bool DllEntryAdmission::BeginClosingAndWaitForEntries(const DWORD timeoutMs) noe
     }
 
     m_state = State::Closing;
+#if defined(_DEBUG)
+    CoreEngine::Testing::NotifyDllEntryAdmissionClosingForTesting();
+#endif
     if (m_entryCount == 0)
     {
         return true;
     }
 
-    return m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
+    const bool entriesDrained = m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
         return m_entryCount == 0;
     });
+    if (!entriesDrained)
+    {
+        m_state = State::Open;
+        m_cv.notify_all();
+    }
+
+    return entriesDrained;
 }
 
 void DllEntryAdmission::Reopen() noexcept

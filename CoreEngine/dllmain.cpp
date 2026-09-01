@@ -5,6 +5,7 @@
 
 #include "pch.h"
 #include "DllEntryAdmission.h"
+#include "DllEntryAdmissionTestHooks.h"
 #include "SapiEngine.h"
 #ifdef _DEBUG
 #include "AsyncLogger.h"
@@ -103,6 +104,9 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
         return CLASS_E_CLASSNOTAVAILABLE;
     }
 
+#if defined(_DEBUG)
+    CoreEngine::Testing::PauseAdmittedDllGetClassObjectPathForTesting();
+#endif
     CoreLog(L"[CoreEngine] DllGetClassObject called.");
     if (ppv == nullptr) return E_POINTER;
     *ppv = nullptr;

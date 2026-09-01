@@ -25,6 +25,9 @@
     <ClInclude Include="DllEntryAdmission.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="DllEntryAdmissionTestHooks.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="$(SolutionDir)include\provider_abi.h">
       <Filter>Header Files</Filter>
     </ClInclude>

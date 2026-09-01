@@ -130,3 +130,60 @@ Result: 13 tests from 3 suites passed in 857 ms.
 ### Follow-up commit
 
 `fix(CoreEngine): serialize COM unload admission` (final commit hash is reported to the controller with completion status).
+
+## Fix round 2: admission-timeout recovery and real-DLL race coverage
+
+### RED evidence
+
+The new real-DLL integration test first failed as expected because no pause hook existed after `DllGetClassObject` acquired its entry lease:
+
+```text
+DllCanUnloadNowRefusesUnloadAfterAnAdmittedFactoryPublishesAModuleLock
+barrier.WaitForEntryPaused(1000)
+  Actual: false
+Expected: true
+```
+
+After adding the deterministic barrier test, the focused admission test exposed the timeout-state defect:
+
+```text
+DllEntryAdmissionTests.TimedOutClosingReopensAdmission
+admission.TryEnter().has_value()
+  Actual: false
+Expected: true
+```
+
+The failed wait had left admission in `Closing`, rejecting later factory admission.
+
+### GREEN evidence
+
+Targeted x64 Debug build, launched through `ProcessStartInfo` with the case-insensitively deduplicated environment, succeeded:
+
+```text
+MSBuild.exe CoreEngine.Tests\CoreEngine.Tests.vcxproj /t:Build /p:Configuration=Debug /p:Platform=x64 /m /clp:ErrorsOnly
+```
+
+Final focused verification (corrected count and filter):
+
+```text
+bin\CoreEngine.Tests\x64\Debug\CoreEngine.Tests.exe --gtest_filter=DllEntryAdmissionTests.*:AsyncLoggerTests.*:SapiEngineTests.DllCanUnloadNow*:*LockServer*:SapiEngineTests.DllGetClassObjectRejectsNewAdmissionAfterUnloadApproval
+```
+
+Result: 15 tests from 3 suites passed in 985 ms.
+
+### Modified files and self-review
+
+- `DllEntryAdmission.cpp` now atomically restores `Open` and notifies waiters when its entry-drain wait times out. A concurrent close still returns `false` without reopening another caller's active close.
+- `DllEntryAdmissionTestHooks.h` provides Debug-only internal named-event barriers with no DLL export. `dllmain.cpp` pauses only after an entry lease is held, and `DllEntryAdmission.cpp` signals the exact `Closing` transition.
+- `SessionLifecycleTests.cpp` releases the entry barrier through `wil::scope_exit`, waits for `Closing`, then proves the resumed factory path publishes a module lock and forces `DllCanUnloadNow` to return `S_FALSE`.
+- `DllEntryAdmissionTests.cpp` now verifies that a timed-out close restores normal entry admission.
+- `git diff --check` completed without whitespace errors. No Tasks 2/3 files, roadmap, merge, provider IPC, or ABI exports were changed.
+
+### Concerns
+
+- The named synchronization barriers are Debug-only internal test instrumentation; they are inert in Release and not exported. They use the current process ID, so concurrent CoreEngine admission-race tests in one process would need serialization.
+- An entry-drain timeout now reopens admission inside its owning component; `DllCanUnloadNow` therefore preserves a concurrent caller's `Closing` state rather than unconditionally reopening it.
+
+### Follow-up commit
+
+`fix(CoreEngine): repair admission timeout recovery` (final commit hash is reported to the controller with completion status).
