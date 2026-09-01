@@ -312,17 +312,14 @@ HRESULT SpeechWorker::BeginCancellationLocked(ULONGLONG cancellationDeadline,
         return E_FAIL;
     }
 
-    if (m_context.downstreamState == DownstreamState::Cancelling)
+    if (m_context.IsDrainingCancellation())
     {
         return E_UNEXPECTED;
     }
 
     speakId = m_context.token.speakId;
-    m_context.upstreamFinished = false;
-    m_context.upstreamTerminalBytes = 0;
-    m_context.cancellationDeadlineTick = cancellationDeadline;
+    m_context.TransitionToCancelling(cancellationDeadline);
     m_frameAssembler.Reset();
-    m_context.downstreamState = DownstreamState::Cancelling;
 #if defined(_DEBUG)
     CoreLog(L"[CancelTrace] speak_id=%llu cancelling_published tick=%llu entry_to_publish_ms=%llu raw=%llu delivered=%llu.",
         speakId, GetTickCount64(), GetTickCount64() - cancellationEntryTick,
@@ -361,10 +358,10 @@ HRESULT SpeechWorker::FinishCancellation(uint64_t speakId,
         ? cancellationDeadline - beforeWait
         : 0);
     const bool completed = m_requestChanged.wait_for(lock, remaining, [this] {
-        return m_context.downstreamState != DownstreamState::Cancelling || m_exit.load();
+        return !m_context.IsDrainingCancellation() || m_exit.load();
     });
 
-    if (!completed && m_context.downstreamState == DownstreamState::Cancelling)
+    if (!completed && m_context.IsDrainingCancellation())
     {
 #if defined(_DEBUG)
         const uint64_t rawAudioBytes = m_context.rawAudioBytesRead;
@@ -533,7 +530,7 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
 
         const ULONGLONG now = GetTickCount64();
 #if defined(_DEBUG)
-        if (m_context.upstreamFinished && m_context.downstreamState == DownstreamState::Speaking &&
+        if (m_context.IsAwaitingTerminalAudio() &&
             (lastTerminalWaitLogTick == 0 || now - lastTerminalWaitLogTick >= 250))
         {
             CoreLog(L"[ThreadTrace] speak_id=%llu terminal_pending tick=%llu declared=%llu raw=%llu delivered=%llu carry=%u.",
@@ -542,7 +539,7 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
             lastTerminalWaitLogTick = now;
         }
 #endif
-        if (m_context.downstreamState == DownstreamState::Cancelling &&
+        if (m_context.IsDrainingCancellation() &&
             HasCancellationTimedOut(now, m_context.cancellationDeadlineTick))
         {
             const uint64_t speakId = m_context.token.speakId;
@@ -554,8 +551,8 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
         }
 
         const ULONGLONG lastProgress = m_lastProviderProgressTick.load(std::memory_order_acquire);
-        const bool isActivelySynthesizing = (m_context.upstreamState == UpstreamState::Active);
-        const bool isAwaitingTerminalAudio = (m_context.upstreamFinished && m_context.downstreamState == DownstreamState::Speaking);
+        const bool isActivelySynthesizing = m_context.IsActivelySynthesizing();
+        const bool isAwaitingTerminalAudio = m_context.IsAwaitingTerminalAudio();
 
         if ((isActivelySynthesizing || isAwaitingTerminalAudio) &&
             HasSynthesisInactivityTimedOut(now, lastProgress, SynthesisInactivityTimeoutMs))
@@ -596,7 +593,7 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
 #if defined(_DEBUG)
             {
                 std::lock_guard<std::mutex> testLock(m_abortTransitionTestMutex);
-                m_wasCancellingAtAbortUnlockForTest = (m_context.downstreamState == DownstreamState::Cancelling);
+                m_wasCancellingAtAbortUnlockForTest = m_context.IsDrainingCancellation();
             }
 #endif
             lock.unlock();
@@ -747,7 +744,7 @@ SpeechWorker::AudioIngestResult SpeechWorker::IngestAudioChunkLocked(const uint8
     AudioIngestResult result{};
     result.token = m_context.token;
 
-    if (m_context.downstreamState == DownstreamState::Speaking || m_context.downstreamState == DownstreamState::Cancelling)
+    if (m_context.downstreamState == DownstreamState::Speaking || m_context.IsDrainingCancellation())
     {
         m_lastProviderProgressTick.store(GetTickCount64(), std::memory_order_release);
     }
@@ -849,11 +846,8 @@ bool SpeechWorker::UpdateAfterAudioDeliveryLocked(
         {
             CoreLog(L"[SpeechWorker] SAPI rejected an audio write; cancelling active synthesis.");
             outCancellationToSend = m_context.token.speakId;
-            m_context.upstreamFinished = false;
-            m_context.upstreamTerminalBytes = 0;
-            m_context.cancellationDeadlineTick = GetTickCount64() + CancellationTimeoutMs;
+            m_context.TransitionToCancelling(GetTickCount64() + CancellationTimeoutMs);
             m_frameAssembler.Reset();
-            m_context.downstreamState = DownstreamState::Cancelling;
         }
         else
         {
@@ -1100,7 +1094,7 @@ void SpeechWorker::ControlThreadProc()
                     const bool hasValidPayload = (!event.IsSpeechBoundary() || event.hasValidSpeechOffsets) &&
                                                  (!event.IsTerminal() || event.hasValidTerminalBytes);
                     if (event.IsProgress() && hasValidPayload &&
-                        (m_context.downstreamState == DownstreamState::Speaking || m_context.downstreamState == DownstreamState::Cancelling))
+                        (m_context.downstreamState == DownstreamState::Speaking || m_context.IsDrainingCancellation()))
                     {
                         m_lastProviderProgressTick.store(GetTickCount64(), std::memory_order_release);
                     }

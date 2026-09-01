@@ -314,3 +314,52 @@ TEST(SpeechProtocolUtilsTests, TimeoutAndAbortPredicatesBehaveCorrectly)
     EXPECT_FALSE(IsAbortRequested(0));
     EXPECT_FALSE(IsAbortRequested(0x02));
 }
+
+TEST(SpeechProtocolUtilsTests, RequestContext_TransitionToCancellingResetsFlagsAndSetsDeadline)
+{
+    RequestContext ctx{};
+    ctx.upstreamFinished = true;
+    ctx.upstreamTerminalBytes = 4096;
+    ctx.downstreamState = DownstreamState::Speaking;
+    ctx.cancellationDeadlineTick = 0;
+
+    ctx.TransitionToCancelling(5000ULL);
+
+    EXPECT_FALSE(ctx.upstreamFinished);
+    EXPECT_EQ(ctx.upstreamTerminalBytes, 0ULL);
+    EXPECT_EQ(ctx.cancellationDeadlineTick, 5000ULL);
+    EXPECT_EQ(ctx.downstreamState, DownstreamState::Cancelling);
+    EXPECT_TRUE(ctx.IsDrainingCancellation());
+}
+
+TEST(SpeechProtocolUtilsTests, RequestContext_SemanticPredicatesReflectDiscreteStates)
+{
+    RequestContext ctx{};
+
+    // Idle initial state
+    EXPECT_FALSE(ctx.IsActivelySynthesizing());
+    EXPECT_FALSE(ctx.IsAwaitingTerminalAudio());
+    EXPECT_FALSE(ctx.IsDrainingCancellation());
+
+    // Active synthesis
+    ctx.upstreamState = UpstreamState::Active;
+    ctx.downstreamState = DownstreamState::Speaking;
+    EXPECT_TRUE(ctx.IsActivelySynthesizing());
+    EXPECT_FALSE(ctx.IsAwaitingTerminalAudio());
+    EXPECT_FALSE(ctx.IsDrainingCancellation());
+
+    // Awaiting terminal audio (upstream completed/cancelled, downstream still delivering)
+    ctx.upstreamState = UpstreamState::Completed;
+    ctx.upstreamFinished = true;
+    ctx.downstreamState = DownstreamState::Speaking;
+    EXPECT_FALSE(ctx.IsActivelySynthesizing());
+    EXPECT_TRUE(ctx.IsAwaitingTerminalAudio());
+    EXPECT_FALSE(ctx.IsDrainingCancellation());
+
+    // Draining cancellation
+    ctx.TransitionToCancelling(1234ULL);
+    EXPECT_FALSE(ctx.IsActivelySynthesizing());
+    EXPECT_FALSE(ctx.IsAwaitingTerminalAudio());
+    EXPECT_TRUE(ctx.IsDrainingCancellation());
+}
+

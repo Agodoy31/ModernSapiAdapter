@@ -128,4 +128,27 @@ struct RequestContext
         cancellationDeadlineTick = 0;
         completionHr = S_OK;
     }
+
+    void TransitionToCancelling(ULONGLONG deadlineTick) noexcept
+    {
+        upstreamFinished = false;
+        upstreamTerminalBytes = 0;
+        cancellationDeadlineTick = deadlineTick;
+        downstreamState = DownstreamState::Cancelling;
+    }
+
+    [[nodiscard]] constexpr bool IsAwaitingTerminalAudio() const noexcept
+    {
+        return upstreamFinished && downstreamState == DownstreamState::Speaking;
+    }
+
+    [[nodiscard]] constexpr bool IsActivelySynthesizing() const noexcept
+    {
+        return upstreamState == UpstreamState::Active;
+    }
+
+    [[nodiscard]] constexpr bool IsDrainingCancellation() const noexcept
+    {
+        return downstreamState == DownstreamState::Cancelling;
+    }
 };
