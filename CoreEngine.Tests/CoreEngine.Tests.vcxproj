@@ -131,6 +131,7 @@
     <ClCompile Include="AudioFormatUtilsTests.cpp" />
     <ClCompile Include="PipeSecurityUtilsTests.cpp" />
     <ClCompile Include="AsyncLoggerTests.cpp" />
+    <ClCompile Include="SpeechProtocolUtilsTests.cpp" />
 
     <ClCompile Include="..\CoreEngine\SapiEngine.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>

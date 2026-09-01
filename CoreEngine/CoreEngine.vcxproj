@@ -173,6 +173,7 @@
     <ClInclude Include="SapiEngine.h" />
     <ClInclude Include="SpeechWorker.h" />
     <ClInclude Include="SpeechWorkerTypes.h" />
+    <ClInclude Include="SpeechProtocolUtils.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AsyncLogger.cpp" />
