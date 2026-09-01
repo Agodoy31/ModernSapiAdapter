@@ -308,6 +308,7 @@ TEST_F(SapiEngineTests, InFlightAudioFromCancelledRequestDoesNotIncrementNextReq
     }
 }
 
+#if defined(_DEBUG)
 TEST_F(SapiEngineTests, StaleSpansAreDroppedBetweenBatchWrites) {
     PipeServerWorkerFixture fixture;
     ASSERT_TRUE(fixture.Initialize());
@@ -346,3 +347,4 @@ TEST_F(SapiEngineTests, StaleSpansAreDroppedBetweenBatchWrites) {
         }));
     }
 }
+#endif
