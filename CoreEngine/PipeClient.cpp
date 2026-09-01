@@ -152,6 +152,15 @@ HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& ex
         {
             return hr;
         }
+
+        if (!m_providerProcess.hProcess && ShouldSpawnProvider(HRESULT_CODE(hr), controlPipeOpened, exePath))
+        {
+            HRESULT launchHr = LaunchProviderProcess(exePath);
+            if (FAILED(launchHr))
+            {
+                return launchHr;
+            }
+        }
     }
 
     return hr;
