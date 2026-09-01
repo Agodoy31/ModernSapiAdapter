@@ -1,5 +1,5 @@
 #include "pch.h"
-#include "../CoreEngine/AsyncLogger.h"
+#include "AsyncLoggerTestAccess.h"
 
 #if defined(_DEBUG)
 namespace
@@ -63,6 +63,19 @@ namespace
         markerBytes.push_back(static_cast<char>(character));
     }
     return markerBytes;
+}
+
+[[nodiscard]] bool ContainsMarker(const std::vector<std::wstring>& messages, const std::wstring& marker)
+{
+    for (const std::wstring& message : messages)
+    {
+        if (message.find(marker) != std::wstring::npos)
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 } // namespace
@@ -195,5 +208,85 @@ TEST(AsyncLoggerTests, LoggingAfterShutdownStartsANewSession)
     ASSERT_TRUE(logger->Shutdown());
     const std::string logTail = ReadLogTail(CoreEngineLogPath());
     EXPECT_NE(logTail.find(MarkerBytes(marker)), std::string::npos);
+}
+
+TEST(AsyncLoggerTests, QuiescenceRejectsNewMessagesUntilAnUnloadRejectionResumesIt)
+{
+    auto* logger = AsyncLogger::GetInstance();
+    ASSERT_NE(nullptr, logger);
+    ASSERT_TRUE(logger->Shutdown());
+
+    std::mutex writtenMessagesMutex;
+    std::vector<std::wstring> writtenMessages;
+    AsyncLoggerTestAccess::SetWriteCallback(*logger, [&writtenMessagesMutex, &writtenMessages](const std::wstring& message) {
+        std::lock_guard lock(writtenMessagesMutex);
+        writtenMessages.push_back(message);
+    });
+    auto resetWriteCallback = wil::scope_exit([logger] {
+        AsyncLoggerTestAccess::SetWriteCallback(*logger, {});
+    });
+
+    const std::wstring acceptedBeforeQuiescence = UniqueMarker(L"accepted-before-quiescence");
+    const std::wstring rejectedDuringQuiescence = UniqueMarker(L"rejected-during-quiescence");
+    const std::wstring acceptedAfterResume = UniqueMarker(L"accepted-after-resume");
+
+    logger->Log(acceptedBeforeQuiescence);
+    ASSERT_TRUE(logger->BeginUnloadQuiescence(1000));
+
+    logger->Log(rejectedDuringQuiescence);
+    logger->ResumeAfterUnloadRejected();
+    logger->Log(acceptedAfterResume);
+    ASSERT_TRUE(logger->Shutdown());
+
+    std::lock_guard lock(writtenMessagesMutex);
+    EXPECT_TRUE(ContainsMarker(writtenMessages, acceptedBeforeQuiescence));
+    EXPECT_FALSE(ContainsMarker(writtenMessages, rejectedDuringQuiescence));
+    EXPECT_TRUE(ContainsMarker(writtenMessages, acceptedAfterResume));
+}
+
+TEST(AsyncLoggerTests, QuiescenceTimeoutReturnsFalseWithoutAbandoningTheWorker)
+{
+    auto* logger = AsyncLogger::GetInstance();
+    ASSERT_NE(nullptr, logger);
+    ASSERT_TRUE(logger->Shutdown());
+
+    wil::unique_event writeStarted(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    wil::unique_event releaseWrite(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    wil::unique_event writeCompleted(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    ASSERT_TRUE(writeStarted);
+    ASSERT_TRUE(releaseWrite);
+    ASSERT_TRUE(writeCompleted);
+    std::mutex writtenMessagesMutex;
+    std::vector<std::wstring> writtenMessages;
+    AsyncLoggerTestAccess::SetWriteCallback(*logger, [&writeStarted, &releaseWrite, &writeCompleted, &writtenMessagesMutex, &writtenMessages](const std::wstring& message) {
+        SetEvent(writeStarted.get());
+        WaitForSingleObject(releaseWrite.get(), INFINITE);
+        std::lock_guard lock(writtenMessagesMutex);
+        writtenMessages.push_back(message);
+        SetEvent(writeCompleted.get());
+    });
+    auto releaseBlockedWrite = wil::scope_exit([&releaseWrite] {
+        SetEvent(releaseWrite.get());
+    });
+    auto resetWriteCallback = wil::scope_exit([logger] {
+        AsyncLoggerTestAccess::SetWriteCallback(*logger, {});
+    });
+
+    const std::wstring blockedMessage = UniqueMarker(L"blocked-message");
+    const std::wstring restartedMessage = UniqueMarker(L"restarted-after-timeout");
+    logger->Log(blockedMessage);
+    ASSERT_EQ(WaitForSingleObject(writeStarted.get(), 1000), WAIT_OBJECT_0);
+
+    EXPECT_FALSE(logger->BeginUnloadQuiescence(50));
+    ASSERT_TRUE(SetEvent(releaseWrite.get()));
+    ASSERT_EQ(WaitForSingleObject(writeCompleted.get(), 1000), WAIT_OBJECT_0);
+    ASSERT_TRUE(AsyncLoggerTestAccess::WaitForWorkerStopped(*logger, 1000));
+
+    logger->Log(restartedMessage);
+    ASSERT_TRUE(logger->Shutdown());
+
+    std::lock_guard lock(writtenMessagesMutex);
+    EXPECT_TRUE(ContainsMarker(writtenMessages, blockedMessage));
+    EXPECT_TRUE(ContainsMarker(writtenMessages, restartedMessage));
 }
 #endif

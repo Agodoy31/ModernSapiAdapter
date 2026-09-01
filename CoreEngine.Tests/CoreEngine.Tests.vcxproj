@@ -122,7 +122,7 @@
     <ClInclude Include="CoreEngineDllFixture.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="DllUnloadPolicyTests.cpp" />
+    <ClCompile Include="DllEntryAdmissionTests.cpp" />
     <ClCompile Include="SessionLifecycleTests.cpp" />
     <ClCompile Include="AudioStreamingTests.cpp" />
     <ClCompile Include="CancellationTests.cpp" />
@@ -161,6 +161,11 @@
       <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
     </ClCompile>
     <ClCompile Include="..\CoreEngine\AsyncLogger.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
+      <PreprocessorDefinitions>COREENGINE_TESTING;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Include="..\CoreEngine\DllEntryAdmission.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
     </ClCompile>

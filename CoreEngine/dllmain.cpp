@@ -4,7 +4,7 @@
  */
 
 #include "pch.h"
-#include "DllUnloadPolicy.h"
+#include "DllEntryAdmission.h"
 #include "SapiEngine.h"
 #ifdef _DEBUG
 #include "AsyncLogger.h"
@@ -15,8 +15,12 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 namespace
 {
 
+constexpr DWORD EntryDrainTimeoutMs = 250;
+constexpr DWORD LoggerQuiescenceTimeoutMs = 250;
+DllEntryAdmission g_dllEntryAdmission;
+
 #if defined(_DEBUG)
-[[nodiscard]] bool ShutdownLoggerSafely() noexcept
+[[nodiscard]] bool BeginLoggerUnloadQuiescence() noexcept
 {
     auto* const logger = AsyncLogger::GetInstance();
     if (logger == nullptr)
@@ -24,12 +28,16 @@ namespace
         return true;
     }
 
-    return logger->Shutdown();
+    return logger->BeginUnloadQuiescence(LoggerQuiescenceTimeoutMs);
 }
-#else
-[[nodiscard]] constexpr bool ShutdownLoggerSafely() noexcept
+
+void ResumeLoggerAfterUnloadRejected() noexcept
 {
-    return true;
+    auto* const logger = AsyncLogger::GetInstance();
+    if (logger != nullptr)
+    {
+        logger->ResumeAfterUnloadRejected();
+    }
 }
 #endif
 
@@ -84,6 +92,17 @@ public:
 
 STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
 {
+    auto admissionLease = g_dllEntryAdmission.TryEnter();
+    if (!admissionLease.has_value())
+    {
+        if (ppv != nullptr)
+        {
+            *ppv = nullptr;
+        }
+
+        return CLASS_E_CLASSNOTAVAILABLE;
+    }
+
     CoreLog(L"[CoreEngine] DllGetClassObject called.");
     if (ppv == nullptr) return E_POINTER;
     *ppv = nullptr;
@@ -102,9 +121,34 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
 
 STDAPI DllCanUnloadNow(void)
 {
-    return CoreEngine::EvaluateDllUnload(
-        []() noexcept { return static_cast<std::uint32_t>(winrt::get_module_lock()); },
-        ShutdownLoggerSafely);
+    if (winrt::get_module_lock() != 0)
+    {
+        return S_FALSE;
+    }
+
+    if (!g_dllEntryAdmission.BeginClosingAndWaitForEntries(EntryDrainTimeoutMs))
+    {
+        return S_FALSE;
+    }
+
+#if defined(_DEBUG)
+    if (!BeginLoggerUnloadQuiescence())
+    {
+        g_dllEntryAdmission.Reopen();
+        return S_FALSE;
+    }
+#endif
+
+    if (winrt::get_module_lock() != 0)
+    {
+#if defined(_DEBUG)
+        ResumeLoggerAfterUnloadRejected();
+#endif
+        g_dllEntryAdmission.Reopen();
+        return S_FALSE;
+    }
+
+    return S_OK;
 }
 
 STDAPI DllRegisterServer(void)

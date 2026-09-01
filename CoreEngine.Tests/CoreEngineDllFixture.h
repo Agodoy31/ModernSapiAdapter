@@ -67,7 +67,7 @@ public:
 
     ~CoreEngineDll()
     {
-        if (m_module && m_dllCanUnloadNow && m_dllCanUnloadNow() != S_OK)
+        if (m_module && !m_unloadApproved && m_dllCanUnloadNow && m_dllCanUnloadNow() != S_OK)
         {
             m_module.release();
         }
@@ -95,13 +95,19 @@ public:
 
     HRESULT CanUnloadNow() const
     {
-        return m_dllCanUnloadNow();
+        const HRESULT result = m_dllCanUnloadNow();
+        if (result == S_OK)
+        {
+            m_unloadApproved = true;
+        }
+        return result;
     }
 
 private:
     wil::unique_hmodule m_module;
     DllGetClassObjectFunction m_dllGetClassObject = nullptr;
     DllCanUnloadNowFunction m_dllCanUnloadNow = nullptr;
+    mutable bool m_unloadApproved = false;
     DWORD m_loadError = ERROR_SUCCESS;
 };
 

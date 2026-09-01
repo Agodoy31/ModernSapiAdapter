@@ -98,13 +98,22 @@ void AsyncLogger::Log(const std::wstring& message) noexcept
 
         std::wstring formattedMessage = std::wstring(prefix) + message;
         std::unique_lock lock(m_mutex);
-        m_cv.wait(lock, [this] {
-            return m_state != State::Stopping;
-        });
-
-        if (m_state == State::StopFailed)
+        if (m_admission != Admission::Open || m_state == State::StopFailed)
         {
             return;
+        }
+
+        if (m_state == State::Stopped && m_worker.joinable())
+        {
+            std::thread completedWorker = std::move(m_worker);
+            lock.unlock();
+            completedWorker.join();
+            lock.lock();
+
+            if (m_admission != Admission::Open || m_state == State::StopFailed)
+            {
+                return;
+            }
         }
 
         if (m_state == State::Stopped && !StartLocked())
@@ -154,6 +163,18 @@ void AsyncLogger::WorkerThread() noexcept
 
             try
             {
+#if defined(COREENGINE_TESTING)
+                WriteCallback writeCallback;
+                {
+                    std::lock_guard lock(m_mutex);
+                    writeCallback = m_writeCallback;
+                }
+                if (writeCallback)
+                {
+                    writeCallback(message);
+                }
+                else
+#endif
                 if (m_file.is_open())
                 {
                     m_file << message << L'\n';
@@ -170,7 +191,7 @@ void AsyncLogger::WorkerThread() noexcept
         try
         {
             std::lock_guard lock(m_mutex);
-            if (m_state == State::Running)
+            if (m_state == State::Running || m_state == State::DrainingForUnload)
             {
                 m_state = State::StopFailed;
             }
@@ -192,60 +213,114 @@ void AsyncLogger::WorkerThread() noexcept
     catch (...)
     {
     }
+
+    try
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_state == State::DrainingForUnload)
+        {
+            m_state = State::Stopped;
+            if (m_resumeWhenStopped)
+            {
+                m_resumeWhenStopped = false;
+                m_stopRequested = false;
+                m_admission = Admission::Open;
+            }
+        }
+    }
+    catch (...)
+    {
+    }
+    m_cv.notify_all();
 }
 
 bool AsyncLogger::Shutdown() noexcept
 {
-    try
-    {
-        std::unique_lock lock(m_mutex);
-        m_cv.wait(lock, [this] {
-            return m_state != State::Stopping;
-        });
-
-        if (m_state == State::Stopped)
-        {
-            return true;
-        }
-
-        const bool workerFailed = m_state == State::StopFailed;
-        m_state = State::Stopping;
-        m_stopRequested = true;
-        lock.unlock();
-        m_cv.notify_all();
-
-        bool stopped = false;
-        try
-        {
-            m_worker.join();
-            stopped = true;
-        }
-        catch (...)
-        {
-        }
-
-        lock.lock();
-        if (workerFailed)
-        {
-            stopped = false;
-        }
-        if (!m_queue.empty())
-        {
-            stopped = false;
-        }
-        m_state = stopped ? State::Stopped : State::StopFailed;
-        if (stopped)
-        {
-            m_stopRequested = false;
-        }
-        lock.unlock();
-        m_cv.notify_all();
-        return stopped;
-    }
-    catch (...)
+    if (!BeginUnloadQuiescence(INFINITE))
     {
         return false;
     }
+
+    ResumeAfterUnloadRejected();
+    return true;
 }
+
+bool AsyncLogger::BeginUnloadQuiescence(const DWORD timeoutMs) noexcept
+{
+    std::unique_lock lock(m_mutex);
+    m_admission = Admission::Quiescent;
+    m_resumeWhenStopped = false;
+    if (m_state == State::StopFailed)
+    {
+        return false;
+    }
+
+    if (m_state == State::Running)
+    {
+        m_state = State::DrainingForUnload;
+        m_stopRequested = true;
+        lock.unlock();
+        m_cv.notify_all();
+        lock.lock();
+    }
+
+    const auto stopped = [this] { return m_state == State::Stopped || m_state == State::StopFailed; };
+    if (!stopped() && !m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), stopped))
+    {
+        m_resumeWhenStopped = true;
+        return false;
+    }
+
+    if (m_state != State::Stopped)
+    {
+        return false;
+    }
+
+    std::thread completedWorker = std::move(m_worker);
+    lock.unlock();
+    if (completedWorker.joinable())
+    {
+        completedWorker.join();
+    }
+    return true;
+}
+
+void AsyncLogger::ResumeAfterUnloadRejected() noexcept
+{
+    std::unique_lock lock(m_mutex);
+    if (m_state != State::Stopped)
+    {
+        return;
+    }
+
+    std::thread completedWorker = std::move(m_worker);
+    lock.unlock();
+    if (completedWorker.joinable())
+    {
+        completedWorker.join();
+    }
+    lock.lock();
+    m_stopRequested = false;
+    m_resumeWhenStopped = false;
+    m_admission = Admission::Open;
+    lock.unlock();
+    m_cv.notify_all();
+}
+
+#if defined(COREENGINE_TESTING)
+void AsyncLogger::SetWriteCallbackForTesting(WriteCallback callback) noexcept
+{
+    std::lock_guard lock(m_mutex);
+    m_writeCallback = std::move(callback);
+}
+
+bool AsyncLogger::WaitForWorkerStoppedForTesting(const DWORD timeoutMs) noexcept
+{
+    std::unique_lock lock(m_mutex);
+    return m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
+        return m_state == State::Stopped;
+    });
+}
+#endif
 
 #endif // _DEBUG

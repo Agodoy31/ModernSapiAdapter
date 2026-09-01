@@ -167,7 +167,7 @@
     <ClInclude Include="AsyncLogger.h" />
     <ClInclude Include="AudioFormatUtils.h" />
     <ClInclude Include="ControlStreamBuffer.h" />
-    <ClInclude Include="DllUnloadPolicy.h" />
+    <ClInclude Include="DllEntryAdmission.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="PipeClient.h" />
     <ClInclude Include="PipeClientTestHooks.h" />
@@ -184,6 +184,9 @@
     <ClCompile Include="AsyncLogger.cpp" />
     <ClCompile Include="AudioFormatUtils.cpp" />
     <ClCompile Include="dllmain.cpp" />
+    <ClCompile Include="DllEntryAdmission.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="PipeClient.cpp" />
     <ClCompile Include="PipeSecurityUtils.cpp" />
     <ClCompile Include="PcmFrameAssembler.cpp" />

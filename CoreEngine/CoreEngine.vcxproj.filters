@@ -22,7 +22,7 @@
     <ClInclude Include="ControlStreamBuffer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="DllUnloadPolicy.h">
+    <ClInclude Include="DllEntryAdmission.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)include\provider_abi.h">
@@ -58,6 +58,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="DllEntryAdmission.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="PipeClient.cpp">

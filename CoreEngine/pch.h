@@ -46,6 +46,7 @@
 #include <vector>
 #include <map>
 #include <functional>
+#include <optional>
 #include <regex>
 #include <cwctype>
 #include <fstream>
