@@ -175,6 +175,10 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
         std::lock_guard<std::mutex> lock(m_siteMutex);
         m_cpSite.copy_from(pOutputSite);
     }
+    auto siteCleanup = wil::scope_exit([this] {
+        std::lock_guard<std::mutex> lock(m_siteMutex);
+        m_cpSite = nullptr;
+    });
 
     SpeechWorker* worker = nullptr;
     PipeClient* client = nullptr;

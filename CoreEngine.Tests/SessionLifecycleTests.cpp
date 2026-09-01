@@ -209,7 +209,7 @@ TEST_F(SapiEngineTests, DllCanUnloadNowRefusesUnloadAfterAnAdmittedFactoryPublis
 }
 #endif
 
-TEST_F(SapiEngineTests, DllGetClassObjectRejectsNewAdmissionAfterUnloadApproval) {
+TEST_F(SapiEngineTests, DllGetClassObjectSucceedsAfterUnloadApprovalIfReactivated) {
     CoreEngineDll module;
     ASSERT_TRUE(module.IsLoaded()) << "Load error: " << module.LoadError();
 
@@ -219,8 +219,11 @@ TEST_F(SapiEngineTests, DllGetClassObjectRejectsNewAdmissionAfterUnloadApproval)
         0x91cd243c, 0x63f7, 0x441f, { 0xae, 0x2f, 0x45, 0x05, 0x70, 0x05, 0xcb, 0x6d }
     };
     void* object = reinterpret_cast<void*>(1);
-    EXPECT_EQ(module.GetClassObject(sapiEngineClsid, IID_IClassFactory, &object), CLASS_E_CLASSNOTAVAILABLE);
-    EXPECT_EQ(object, nullptr);
+    EXPECT_EQ(module.GetClassObject(sapiEngineClsid, IID_IClassFactory, &object), S_OK);
+    EXPECT_NE(object, nullptr);
+    if (object) {
+        reinterpret_cast<IUnknown*>(object)->Release();
+    }
 }
 
 TEST_F(SapiEngineTests, DllGetClassObjectClearsOutputStorageBeforeRejectingUnknownClass) {

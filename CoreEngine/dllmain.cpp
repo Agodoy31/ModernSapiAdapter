@@ -152,6 +152,7 @@ STDAPI DllCanUnloadNow(void)
         return S_FALSE;
     }
 
+    g_dllEntryAdmission.Reopen();
     return S_OK;
 }
 
