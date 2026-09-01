@@ -1,8 +1,11 @@
 #include "pch.h"
 #include "SpeechWorker.h"
 #include "SpeechWorkerTypes.h"
+#include "SpeechProtocolUtils.h"
 #include "SapiEngine.h"
 #include "JsonValue.h"
+
+using namespace SpeechProtocolUtils;
 
 namespace
 {
@@ -10,144 +13,6 @@ namespace
 std::atomic_bool g_failNextControlThreadCreationForTest{false};
 std::atomic_bool g_failNextControlThreadEntryForTest{false};
 #endif
-
-[[nodiscard]] ProviderEventType ParseProviderEventType(std::string_view name) noexcept
-{
-    if (name == "word_boundary")
-    {
-        return ProviderEventType::WordBoundary;
-    }
-    if (name == "sentence_boundary")
-    {
-        return ProviderEventType::SentenceBoundary;
-    }
-    if (name == "bookmark_reached")
-    {
-        return ProviderEventType::Bookmark;
-    }
-    if (name == "synthesis_complete")
-    {
-        return ProviderEventType::SynthesisComplete;
-    }
-    if (name == "synthesis_cancelled")
-    {
-        return ProviderEventType::SynthesisCancelled;
-    }
-    if (name == "log")
-    {
-        return ProviderEventType::Log;
-    }
-    if (name == "completed")
-    {
-        return ProviderEventType::LegacyCompleted;
-    }
-    return ProviderEventType::Unknown;
-}
-
-[[nodiscard]] bool IsSpeechBoundaryEvent(ProviderEventType type) noexcept
-{
-    return type == ProviderEventType::WordBoundary ||
-           type == ProviderEventType::SentenceBoundary ||
-           type == ProviderEventType::Bookmark;
-}
-
-[[nodiscard]] bool IsTerminalEvent(ProviderEventType type) noexcept
-{
-    return type == ProviderEventType::SynthesisComplete ||
-           type == ProviderEventType::SynthesisCancelled;
-}
-
-[[nodiscard]] bool IsProgressEvent(ProviderEventType type) noexcept
-{
-    return IsSpeechBoundaryEvent(type) ||
-           IsTerminalEvent(type) ||
-           type == ProviderEventType::Log;
-}
-
-[[nodiscard]] bool TryParseSpeechOffsets(
-    const nlohmann::json& json,
-    ProviderEventType type,
-    SpeechEventOffsets& outOffsets) noexcept
-{
-    if (!json.is_object())
-    {
-        return false;
-    }
-
-    if (!json.contains("audio_offset_ms") || !TryGetJsonUnsignedInteger(json["audio_offset_ms"], outOffsets.audioOffsetMs))
-    {
-        return false;
-    }
-
-    if (type == ProviderEventType::Bookmark)
-    {
-        return true;
-    }
-
-    if (!json.contains("text_offset") || !TryGetJsonUnsignedInteger(json["text_offset"], outOffsets.textOffset))
-    {
-        return false;
-    }
-
-    if (!json.contains("text_length") || !TryGetJsonUnsignedInteger(json["text_length"], outOffsets.textLength))
-    {
-        return false;
-    }
-
-    return true;
-}
-
-[[nodiscard]] bool TryParseTerminalBytes(
-    const nlohmann::json& json,
-    ProviderEventType type,
-    uint64_t& outBytes) noexcept
-{
-    outBytes = 0;
-    if (!json.is_object())
-    {
-        return false;
-    }
-
-    if (type == ProviderEventType::SynthesisComplete)
-    {
-        if (json.contains("total_audio_bytes"))
-        {
-            return TryGetJsonUnsignedInteger(json["total_audio_bytes"], outBytes);
-        }
-        return false;
-    }
-
-    if (type == ProviderEventType::SynthesisCancelled)
-    {
-        if (json.contains("audio_bytes_written"))
-        {
-            return TryGetJsonUnsignedInteger(json["audio_bytes_written"], outBytes);
-        }
-        return false;
-    }
-
-    return false;
-}
-
-[[nodiscard]] bool HasSynthesisInactivityTimedOut(
-    ULONGLONG now,
-    ULONGLONG lastProgressTick,
-    ULONGLONG timeoutMs) noexcept
-{
-    return now >= lastProgressTick && (now - lastProgressTick) >= timeoutMs;
-}
-
-[[nodiscard]] bool HasCancellationTimedOut(
-    ULONGLONG now,
-    ULONGLONG deadlineTick) noexcept
-{
-    return deadlineTick != 0 && now >= deadlineTick;
-}
-
-[[nodiscard]] bool IsAbortRequested(DWORD actionFlags) noexcept
-{
-    return (actionFlags & SPVES_ABORT) != 0;
-}
 }
 
 SpeechWorker::SpeechWorker(CSapiEngine* pEngine, PipeClient* pClient, WORD blockAlign)
@@ -1152,19 +1017,13 @@ bool SpeechWorker::HandleTerminalEventLocked(
     return CheckTerminalBoundaryLocked();
 }
 
-bool SpeechWorker::HandleLogEventLocked(uint64_t eventSpeakId, const nlohmann::json& json)
+bool SpeechWorker::HandleLogEventLocked(
+    uint64_t eventSpeakId,
+    std::string_view logSeverity,
+    std::string_view logMessage)
 {
-    std::string_view severity = "info";
-    if (json.contains("severity") && json["severity"].is_string())
-    {
-        severity = json["severity"].get<std::string_view>();
-    }
-
-    std::string_view message = "";
-    if (json.contains("message") && json["message"].is_string())
-    {
-        message = json["message"].get<std::string_view>();
-    }
+    const std::string_view severity = logSeverity.empty() ? std::string_view("info") : logSeverity;
+    const std::string_view message = logMessage;
 
     CoreLog(L"[SpeechWorker] Provider log (severity=%.*hs, speak_id=%llu): %.*hs",
         static_cast<int>(severity.size()), severity.data(),
@@ -1206,18 +1065,15 @@ void SpeechWorker::ControlThreadProc()
             break;
         }
 
-        if (json.is_null() || !json.is_object() || !json.contains("event") || !json["event"].is_string())
-        {
-            continue;
-        }
-
         try
         {
-            const std::string_view eventStr = json["event"].get<std::string_view>();
-            const ProviderEventType eventType = ParseProviderEventType(eventStr);
+            const ProviderControlEvent event = SpeechProtocolUtils::ParseControlEvent(json);
+            if (event.type == ProviderEventType::Unknown && event.rawEventName.empty())
+            {
+                continue;
+            }
 
-            uint64_t eventSpeakId = 0;
-            if (!json.contains("speak_id") || !TryGetJsonUnsignedInteger(json["speak_id"], eventSpeakId))
+            if (event.speakId == 0)
             {
                 {
                     std::lock_guard<std::mutex> lock(m_requestMutex);
@@ -1233,41 +1089,37 @@ void SpeechWorker::ControlThreadProc()
             bool forwardToSapi = false;
             bool faultAfterStateUpdate = false;
 
-            SpeechEventOffsets speechOffsets{};
-            const bool isSpeech = IsSpeechBoundaryEvent(eventType);
-            const bool hasValidSpeechNumbers = !isSpeech || TryParseSpeechOffsets(json, eventType, speechOffsets);
-
-            uint64_t terminalAudioBytes = 0;
-            const bool isTerminal = IsTerminalEvent(eventType);
-            const bool hasValidTerminalBytes = !isTerminal || TryParseTerminalBytes(json, eventType, terminalAudioBytes);
-
             {
                 std::lock_guard<std::mutex> lock(m_requestMutex);
                 forwardToSapi = (m_context.upstreamState != UpstreamState::Faulted &&
                                  m_context.downstreamState != DownstreamState::Faulted &&
                                  !m_context.faultPending);
 
-                if (eventSpeakId == m_context.token.speakId)
+                if (event.speakId == m_context.token.speakId)
                 {
-                    const bool isProgress = IsProgressEvent(eventType);
-                    if (isProgress && hasValidSpeechNumbers && hasValidTerminalBytes &&
+                    const bool hasValidPayload = (!event.IsSpeechBoundary() || event.hasValidSpeechOffsets) &&
+                                                 (!event.IsTerminal() || event.hasValidTerminalBytes);
+                    if (event.IsProgress() && hasValidPayload &&
                         (m_context.downstreamState == DownstreamState::Speaking || m_context.downstreamState == DownstreamState::Cancelling))
                     {
                         m_lastProviderProgressTick.store(GetTickCount64(), std::memory_order_release);
                     }
 
-                    if (isSpeech && !hasValidSpeechNumbers)
+                    if (event.IsSpeechBoundary())
                     {
-                        forwardToSapi = false;
-                        faultAfterStateUpdate = true;
-                    }
-                    else if (isSpeech && m_context.downstreamState != DownstreamState::Speaking)
-                    {
-                        // SAPI has aborted this request, so delayed provider callbacks must not move focus.
-                        forwardToSapi = false;
+                        if (!event.hasValidSpeechOffsets)
+                        {
+                            forwardToSapi = false;
+                            faultAfterStateUpdate = true;
+                        }
+                        else if (m_context.downstreamState != DownstreamState::Speaking)
+                        {
+                            // SAPI has aborted this request, so delayed provider callbacks must not move focus.
+                            forwardToSapi = false;
+                        }
                     }
 
-                    switch (eventType)
+                    switch (event.type)
                     {
                     case ProviderEventType::WordBoundary:
                     case ProviderEventType::SentenceBoundary:
@@ -1280,26 +1132,26 @@ void SpeechWorker::ControlThreadProc()
                     case ProviderEventType::SynthesisCancelled:
                     {
                         faultAfterStateUpdate = HandleTerminalEventLocked(
-                            eventType, eventSpeakId, terminalAudioBytes, hasValidTerminalBytes, eventStr);
+                            event.type, event.speakId, event.terminalAudioBytes, event.hasValidTerminalBytes, event.rawEventName);
                         break;
                     }
 
                     case ProviderEventType::LegacyCompleted:
                     {
-                        CoreLog(L"[SpeechWorker] Ignoring legacy completed event for speak_id %llu.", eventSpeakId);
+                        CoreLog(L"[SpeechWorker] Ignoring legacy completed event for speak_id %llu.", event.speakId);
                         break;
                     }
 
                     case ProviderEventType::Log:
                     {
-                        faultAfterStateUpdate = HandleLogEventLocked(eventSpeakId, json);
+                        faultAfterStateUpdate = HandleLogEventLocked(event.speakId, event.logSeverity, event.logMessage);
                         break;
                     }
 
                     case ProviderEventType::Unknown:
                     {
                         CoreLog(L"[SpeechWorker] Unknown event received: %.*hs",
-                            static_cast<int>(eventStr.size()), eventStr.data());
+                            static_cast<int>(event.rawEventName.size()), event.rawEventName.data());
                         break;
                     }
                     }

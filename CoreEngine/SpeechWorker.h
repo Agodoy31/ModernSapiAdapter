@@ -126,7 +126,10 @@ private:
         bool hasValidTerminalBytes,
         std::string_view eventStr);
 
-    [[nodiscard]] bool HandleLogEventLocked(uint64_t eventSpeakId, const nlohmann::json& json);
+    [[nodiscard]] bool HandleLogEventLocked(
+        uint64_t eventSpeakId,
+        std::string_view logSeverity,
+        std::string_view logMessage);
 
     /**
      * @brief Checks if the terminal boundary has been reached for the upstream and downstream states.
