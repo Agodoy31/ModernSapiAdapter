@@ -240,8 +240,8 @@ TEST_F(SapiEngineTests, CreateProviderSessionDoesNotPublishAnInvalidInfoResponse
     ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
 
     auto engine = winrt::make_self<CSapiEngine>();
-    engine->m_providerExecutablePath = L"ignored.exe";
-    engine->m_providerPipeName = server.PipeName();
+    engine->m_config.executablePath = L"ignored.exe";
+    engine->m_config.pipeName = server.PipeName();
 
     std::atomic_bool infoResponseSent{false};
     std::thread infoResponder([&server, &infoResponseSent] {
@@ -263,8 +263,8 @@ TEST_F(SapiEngineTests, CreateProviderSessionAcceptsIntegralFloatAudioFormatNumb
     ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
 
     auto engine = winrt::make_self<CSapiEngine>();
-    engine->m_providerExecutablePath = L"ignored.exe";
-    engine->m_providerPipeName = server.PipeName();
+    engine->m_config.executablePath = L"ignored.exe";
+    engine->m_config.pipeName = server.PipeName();
 
     std::atomic_bool infoResponseSent{false};
     std::thread infoResponder([&server, &infoResponseSent] {
@@ -279,9 +279,9 @@ TEST_F(SapiEngineTests, CreateProviderSessionAcceptsIntegralFloatAudioFormatNumb
     infoResponder.join();
     ASSERT_EQ(sessionResult, S_OK);
     EXPECT_TRUE(infoResponseSent.load());
-    EXPECT_EQ(engine->m_audioFormat.nSamplesPerSec, 24000u);
-    EXPECT_EQ(engine->m_audioFormat.wBitsPerSample, 16u);
-    EXPECT_EQ(engine->m_audioFormat.nChannels, 1u);
+    EXPECT_EQ(engine->m_config.audioFormat.nSamplesPerSec, 24000u);
+    EXPECT_EQ(engine->m_config.audioFormat.wBitsPerSample, 16u);
+    EXPECT_EQ(engine->m_config.audioFormat.nChannels, 1u);
 }
 
 TEST_F(SapiEngineTests, SpeakRebuildsProviderSessionAfterSynthesisTimeout) {

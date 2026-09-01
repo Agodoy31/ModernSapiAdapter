@@ -31,6 +31,9 @@
     <ClInclude Include="PcmFrameAssembler.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ProviderSessionConfig.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="SapiEngine.h">
       <Filter>Header Files</Filter>
     </ClInclude>

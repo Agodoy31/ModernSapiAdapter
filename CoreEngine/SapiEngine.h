@@ -6,6 +6,7 @@
 #pragma once
 #include "PipeClient.h"
 #include "SpeechWorker.h"
+#include "ProviderSessionConfig.h"
 
 /**
  * @class CSapiEngine
@@ -122,11 +123,7 @@ private:
     std::mutex m_speakMutex;
     std::unique_ptr<PipeClient> m_pClient;
     std::unique_ptr<SpeechWorker> m_pWorker;
-    std::wstring m_providerExecutablePath;
-    std::wstring m_providerPipeName;
-    std::wstring m_voiceId;
-    WAVEFORMATEX m_audioFormat;
-    bool m_hasOutputFormat{false};
+    ProviderSessionConfig m_config;
     std::atomic<uint64_t> m_speakIdCounter{0};
 
     uint64_t AudioOffsetMsToBytes(uint32_t audioMs) const;
@@ -141,7 +138,6 @@ private:
     void DispatchLogEvent(const nlohmann::json& json);
 
     [[nodiscard]] static bool IsValidInfoResponse(const nlohmann::json& response) noexcept;
-    [[nodiscard]] bool IsFormatCompatible(const WAVEFORMATEX& candidate) const noexcept;
 
 public:
     [[nodiscard]] static nlohmann::json SerializeFragmentsToJson(const SPVTEXTFRAG* pFragList);

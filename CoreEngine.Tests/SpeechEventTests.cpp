@@ -13,7 +13,7 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsAndDispatchesToSite) {
     auto engine = winrt::make_self<CSapiEngine>();
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     engine->m_cpSite.copy_from(mockSite.get());
-    engine->m_audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
+    engine->m_config.audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
 
     const auto makeEvent = [](auto audioOffset, auto textOffset, auto textLength) {
         return nlohmann::json{
@@ -61,7 +61,7 @@ TEST_F(SapiEngineTests, OnSpeechEventPreservesLongAudioOffsets) {
     auto engine = winrt::make_self<CSapiEngine>();
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     engine->m_cpSite.copy_from(mockSite.get());
-    engine->m_audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
+    engine->m_config.audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
 
     nlohmann::json eventJson;
     eventJson["event"] = "word_boundary";
@@ -80,7 +80,7 @@ TEST_F(SapiEngineTests, OnSpeechEventAlignsOffsetsToPcmFrames) {
     auto engine = winrt::make_self<CSapiEngine>();
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     engine->m_cpSite.copy_from(mockSite.get());
-    engine->m_audioFormat = { WAVE_FORMAT_PCM, 2, 11099, 66594, 6, 24, 0 };
+    engine->m_config.audioFormat = { WAVE_FORMAT_PCM, 2, 11099, 66594, 6, 24, 0 };
 
     nlohmann::json eventJson;
     eventJson["event"] = "bookmark_reached";
@@ -93,7 +93,7 @@ TEST_F(SapiEngineTests, OnSpeechEventAlignsOffsetsToPcmFrames) {
     ASSERT_EQ(mockSite->receivedEvents.size(), 1u);
     const SPEVENT& received = mockSite->receivedEvents.front();
     EXPECT_EQ(received.ullAudioStreamOffset, 594u);
-    EXPECT_EQ(received.ullAudioStreamOffset % engine->m_audioFormat.nBlockAlign, 0u);
+    EXPECT_EQ(received.ullAudioStreamOffset % engine->m_config.audioFormat.nBlockAlign, 0u);
     CoTaskMemFree(reinterpret_cast<void*>(received.lParam));
 }
 
@@ -101,7 +101,7 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsSentenceBoundaryToSite) {
     auto engine = winrt::make_self<CSapiEngine>();
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     engine->m_cpSite.copy_from(mockSite.get());
-    engine->m_audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
+    engine->m_config.audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
 
     nlohmann::json eventJson;
     eventJson["event"] = "sentence_boundary";
@@ -125,7 +125,7 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsBookmarkStringEventToSite) {
     auto engine = winrt::make_self<CSapiEngine>();
     auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
     engine->m_cpSite.copy_from(mockSite.get());
-    engine->m_audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
+    engine->m_config.audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0 };
 
     nlohmann::json eventJson;
     eventJson["event"] = "bookmark_reached";

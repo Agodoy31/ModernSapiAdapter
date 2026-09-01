@@ -27,10 +27,7 @@ namespace {
     }
 }
 
-CSapiEngine::CSapiEngine()
-{
-    memset(&m_audioFormat, 0, sizeof(m_audioFormat));
-}
+CSapiEngine::CSapiEngine() = default;
 
 CSapiEngine::~CSapiEngine()
 {
@@ -62,7 +59,10 @@ CSapiEngine::~CSapiEngine()
 IFACEMETHODIMP CSapiEngine::SetObjectToken(ISpObjectToken* pToken) noexcept try
 {
     CoreLog(L"[CoreEngine] SetObjectToken called.");
-    if (!pToken) return E_POINTER;
+    if (!pToken)
+    {
+        return E_POINTER;
+    }
 #if defined(_DEBUG)
     const ULONGLONG tokenMutexWaitStart = GetTickCount64();
     CoreLog(L"[ThreadTrace] set_object_token_speak_mutex_wait_begin tick=%llu.", tokenMutexWaitStart);
@@ -84,7 +84,10 @@ catch (...) { CoreLog(L"[CoreEngine] SetObjectToken unknown exception."); return
 IFACEMETHODIMP CSapiEngine::GetObjectToken(ISpObjectToken** ppToken) noexcept try
 {
     CoreLog(L"[CoreEngine] GetObjectToken called.");
-    if (!ppToken) return E_POINTER;
+    if (!ppToken)
+    {
+        return E_POINTER;
+    }
 #if defined(_DEBUG)
     const ULONGLONG tokenMutexWaitStart = GetTickCount64();
     CoreLog(L"[ThreadTrace] get_object_token_token_mutex_wait_begin tick=%llu.", tokenMutexWaitStart);
@@ -106,8 +109,14 @@ IFACEMETHODIMP CSapiEngine::GetOutputFormat(const GUID* pTargetFmtId,
                                             WAVEFORMATEX** ppCoMemOutputWaveFormatEx) noexcept
 {
     CoreLog(L"[CoreEngine] GetOutputFormat called.");
-    if (pOutputFormatId) *pOutputFormatId = GUID_NULL;
-    if (ppCoMemOutputWaveFormatEx) *ppCoMemOutputWaveFormatEx = nullptr;
+    if (pOutputFormatId)
+    {
+        *pOutputFormatId = GUID_NULL;
+    }
+    if (ppCoMemOutputWaveFormatEx)
+    {
+        *ppCoMemOutputWaveFormatEx = nullptr;
+    }
 
 #if defined(_DEBUG)
     const ULONGLONG sessionMutexWaitStart = GetTickCount64();
@@ -118,19 +127,25 @@ IFACEMETHODIMP CSapiEngine::GetOutputFormat(const GUID* pTargetFmtId,
     CoreLog(L"[ThreadTrace] get_output_format_session_mutex_acquired tick=%llu wait_ms=%llu.",
         GetTickCount64(), GetTickCount64() - sessionMutexWaitStart);
 #endif
-    if (!m_hasOutputFormat)
+    if (!m_config.hasOutputFormat)
     {
         CoreLog(L"[CoreEngine] GetOutputFormat failed: Client not initialized.");
         return SPERR_UNINITIALIZED;
     }
 
-    if (pOutputFormatId) *pOutputFormatId = SPDFID_WaveFormatEx;
+    if (pOutputFormatId)
+    {
+        *pOutputFormatId = SPDFID_WaveFormatEx;
+    }
     
     if (ppCoMemOutputWaveFormatEx)
     {
         *ppCoMemOutputWaveFormatEx = (WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
-        if (!*ppCoMemOutputWaveFormatEx) return E_OUTOFMEMORY;
-        **ppCoMemOutputWaveFormatEx = m_audioFormat;
+        if (!*ppCoMemOutputWaveFormatEx)
+        {
+            return E_OUTOFMEMORY;
+        }
+        **ppCoMemOutputWaveFormatEx = m_config.audioFormat;
     }
     return S_OK;
 }
@@ -142,7 +157,10 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
                                   ISpTTSEngineSite* pOutputSite) noexcept try
 {
     CoreLog(L"[CoreEngine] Speak called.");
-    if (!pOutputSite || !pTextFragList) return E_INVALIDARG;
+    if (!pOutputSite || !pTextFragList)
+    {
+        return E_INVALIDARG;
+    }
 
 #if defined(_DEBUG)
     const ULONGLONG speakMutexWaitStart = GetTickCount64();
@@ -182,7 +200,7 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
 
         worker = m_pWorker.get();
         client = m_pClient.get();
-        voiceId = m_voiceId;
+        voiceId = m_config.voiceId;
     }
 
     uint64_t speakId = ++m_speakIdCounter;
@@ -279,13 +297,13 @@ void CSapiEngine::FailNextSpeakControlSendForTest()
 
 uint64_t CSapiEngine::AudioOffsetMsToBytes(uint32_t audioMs) const
 {
-    if (m_audioFormat.nSamplesPerSec == 0 || m_audioFormat.nBlockAlign == 0)
+    if (m_config.audioFormat.nSamplesPerSec == 0 || m_config.audioFormat.nBlockAlign == 0)
     {
         return 0;
     }
 
-    const uint64_t frames = (static_cast<uint64_t>(audioMs) * m_audioFormat.nSamplesPerSec) / 1000;
-    return frames * m_audioFormat.nBlockAlign;
+    const uint64_t frames = (static_cast<uint64_t>(audioMs) * m_config.audioFormat.nSamplesPerSec) / 1000;
+    return frames * m_config.audioFormat.nBlockAlign;
 }
 
 
@@ -464,11 +482,17 @@ HRESULT CSapiEngine::LoadProviderFromToken(ISpObjectToken* pToken)
 {
     wil::unique_cotaskmem_string pszExe;
     HRESULT hr = pToken->GetStringValue(L"ProviderExecutablePath", &pszExe);
-    if (FAILED(hr)) return hr;
+    if (FAILED(hr))
+    {
+        return hr;
+    }
 
     wil::unique_cotaskmem_string pszPipe;
     HRESULT hrPipe = pToken->GetStringValue(L"ProviderPipeName", &pszPipe);
-    if (FAILED(hrPipe)) return hrPipe;
+    if (FAILED(hrPipe))
+    {
+        return hrPipe;
+    }
 
     wil::unique_cotaskmem_string pszVoice;
     std::wstring voiceId;
@@ -483,9 +507,9 @@ HRESULT CSapiEngine::LoadProviderFromToken(ISpObjectToken* pToken)
         return E_UNEXPECTED;
     }
 
-    m_providerExecutablePath = pszExe.get();
-    m_providerPipeName = pszPipe.get();
-    m_voiceId = std::move(voiceId);
+    m_config.executablePath = pszExe.get();
+    m_config.pipeName = pszPipe.get();
+    m_config.voiceId = std::move(voiceId);
     return CreateProviderSessionLocked();
 }
 
@@ -507,19 +531,6 @@ bool CSapiEngine::IsValidInfoResponse(const nlohmann::json& response) noexcept
     return true;
 }
 
-bool CSapiEngine::IsFormatCompatible(const WAVEFORMATEX& candidate) const noexcept
-{
-    if (!m_hasOutputFormat)
-    {
-        return true;
-    }
-
-    return candidate.nSamplesPerSec == m_audioFormat.nSamplesPerSec &&
-           candidate.wBitsPerSample == m_audioFormat.wBitsPerSample &&
-           candidate.nChannels == m_audioFormat.nChannels &&
-           candidate.nBlockAlign == m_audioFormat.nBlockAlign;
-}
-
 bool CSapiEngine::IsSessionActiveLocked() const noexcept
 {
     return m_pClient && m_pWorker && !m_pWorker->IsFaulted();
@@ -527,7 +538,7 @@ bool CSapiEngine::IsSessionActiveLocked() const noexcept
 
 HRESULT CSapiEngine::CreateProviderSessionLocked()
 {
-    if (m_providerExecutablePath.empty() || m_providerPipeName.empty() || m_pClient || m_pWorker)
+    if (!m_config.IsConfigured() || m_config.executablePath.empty() || m_pClient || m_pWorker)
     {
         return E_FAIL;
     }
@@ -535,7 +546,7 @@ HRESULT CSapiEngine::CreateProviderSessionLocked()
     try
     {
         auto candidateClient = std::make_unique<PipeClient>();
-        if (FAILED(candidateClient->Connect(m_providerPipeName, m_providerExecutablePath)))
+        if (FAILED(candidateClient->Connect(m_config.pipeName, m_config.executablePath)))
         {
             return E_FAIL;
         }
@@ -566,7 +577,7 @@ HRESULT CSapiEngine::CreateProviderSessionLocked()
             return E_FAIL;
         }
 
-        if (!IsFormatCompatible(candidateFormat))
+        if (!m_config.IsFormatCompatible(candidateFormat))
         {
             CoreLog(L"[CoreEngine] Provider reconnect returned a different PCM format.");
             return E_FAIL;
@@ -575,10 +586,10 @@ HRESULT CSapiEngine::CreateProviderSessionLocked()
         auto candidateWorker = std::make_unique<SpeechWorker>(this, candidateClient.get(), candidateFormat.nBlockAlign);
         m_pClient = std::move(candidateClient);
         m_pWorker = std::move(candidateWorker);
-        if (!m_hasOutputFormat)
+        if (!m_config.hasOutputFormat)
         {
-            m_audioFormat = candidateFormat;
-            m_hasOutputFormat = true;
+            m_config.audioFormat = candidateFormat;
+            m_config.hasOutputFormat = true;
         }
         return S_OK;
     }
