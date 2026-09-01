@@ -167,6 +167,7 @@
     <ClInclude Include="AsyncLogger.h" />
     <ClInclude Include="AudioFormatUtils.h" />
     <ClInclude Include="ControlStreamBuffer.h" />
+    <ClInclude Include="DllUnloadPolicy.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="PipeClient.h" />
     <ClInclude Include="PipeClientTestHooks.h" />

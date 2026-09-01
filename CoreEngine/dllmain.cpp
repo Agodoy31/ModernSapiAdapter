@@ -4,12 +4,36 @@
  */
 
 #include "pch.h"
+#include "DllUnloadPolicy.h"
 #include "SapiEngine.h"
 #ifdef _DEBUG
 #include "AsyncLogger.h"
 #endif
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
+
+namespace
+{
+
+#if defined(_DEBUG)
+[[nodiscard]] bool ShutdownLoggerSafely() noexcept
+{
+    auto* const logger = AsyncLogger::GetInstance();
+    if (logger == nullptr)
+    {
+        return true;
+    }
+
+    return logger->Shutdown();
+}
+#else
+[[nodiscard]] constexpr bool ShutdownLoggerSafely() noexcept
+{
+    return true;
+}
+#endif
+
+} // namespace
 
 // IMPORTANT: This CLSID is strictly coupled with SapiManager. 
 // If this GUID is ever changed, you MUST also update the 'CoreEngineClsid' 
@@ -78,19 +102,9 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
 
 STDAPI DllCanUnloadNow(void)
 {
-    if (winrt::get_module_lock() != 0)
-    {
-        return S_FALSE;
-    }
-
-#ifdef _DEBUG
-    if (auto* logger = AsyncLogger::GetInstance())
-    {
-        static_cast<void>(logger->Shutdown());
-    }
-#endif
-
-    return S_OK;
+    return CoreEngine::EvaluateDllUnload(
+        []() noexcept { return static_cast<std::uint32_t>(winrt::get_module_lock()); },
+        ShutdownLoggerSafely);
 }
 
 STDAPI DllRegisterServer(void)
