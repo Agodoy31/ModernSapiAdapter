@@ -91,10 +91,7 @@ HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& ex
     constexpr ULONGLONG pipeReadyTimeoutMs = 1000;
     constexpr DWORD pipeProbeIntervalMs = 10;
 
-    m_controlInputBuffer.clear();
-    m_controlInputOffset = 0;
-    m_controlSearchOffset = 0;
-    m_controlInputBuffer.reserve(8192);
+    m_controlBuffer.Clear();
 
     std::wstring sid = PipeSecurityUtils::GetCurrentUserSidString();
     std::wstring controlPipePath = PipeSecurityUtils::BuildPipePath(pipeName, sid, L"control");
@@ -297,17 +294,9 @@ HRESULT PipeClient::SendControlMessageUtf8(
 
 void PipeClient::CompactControlBuffer()
 {
-    if (m_controlInputOffset == m_controlInputBuffer.size())
+    if (m_controlBuffer.readOffset == m_controlBuffer.buffer.size() || m_controlBuffer.readOffset >= 4096)
     {
-        m_controlInputBuffer.clear();
-        m_controlInputOffset = 0;
-        m_controlSearchOffset = 0;
-    }
-    else if (m_controlInputOffset >= 4096)
-    {
-        m_controlInputBuffer.erase(0, m_controlInputOffset);
-        m_controlInputOffset = 0;
-        m_controlSearchOffset = 0;
+        m_controlBuffer.Compact();
     }
 }
 
@@ -315,7 +304,6 @@ HRESULT PipeClient::ReadControlMessageUtf8(
     std::string_view& utf8View,
     DWORD timeoutMs)
 {
-    constexpr size_t maxControlRecordBytes = 16 * 1024 * 1024;
     if (!m_controlPipe)
     {
         return E_UNEXPECTED;
@@ -324,9 +312,9 @@ HRESULT PipeClient::ReadControlMessageUtf8(
     char chunk[4096];
     const ULONGLONG deadline = timeoutMs == INFINITE ? 0 : GetTickCount64() + timeoutMs;
 
-    while (m_controlInputBuffer.find('\n', m_controlSearchOffset) == std::string::npos)
+    while (!m_controlBuffer.TryExtractLine(utf8View))
     {
-        if (m_controlInputBuffer.size() - m_controlInputOffset > maxControlRecordBytes)
+        if (m_controlBuffer.IsOverCapacity())
         {
             return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
         }
@@ -371,8 +359,7 @@ HRESULT PipeClient::ReadControlMessageUtf8(
 
         if (bytesRead > 0)
         {
-            m_controlInputBuffer.append(chunk, bytesRead);
-            m_controlSearchOffset = m_controlInputBuffer.size() - bytesRead;
+            m_controlBuffer.Append(chunk, bytesRead);
         }
         else
         {
@@ -380,20 +367,11 @@ HRESULT PipeClient::ReadControlMessageUtf8(
         }
     }
 
-    const size_t newlinePos = m_controlInputBuffer.find('\n', m_controlSearchOffset);
-    if (newlinePos - m_controlInputOffset > maxControlRecordBytes)
+    if (utf8View.size() > ControlStreamBuffer::MaxRecordBytes)
     {
         return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
     }
 
-    utf8View = std::string_view(m_controlInputBuffer.data() + m_controlInputOffset, newlinePos - m_controlInputOffset);
-    if (utf8View.ends_with('\r'))
-    {
-        utf8View.remove_suffix(1);
-    }
-
-    m_controlInputOffset = newlinePos + 1;
-    m_controlSearchOffset = m_controlInputOffset;
     return S_OK;
 }
 

@@ -133,6 +133,7 @@
     <ClCompile Include="AsyncLoggerTests.cpp" />
     <ClCompile Include="SpeechProtocolUtilsTests.cpp" />
     <ClCompile Include="SapiFragmentSerializationTests.cpp" />
+    <ClCompile Include="ControlStreamBufferTests.cpp" />
 
     <ClCompile Include="..\CoreEngine\SapiEngine.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>

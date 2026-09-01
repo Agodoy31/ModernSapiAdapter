@@ -5,6 +5,7 @@
 
 #pragma once
 #include "pch.h"
+#include "ControlStreamBuffer.h"
 
 /**
  * @class PipeClient
@@ -76,9 +77,7 @@ private:
     wil::unique_handle m_controlPipe;               /**< Overlapped handle to Control Pipe. */
     wil::unique_handle m_audioPipe;                 /**< Overlapped handle to Audio Pipe. */
     wil::unique_process_information m_providerProcess; /**< Process information handle of launched provider. */
-    std::string m_controlInputBuffer;                /**< Retained bytes after the most recently extracted JSON line. */
-    size_t m_controlInputOffset{0};                  /**< Offset of unparsed data in control input buffer. */
-    size_t m_controlSearchOffset{0};                 /**< Search offset to prevent O(N^2) scanning. */
+    ControlStreamBuffer m_controlBuffer;             /**< Retained bytes and line framing for control channel. */
     std::timed_mutex m_controlWriteMutex;            /**< Serializes control writes within each caller's operation deadline. */
 #if defined(_DEBUG)
     std::atomic_bool m_failNextCancellationMessageForTest{false}; /**< Test-only cancellation write failure injection. */
