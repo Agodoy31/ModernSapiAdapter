@@ -264,7 +264,10 @@ HRESULT PipeClient::SendControlMessageUtf8(
     }
 
     wil::unique_event overlappedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-    if (!overlappedEvent) return HRESULT_FROM_WIN32(GetLastError());
+    if (!overlappedEvent)
+    {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
 
     OVERLAPPED overlapped = {};
     overlapped.hEvent = overlappedEvent.get();
@@ -313,7 +316,10 @@ HRESULT PipeClient::ReadControlMessageUtf8(
     DWORD timeoutMs)
 {
     constexpr size_t maxControlRecordBytes = 16 * 1024 * 1024;
-    if (!m_controlPipe) return E_UNEXPECTED;
+    if (!m_controlPipe)
+    {
+        return E_UNEXPECTED;
+    }
 
     char chunk[4096];
     const ULONGLONG deadline = timeoutMs == INFINITE ? 0 : GetTickCount64() + timeoutMs;
@@ -337,7 +343,10 @@ HRESULT PipeClient::ReadControlMessageUtf8(
         }
 
         wil::unique_event overlappedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-        if (!overlappedEvent) return HRESULT_FROM_WIN32(GetLastError());
+        if (!overlappedEvent)
+        {
+            return HRESULT_FROM_WIN32(GetLastError());
+        }
 
         OVERLAPPED overlapped = {};
         overlapped.hEvent = overlappedEvent.get();
@@ -392,10 +401,16 @@ HRESULT PipeClient::ReadControlMessageUtf8(
 
 HRESULT PipeClient::ReadAudioChunk(std::vector<uint8_t>& buffer, DWORD& bytesRead)
 {
-    if (!m_audioPipe) return E_UNEXPECTED;
+    if (!m_audioPipe)
+    {
+        return E_UNEXPECTED;
+    }
 
     wil::unique_event overlappedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-    if (!overlappedEvent) return HRESULT_FROM_WIN32(GetLastError());
+    if (!overlappedEvent)
+    {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
 
     OVERLAPPED overlapped = {};
     overlapped.hEvent = overlappedEvent.get();
@@ -418,8 +433,14 @@ HRESULT PipeClient::ReadAudioChunk(std::vector<uint8_t>& buffer, DWORD& bytesRea
 
 void PipeClient::Cancel()
 {
-    if (m_controlPipe) CancelIoEx(m_controlPipe.get(), nullptr);
-    if (m_audioPipe) CancelIoEx(m_audioPipe.get(), nullptr);
+    if (m_controlPipe)
+    {
+        CancelIoEx(m_controlPipe.get(), nullptr);
+    }
+    if (m_audioPipe)
+    {
+        CancelIoEx(m_audioPipe.get(), nullptr);
+    }
 }
 
 #if defined(_DEBUG)
@@ -513,7 +534,10 @@ HRESULT PipeClient::SendControlMessage(
             traceSpeakId, GetTickCount64(), GetTickCount64() - controlMutexWaitStart);
     }
 #endif
-    if (!m_controlPipe) return E_UNEXPECTED;
+    if (!m_controlPipe)
+    {
+        return E_UNEXPECTED;
+    }
 
 #if defined(_DEBUG)
     if (m_failNextSpeakMessageForTest && IsCommand(json, "sapi_speak"))
