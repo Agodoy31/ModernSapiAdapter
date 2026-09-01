@@ -497,3 +497,43 @@ TEST_F(SapiEngineTests, StalledTerminalAudioDrainTimesOut) {
     EXPECT_GE(elapsedBeforeCleanup, std::chrono::milliseconds(1300));
     EXPECT_LT(elapsedBeforeCleanup, std::chrono::milliseconds(3000));
 }
+
+TEST_F(SapiEngineTests, LogEventsDoNotExtendSynthesisInactivityTimeout) {
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(61));
+
+    HRESULT waitResult = S_OK;
+    std::atomic_bool waitReturned{false};
+    const auto waitStart = std::chrono::steady_clock::now();
+    std::thread waitThread([&] {
+        waitResult = fixture.worker->WaitUntilFinished(nullptr);
+        waitReturned = true;
+    });
+    ThreadJoinGuard waitJoin(waitThread);
+
+    std::thread logThread([&] {
+        auto loopStart = std::chrono::steady_clock::now();
+        while (!waitReturned.load() && std::chrono::steady_clock::now() - loopStart < std::chrono::seconds(3)) {
+            fixture.server.WriteControl("{\"event\":\"log\",\"speak_id\":61,\"severity\":\"info\",\"message\":\"progress\"}\n");
+            Sleep(500);
+        }
+    });
+
+    EXPECT_TRUE(WaitForCondition([&] { return waitReturned.load(); }, 2500));
+    logThread.join();
+
+    const bool returnedBeforeCleanup = waitReturned.load();
+    const auto elapsedBeforeCleanup = std::chrono::steady_clock::now() - waitStart;
+    if (!returnedBeforeCleanup)
+    {
+        fixture.worker->Stop();
+    }
+    EXPECT_TRUE(waitJoin.Join(2000));
+
+    EXPECT_TRUE(returnedBeforeCleanup);
+    EXPECT_EQ(waitResult, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+    EXPECT_TRUE(fixture.worker->IsFaulted());
+    EXPECT_GE(elapsedBeforeCleanup, std::chrono::milliseconds(1300));
+    EXPECT_LT(elapsedBeforeCleanup, std::chrono::milliseconds(2500));
+}

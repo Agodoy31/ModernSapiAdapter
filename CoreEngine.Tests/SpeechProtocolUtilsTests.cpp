@@ -156,7 +156,7 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_LogEventWithSeverityAndMessage)
     EXPECT_EQ(event.speakId, 10ULL);
     EXPECT_EQ(event.logSeverity, "warning");
     EXPECT_EQ(event.logMessage, "Low buffer warning");
-    EXPECT_TRUE(event.IsProgress());
+    EXPECT_FALSE(event.IsProgress());
     EXPECT_FALSE(event.IsSpeechBoundary());
     EXPECT_FALSE(event.IsTerminal());
 }

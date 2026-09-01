@@ -82,7 +82,7 @@ struct ProviderControlEvent
 
     [[nodiscard]] constexpr bool IsProgress() const noexcept
     {
-        return IsSpeechBoundary() || IsTerminal() || type == ProviderEventType::Log;
+        return IsSpeechBoundary() || IsTerminal();
     }
 };
 
