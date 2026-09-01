@@ -169,11 +169,13 @@
     <ClInclude Include="ControlStreamBuffer.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="PipeClient.h" />
+    <ClInclude Include="PipeClientTestHooks.h" />
     <ClInclude Include="PipeSecurityUtils.h" />
     <ClInclude Include="PcmFrameAssembler.h" />
     <ClInclude Include="ProviderSessionConfig.h" />
     <ClInclude Include="SapiEngine.h" />
     <ClInclude Include="SpeechWorker.h" />
+    <ClInclude Include="SpeechWorkerTestHooks.h" />
     <ClInclude Include="SpeechWorkerTypes.h" />
     <ClInclude Include="SpeechProtocolUtils.h" />
   </ItemGroup>

@@ -140,55 +140,55 @@ void SpeechWorker::FailNextControlThreadEntryForTest()
 
 void SpeechWorker::PauseNextEventForwardForTest()
 {
-    std::lock_guard<std::mutex> lock(m_eventForwardTestMutex);
-    m_pauseNextEventForwardForTest = true;
-    m_eventForwardPausedForTest = false;
+    std::lock_guard<std::mutex> lock(m_testHooks.eventForwardMutex);
+    m_testHooks.pauseNextEventForward = true;
+    m_testHooks.eventForwardPaused = false;
 }
 
 bool SpeechWorker::WaitForEventForwardPauseForTest(DWORD timeoutMs)
 {
-    std::unique_lock<std::mutex> lock(m_eventForwardTestMutex);
-    return m_eventForwardTestChanged.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
-        return m_eventForwardPausedForTest || m_exit.load();
-    }) && m_eventForwardPausedForTest;
+    std::unique_lock<std::mutex> lock(m_testHooks.eventForwardMutex);
+    return m_testHooks.eventForwardChanged.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
+        return m_testHooks.eventForwardPaused || m_exit.load();
+    }) && m_testHooks.eventForwardPaused;
 }
 
 void SpeechWorker::ReleaseEventForwardForTest()
 {
-    std::lock_guard<std::mutex> lock(m_eventForwardTestMutex);
-    m_pauseNextEventForwardForTest = false;
-    m_eventForwardPausedForTest = false;
-    m_eventForwardTestChanged.notify_all();
+    std::lock_guard<std::mutex> lock(m_testHooks.eventForwardMutex);
+    m_testHooks.pauseNextEventForward = false;
+    m_testHooks.eventForwardPaused = false;
+    m_testHooks.eventForwardChanged.notify_all();
 }
 
 void SpeechWorker::PauseNextAbortTransitionForTest()
 {
-    std::lock_guard<std::mutex> lock(m_abortTransitionTestMutex);
-    m_pauseNextAbortTransitionForTest = true;
-    m_abortTransitionPausedForTest = false;
-    m_wasCancellingAtAbortUnlockForTest = false;
+    std::lock_guard<std::mutex> lock(m_testHooks.abortTransitionMutex);
+    m_testHooks.pauseNextAbortTransition = true;
+    m_testHooks.abortTransitionPaused = false;
+    m_testHooks.wasCancellingAtAbortUnlock = false;
 }
 
 bool SpeechWorker::WaitForAbortTransitionPauseForTest(DWORD timeoutMs)
 {
-    std::unique_lock<std::mutex> lock(m_abortTransitionTestMutex);
-    return m_abortTransitionTestChanged.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
-        return m_abortTransitionPausedForTest || m_exit.load();
-    }) && m_abortTransitionPausedForTest;
+    std::unique_lock<std::mutex> lock(m_testHooks.abortTransitionMutex);
+    return m_testHooks.abortTransitionChanged.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
+        return m_testHooks.abortTransitionPaused || m_exit.load();
+    }) && m_testHooks.abortTransitionPaused;
 }
 
 void SpeechWorker::ReleaseAbortTransitionForTest()
 {
-    std::lock_guard<std::mutex> lock(m_abortTransitionTestMutex);
-    m_pauseNextAbortTransitionForTest = false;
-    m_abortTransitionPausedForTest = false;
-    m_abortTransitionTestChanged.notify_all();
+    std::lock_guard<std::mutex> lock(m_testHooks.abortTransitionMutex);
+    m_testHooks.pauseNextAbortTransition = false;
+    m_testHooks.abortTransitionPaused = false;
+    m_testHooks.abortTransitionChanged.notify_all();
 }
 
 bool SpeechWorker::WasCancellingAtAbortUnlockForTest()
 {
-    std::lock_guard<std::mutex> lock(m_abortTransitionTestMutex);
-    return m_wasCancellingAtAbortUnlockForTest;
+    std::lock_guard<std::mutex> lock(m_testHooks.abortTransitionMutex);
+    return m_testHooks.wasCancellingAtAbortUnlock;
 }
 
 bool SpeechWorker::WaitForFaultForTest(DWORD timeoutMs)
@@ -213,36 +213,36 @@ uint64_t SpeechWorker::RawAudioBytesForTest() const
 
 void SpeechWorker::PauseNextFaultPublicationForTest()
 {
-    std::lock_guard<std::mutex> lock(m_faultPublicationTestMutex);
-    m_pauseNextFaultPublicationForTest = true;
-    m_faultPublicationPausedForTest = false;
+    std::lock_guard<std::mutex> lock(m_testHooks.faultPublicationMutex);
+    m_testHooks.pauseNextFaultPublication = true;
+    m_testHooks.faultPublicationPaused = false;
 }
 
 bool SpeechWorker::WaitForFaultPublicationPauseForTest(DWORD timeoutMs)
 {
-    std::unique_lock<std::mutex> lock(m_faultPublicationTestMutex);
-    return m_faultPublicationTestChanged.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
-        return m_faultPublicationPausedForTest || m_exit.load();
-    }) && m_faultPublicationPausedForTest;
+    std::unique_lock<std::mutex> lock(m_testHooks.faultPublicationMutex);
+    return m_testHooks.faultPublicationChanged.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
+        return m_testHooks.faultPublicationPaused || m_exit.load();
+    }) && m_testHooks.faultPublicationPaused;
 }
 
 void SpeechWorker::ReleaseFaultPublicationForTest()
 {
-    std::lock_guard<std::mutex> lock(m_faultPublicationTestMutex);
-    m_pauseNextFaultPublicationForTest = false;
-    m_faultPublicationPausedForTest = false;
-    m_faultPublicationTestChanged.notify_all();
+    std::lock_guard<std::mutex> lock(m_testHooks.faultPublicationMutex);
+    m_testHooks.pauseNextFaultPublication = false;
+    m_testHooks.faultPublicationPaused = false;
+    m_testHooks.faultPublicationChanged.notify_all();
 }
 
 void SpeechWorker::FailNextFrameAssemblyForTest()
 {
     std::lock_guard<std::mutex> lock(m_requestMutex);
-    m_failNextFrameAssemblyForTest = true;
+    m_testHooks.failNextFrameAssembly = true;
 }
 
 bool SpeechWorker::IsAudioApartmentActiveForTest() const noexcept
 {
-    return m_audioApartmentActiveForTest.load(std::memory_order_acquire);
+    return m_testHooks.audioApartmentActive.load(std::memory_order_acquire);
 }
 #endif
 
@@ -409,14 +409,14 @@ void SpeechWorker::EnterFaultedState()
 
 #if defined(_DEBUG)
     {
-        std::unique_lock<std::mutex> testLock(m_faultPublicationTestMutex);
-        if (m_pauseNextFaultPublicationForTest)
+        std::unique_lock<std::mutex> testLock(m_testHooks.faultPublicationMutex);
+        if (m_testHooks.pauseNextFaultPublication)
         {
-            m_pauseNextFaultPublicationForTest = false;
-            m_faultPublicationPausedForTest = true;
-            m_faultPublicationTestChanged.notify_all();
-            m_faultPublicationTestChanged.wait(testLock, [this] {
-                return !m_faultPublicationPausedForTest || m_exit.load();
+            m_testHooks.pauseNextFaultPublication = false;
+            m_testHooks.faultPublicationPaused = true;
+            m_testHooks.faultPublicationChanged.notify_all();
+            m_testHooks.faultPublicationChanged.wait(testLock, [this] {
+                return !m_testHooks.faultPublicationPaused || m_exit.load();
             });
         }
     }
@@ -592,21 +592,21 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
             }
 #if defined(_DEBUG)
             {
-                std::lock_guard<std::mutex> testLock(m_abortTransitionTestMutex);
-                m_wasCancellingAtAbortUnlockForTest = m_context.IsDrainingCancellation();
+                std::lock_guard<std::mutex> testLock(m_testHooks.abortTransitionMutex);
+                m_testHooks.wasCancellingAtAbortUnlock = m_context.IsDrainingCancellation();
             }
 #endif
             lock.unlock();
 #if defined(_DEBUG)
             {
-                std::unique_lock<std::mutex> testLock(m_abortTransitionTestMutex);
-                if (m_pauseNextAbortTransitionForTest)
+                std::unique_lock<std::mutex> testLock(m_testHooks.abortTransitionMutex);
+                if (m_testHooks.pauseNextAbortTransition)
                 {
-                    m_pauseNextAbortTransitionForTest = false;
-                    m_abortTransitionPausedForTest = true;
-                    m_abortTransitionTestChanged.notify_all();
-                    m_abortTransitionTestChanged.wait(testLock, [this] {
-                        return !m_abortTransitionPausedForTest || m_exit.load();
+                    m_testHooks.pauseNextAbortTransition = false;
+                    m_testHooks.abortTransitionPaused = true;
+                    m_testHooks.abortTransitionChanged.notify_all();
+                    m_testHooks.abortTransitionChanged.wait(testLock, [this] {
+                        return !m_testHooks.abortTransitionPaused || m_exit.load();
                     });
                 }
             }
@@ -763,9 +763,9 @@ SpeechWorker::AudioIngestResult SpeechWorker::IngestAudioChunkLocked(const uint8
         }
         m_context.rawAudioBytesRead += bytesRead;
 #if defined(_DEBUG)
-        if (m_failNextFrameAssemblyForTest)
+        if (m_testHooks.failNextFrameAssembly)
         {
-            m_failNextFrameAssemblyForTest = false;
+            m_testHooks.failNextFrameAssembly = false;
             throw std::bad_alloc();
         }
 #endif
@@ -882,12 +882,12 @@ void SpeechWorker::AudioThreadProc()
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
     auto apartmentCleanup = wil::scope_exit([this] {
 #if defined(_DEBUG)
-        m_audioApartmentActiveForTest.store(false, std::memory_order_release);
+        m_testHooks.audioApartmentActive.store(false, std::memory_order_release);
 #endif
         winrt::uninit_apartment();
     });
 #if defined(_DEBUG)
-    m_audioApartmentActiveForTest.store(true, std::memory_order_release);
+    m_testHooks.audioApartmentActive.store(true, std::memory_order_release);
 #endif
     std::vector<uint8_t> buffer(4096);
     while (!m_exit.load())
@@ -1161,14 +1161,14 @@ void SpeechWorker::ControlThreadProc()
             {
 #if defined(_DEBUG)
                 {
-                    std::unique_lock<std::mutex> testLock(m_eventForwardTestMutex);
-                    if (m_pauseNextEventForwardForTest)
+                    std::unique_lock<std::mutex> testLock(m_testHooks.eventForwardMutex);
+                    if (m_testHooks.pauseNextEventForward)
                     {
-                        m_pauseNextEventForwardForTest = false;
-                        m_eventForwardPausedForTest = true;
-                        m_eventForwardTestChanged.notify_all();
-                        m_eventForwardTestChanged.wait(testLock, [this] {
-                            return !m_eventForwardPausedForTest || m_exit.load();
+                        m_testHooks.pauseNextEventForward = false;
+                        m_testHooks.eventForwardPaused = true;
+                        m_testHooks.eventForwardChanged.notify_all();
+                        m_testHooks.eventForwardChanged.wait(testLock, [this] {
+                            return !m_testHooks.eventForwardPaused || m_exit.load();
                         });
                     }
                 }

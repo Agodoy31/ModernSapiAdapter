@@ -14,6 +14,9 @@
 #include "PipeClient.h"
 #include "PcmFrameAssembler.h"
 #include "SpeechWorkerTypes.h"
+#if defined(_DEBUG)
+#include "SpeechWorkerTestHooks.h"
+#endif
 
 class CSapiEngine;
 
@@ -184,20 +187,6 @@ private:
     uint64_t m_generationCounter{0};         /**< Monotonically increasing generation sequence counter. */
     PcmFrameAssembler m_frameAssembler;      /**< Reassembles provider-native PCM frames under m_requestMutex. */
 #if defined(_DEBUG)
-    std::mutex m_eventForwardTestMutex;
-    std::condition_variable m_eventForwardTestChanged;
-    bool m_pauseNextEventForwardForTest{false};
-    bool m_eventForwardPausedForTest{false};
-    std::mutex m_abortTransitionTestMutex;
-    std::condition_variable m_abortTransitionTestChanged;
-    bool m_pauseNextAbortTransitionForTest{false};
-    bool m_abortTransitionPausedForTest{false};
-    bool m_wasCancellingAtAbortUnlockForTest{false};
-    std::mutex m_faultPublicationTestMutex;
-    std::condition_variable m_faultPublicationTestChanged;
-    bool m_pauseNextFaultPublicationForTest{false};
-    bool m_faultPublicationPausedForTest{false};
-    bool m_failNextFrameAssemblyForTest{false};
-    std::atomic_bool m_audioApartmentActiveForTest{false};
+    SpeechWorkerTestHooks m_testHooks;
 #endif
 };

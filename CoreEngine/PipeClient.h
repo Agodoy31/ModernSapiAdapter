@@ -6,6 +6,9 @@
 #pragma once
 #include "pch.h"
 #include "ControlStreamBuffer.h"
+#if defined(_DEBUG)
+#include "PipeClientTestHooks.h"
+#endif
 
 /**
  * @class PipeClient
@@ -80,12 +83,7 @@ private:
     ControlStreamBuffer m_controlBuffer;             /**< Retained bytes and line framing for control channel. */
     std::timed_mutex m_controlWriteMutex;            /**< Serializes control writes within each caller's operation deadline. */
 #if defined(_DEBUG)
-    std::atomic_bool m_failNextCancellationMessageForTest{false}; /**< Test-only cancellation write failure injection. */
-    std::atomic_bool m_failNextSpeakMessageForTest{false}; /**< Test-only initial speak write failure injection. */
-    std::mutex m_controlWriteTestMutex;
-    std::condition_variable m_controlWriteTestChanged;
-    bool m_pauseNextControlWriteAfterLockForTest{false};
-    bool m_controlWritePausedForTest{false};
+    PipeClientTestHooks m_testHooks;
 #endif
     /**
      * @brief Internal helper to attempt connection to Control and Audio pipes.

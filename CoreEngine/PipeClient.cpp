@@ -424,35 +424,35 @@ void PipeClient::Cancel()
 #if defined(_DEBUG)
 void PipeClient::FailNextCancellationMessageForTest()
 {
-    m_failNextCancellationMessageForTest = true;
+    m_testHooks.failNextCancellationMessage = true;
 }
 
 void PipeClient::FailNextSpeakMessageForTest()
 {
-    m_failNextSpeakMessageForTest = true;
+    m_testHooks.failNextSpeakMessage = true;
 }
 
 void PipeClient::PauseNextControlWriteAfterLockForTest()
 {
-    std::lock_guard<std::mutex> lock(m_controlWriteTestMutex);
-    m_pauseNextControlWriteAfterLockForTest = true;
-    m_controlWritePausedForTest = false;
+    std::lock_guard<std::mutex> lock(m_testHooks.controlWriteMutex);
+    m_testHooks.pauseNextControlWriteAfterLock = true;
+    m_testHooks.controlWritePaused = false;
 }
 
 bool PipeClient::WaitForControlWritePauseForTest(DWORD timeoutMs)
 {
-    std::unique_lock<std::mutex> lock(m_controlWriteTestMutex);
-    return m_controlWriteTestChanged.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
-        return m_controlWritePausedForTest;
+    std::unique_lock<std::mutex> lock(m_testHooks.controlWriteMutex);
+    return m_testHooks.controlWriteChanged.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
+        return m_testHooks.controlWritePaused;
     });
 }
 
 void PipeClient::ReleaseControlWriteForTest()
 {
-    std::lock_guard<std::mutex> lock(m_controlWriteTestMutex);
-    m_pauseNextControlWriteAfterLockForTest = false;
-    m_controlWritePausedForTest = false;
-    m_controlWriteTestChanged.notify_all();
+    std::lock_guard<std::mutex> lock(m_testHooks.controlWriteMutex);
+    m_testHooks.pauseNextControlWriteAfterLock = false;
+    m_testHooks.controlWritePaused = false;
+    m_testHooks.controlWriteChanged.notify_all();
 }
 #endif
 
@@ -493,14 +493,14 @@ HRESULT PipeClient::SendControlMessage(
     }
 #if defined(_DEBUG)
     {
-        std::unique_lock<std::mutex> testLock(m_controlWriteTestMutex);
-        if (m_pauseNextControlWriteAfterLockForTest)
+        std::unique_lock<std::mutex> testLock(m_testHooks.controlWriteMutex);
+        if (m_testHooks.pauseNextControlWriteAfterLock)
         {
-            m_pauseNextControlWriteAfterLockForTest = false;
-            m_controlWritePausedForTest = true;
-            m_controlWriteTestChanged.notify_all();
-            m_controlWriteTestChanged.wait(testLock, [this] {
-                return !m_controlWritePausedForTest;
+            m_testHooks.pauseNextControlWriteAfterLock = false;
+            m_testHooks.controlWritePaused = true;
+            m_testHooks.controlWriteChanged.notify_all();
+            m_testHooks.controlWriteChanged.wait(testLock, [this] {
+                return !m_testHooks.controlWritePaused;
             });
         }
     }
@@ -518,15 +518,15 @@ HRESULT PipeClient::SendControlMessage(
     }
 
 #if defined(_DEBUG)
-    if (m_failNextSpeakMessageForTest && IsCommand(json, "sapi_speak"))
+    if (m_testHooks.failNextSpeakMessage && IsCommand(json, "sapi_speak"))
     {
-        m_failNextSpeakMessageForTest = false;
+        m_testHooks.failNextSpeakMessage = false;
         return E_FAIL;
     }
 
-    if (m_failNextCancellationMessageForTest && IsCommand(json, "cancel"))
+    if (m_testHooks.failNextCancellationMessage && IsCommand(json, "cancel"))
     {
-        m_failNextCancellationMessageForTest = false;
+        m_testHooks.failNextCancellationMessage = false;
         return E_FAIL;
     }
 #endif
