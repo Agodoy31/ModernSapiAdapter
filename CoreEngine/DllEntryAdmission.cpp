@@ -49,6 +49,27 @@ std::optional<DllEntryAdmission::EntryLease> DllEntryAdmission::TryEnter() noexc
     return EntryLease(*this);
 }
 
+DllEntryAdmission::EntryLease DllEntryAdmission::EnterOrReopen(bool* wasReopened) noexcept
+{
+    std::lock_guard lock(m_mutex);
+    if (m_state == State::Closing)
+    {
+        m_state = State::Open;
+        if (wasReopened != nullptr)
+        {
+            *wasReopened = true;
+        }
+        m_cv.notify_all();
+    }
+    else if (wasReopened != nullptr)
+    {
+        *wasReopened = false;
+    }
+
+    ++m_entryCount;
+    return EntryLease(*this);
+}
+
 bool DllEntryAdmission::BeginClosingAndWaitForEntries(const DWORD timeoutMs) noexcept
 {
     std::unique_lock lock(m_mutex);

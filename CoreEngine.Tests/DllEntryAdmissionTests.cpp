@@ -51,3 +51,17 @@ TEST(DllEntryAdmissionTests, TimedOutClosingReopensAdmission)
     lease.reset();
     EXPECT_TRUE(admission.TryEnter().has_value());
 }
+
+TEST(DllEntryAdmissionTests, EnterOrReopenReopensClosingAdmissionAndReportsReopening)
+{
+    DllEntryAdmission admission;
+    ASSERT_TRUE(admission.BeginClosingAndWaitForEntries(0));
+
+    bool wasReopened = false;
+    auto lease = admission.EnterOrReopen(&wasReopened);
+    EXPECT_TRUE(wasReopened);
+
+    bool secondReopened = true;
+    auto secondLease = admission.EnterOrReopen(&secondReopened);
+    EXPECT_FALSE(secondReopened);
+}

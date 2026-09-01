@@ -90,6 +90,7 @@ public:
 
     HRESULT GetClassObject(REFCLSID clsid, REFIID iid, void** object) const
     {
+        m_unloadApproved = false;
         return m_dllGetClassObject(clsid, iid, object);
     }
 

@@ -218,12 +218,19 @@ TEST_F(SapiEngineTests, DllGetClassObjectSucceedsAfterUnloadApprovalIfReactivate
     static constexpr CLSID sapiEngineClsid = {
         0x91cd243c, 0x63f7, 0x441f, { 0xae, 0x2f, 0x45, 0x05, 0x70, 0x05, 0xcb, 0x6d }
     };
-    void* object = reinterpret_cast<void*>(1);
-    EXPECT_EQ(module.GetClassObject(sapiEngineClsid, IID_IClassFactory, &object), S_OK);
-    EXPECT_NE(object, nullptr);
-    if (object) {
-        reinterpret_cast<IUnknown*>(object)->Release();
-    }
+    winrt::com_ptr<IClassFactory> factory;
+    EXPECT_EQ(module.GetClassObject(sapiEngineClsid, IID_IClassFactory, factory.put_void()), S_OK);
+    ASSERT_NE(factory, nullptr);
+
+    winrt::com_ptr<IUnknown> engineInstance;
+    EXPECT_EQ(factory->CreateInstance(nullptr, IID_IUnknown, engineInstance.put_void()), S_OK);
+    EXPECT_NE(engineInstance, nullptr);
+
+    EXPECT_EQ(module.CanUnloadNow(), S_FALSE);
+
+    engineInstance = nullptr;
+    factory = nullptr;
+    EXPECT_EQ(module.CanUnloadNow(), S_OK);
 }
 
 TEST_F(SapiEngineTests, DllGetClassObjectClearsOutputStorageBeforeRejectingUnknownClass) {

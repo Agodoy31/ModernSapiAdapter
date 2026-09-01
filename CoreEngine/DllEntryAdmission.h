@@ -28,6 +28,7 @@ public:
     };
 
     [[nodiscard]] std::optional<EntryLease> TryEnter() noexcept;
+    [[nodiscard]] EntryLease EnterOrReopen(bool* wasReopened = nullptr) noexcept;
     [[nodiscard]] bool BeginClosingAndWaitForEntries(DWORD timeoutMs) noexcept;
     void Reopen() noexcept;
 

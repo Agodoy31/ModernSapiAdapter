@@ -93,23 +93,19 @@ public:
 
 STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
 {
-    auto admissionLease = g_dllEntryAdmission.TryEnter();
-    if (!admissionLease.has_value())
-    {
-        if (ppv != nullptr)
-        {
-            *ppv = nullptr;
-        }
+    if (ppv == nullptr) return E_POINTER;
+    *ppv = nullptr;
 
-        return CLASS_E_CLASSNOTAVAILABLE;
-    }
-
+    bool wasReopened = false;
+    auto admissionLease = g_dllEntryAdmission.EnterOrReopen(&wasReopened);
 #if defined(_DEBUG)
+    if (wasReopened)
+    {
+        ResumeLoggerAfterUnloadRejected();
+    }
     CoreEngine::Testing::PauseAdmittedDllGetClassObjectPathForTesting();
 #endif
     CoreLog(L"[CoreEngine] DllGetClassObject called.");
-    if (ppv == nullptr) return E_POINTER;
-    *ppv = nullptr;
     if (rclsid == CLSID_SapiEngine)
     {
         try
@@ -152,7 +148,6 @@ STDAPI DllCanUnloadNow(void)
         return S_FALSE;
     }
 
-    g_dllEntryAdmission.Reopen();
     return S_OK;
 }
 
