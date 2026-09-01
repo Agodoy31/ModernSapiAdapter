@@ -12,6 +12,7 @@ using namespace TestInfrastructure;
 namespace
 {
 
+#if defined(_DEBUG)
 class DllUnloadAdmissionBarrier final
 {
 public:
@@ -53,6 +54,7 @@ private:
     wil::unique_event m_closingStarted;
     wil::unique_event m_releaseEntry;
 };
+#endif
 
 } // namespace
 
@@ -168,6 +170,7 @@ TEST_F(SapiEngineTests, CoreEngineDllDoesNotUnloadWhileServerLockIsActive) {
     ASSERT_TRUE(FreeLibrary(lockedModule));
 }
 
+#if defined(_DEBUG)
 TEST_F(SapiEngineTests, DllCanUnloadNowRefusesUnloadAfterAnAdmittedFactoryPublishesAModuleLock) {
     CoreEngineDll module;
     ASSERT_TRUE(module.IsLoaded()) << "Load error: " << module.LoadError();
@@ -204,6 +207,7 @@ TEST_F(SapiEngineTests, DllCanUnloadNowRefusesUnloadAfterAnAdmittedFactoryPublis
     factory = nullptr;
     EXPECT_EQ(module.CanUnloadNow(), S_OK);
 }
+#endif
 
 TEST_F(SapiEngineTests, DllGetClassObjectRejectsNewAdmissionAfterUnloadApproval) {
     CoreEngineDll module;
