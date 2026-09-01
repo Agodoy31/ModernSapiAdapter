@@ -142,5 +142,8 @@ private:
 
     [[nodiscard]] static bool IsValidInfoResponse(const nlohmann::json& response) noexcept;
     [[nodiscard]] bool IsFormatCompatible(const WAVEFORMATEX& candidate) const noexcept;
+
+public:
+    [[nodiscard]] static nlohmann::json SerializeFragmentsToJson(const SPVTEXTFRAG* pFragList);
 };
 

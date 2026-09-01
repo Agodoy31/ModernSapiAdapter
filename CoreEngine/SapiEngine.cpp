@@ -199,60 +199,7 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
         }
     }
 
-    nlohmann::json fragments = nlohmann::json::array();
-    const SPVTEXTFRAG* pFrag = pTextFragList;
-    while (pFrag)
-    {
-        nlohmann::json fragJson;
-
-        switch (pFrag->State.eAction)
-        {
-        case SPVA_Bookmark:
-        {
-            if (pFrag->pTextStart && pFrag->ulTextLen > 0)
-            {
-                std::string textStr = WideToUtf8(pFrag->pTextStart, pFrag->ulTextLen);
-                if (!textStr.empty())
-                {
-                    fragJson["bookmark"] = textStr;
-                }
-            }
-            break;
-        }
-
-        case SPVA_Silence:
-        {
-            fragJson["silence_ms"] = pFrag->State.SilenceMSecs;
-            break;
-        }
-
-        case SPVA_Speak:
-        case SPVA_Pronounce:
-        case SPVA_SpellOut:
-        case SPVA_Section:
-        case SPVA_ParseUnknownTag:
-        {
-            if (pFrag->pTextStart && pFrag->ulTextLen > 0)
-            {
-                std::string textStr = WideToUtf8(pFrag->pTextStart, pFrag->ulTextLen);
-                if (!textStr.empty())
-                {
-                    fragJson["text"] = textStr;
-                    fragJson["source_offset"] = pFrag->ulTextSrcOffset;
-                }
-            }
-            fragJson["volume"] = pFrag->State.Volume;
-            fragJson["pitch"] = pFrag->State.PitchAdj.MiddleAdj;
-            fragJson["rate"] = pFrag->State.RateAdj;
-            break;
-        }
-        }
-
-        fragments.push_back(fragJson);
-        pFrag = pFrag->pNext;
-    }
-
-    speakReq["fragments"] = fragments;
+    speakReq["fragments"] = SerializeFragmentsToJson(pTextFragList);
 
     if (!worker->Start(speakId))
     {
@@ -656,3 +603,62 @@ void CSapiEngine::RetireFaultedSessionLocked()
     m_pWorker.reset();
     m_pClient.reset();
 }
+
+nlohmann::json CSapiEngine::SerializeFragmentsToJson(const SPVTEXTFRAG* pFragList)
+{
+    nlohmann::json fragments = nlohmann::json::array();
+    const SPVTEXTFRAG* pFrag = pFragList;
+    while (pFrag)
+    {
+        nlohmann::json fragJson;
+
+        switch (pFrag->State.eAction)
+        {
+        case SPVA_Bookmark:
+        {
+            if (pFrag->pTextStart && pFrag->ulTextLen > 0)
+            {
+                std::string textStr = WideToUtf8(pFrag->pTextStart, pFrag->ulTextLen);
+                if (!textStr.empty())
+                {
+                    fragJson["bookmark"] = textStr;
+                }
+            }
+            break;
+        }
+
+        case SPVA_Silence:
+        {
+            fragJson["silence_ms"] = pFrag->State.SilenceMSecs;
+            break;
+        }
+
+        case SPVA_Speak:
+        case SPVA_Pronounce:
+        case SPVA_SpellOut:
+        case SPVA_Section:
+        case SPVA_ParseUnknownTag:
+        {
+            if (pFrag->pTextStart && pFrag->ulTextLen > 0)
+            {
+                std::string textStr = WideToUtf8(pFrag->pTextStart, pFrag->ulTextLen);
+                if (!textStr.empty())
+                {
+                    fragJson["text"] = textStr;
+                    fragJson["source_offset"] = pFrag->ulTextSrcOffset;
+                }
+            }
+            fragJson["volume"] = pFrag->State.Volume;
+            fragJson["pitch"] = pFrag->State.PitchAdj.MiddleAdj;
+            fragJson["rate"] = pFrag->State.RateAdj;
+            break;
+        }
+        }
+
+        fragments.push_back(fragJson);
+        pFrag = pFrag->pNext;
+    }
+
+    return fragments;
+}
+
