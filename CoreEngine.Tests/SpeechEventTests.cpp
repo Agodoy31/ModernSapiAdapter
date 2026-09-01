@@ -1,11 +1,5 @@
 #include "pch.h"
 #include "TestFixtureBase.h"
-#include "MockSpTTSEngineSite.h"
-#include "MockSpObjectToken.h"
-#include "ControlPipeTestServer.h"
-#include "../CoreEngine/PipeClient.h"
-#include "../CoreEngine/SapiEngine.h"
-#include "../CoreEngine/SpeechWorker.h"
 
 using namespace TestInfrastructure;
 
@@ -147,76 +141,82 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsBookmarkStringEventToSite) {
 }
 
 TEST_F(SapiEngineTests, MatchingProviderEventsKeepLongRequestAlive) {
-    ControlPipeTestServer server;
-    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
-
-    PipeClient client;
-    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
-    auto engine = winrt::make_self<CSapiEngine>();
-    SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(34));
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(33));
 
     HRESULT waitResult = E_FAIL;
     std::thread waitThread([&] {
-        waitResult = worker.WaitUntilFinished(nullptr);
+        waitResult = fixture.worker->WaitUntilFinished(nullptr);
     });
     ThreadJoinGuard waitJoin(waitThread);
 
     for (int eventIndex = 0; eventIndex < 3; ++eventIndex)
     {
-        ASSERT_TRUE(server.WriteControl(
+        Sleep(500);
+        ASSERT_TRUE(fixture.server.WriteControl(
+            "{\"event\":\"word_boundary\",\"speak_id\":33,\"text_offset\":0,\"text_length\":1,\"audio_offset_ms\":0}\n"));
+    }
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":33,\"total_audio_bytes\":0}\n"));
+
+    EXPECT_TRUE(waitJoin.Join(2000));
+    EXPECT_EQ(waitResult, S_OK);
+    EXPECT_FALSE(fixture.worker->IsFaulted());
+}
+
+TEST_F(SapiEngineTests, MultipleWordBoundariesWithinRequestAreProcessed) {
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(34));
+
+    HRESULT waitResult = E_FAIL;
+    std::thread waitThread([&] {
+        waitResult = fixture.worker->WaitUntilFinished(nullptr);
+    });
+    ThreadJoinGuard waitJoin(waitThread);
+
+    for (int eventIndex = 0; eventIndex < 3; ++eventIndex)
+    {
+        ASSERT_TRUE(fixture.server.WriteControl(
             "{\"event\":\"word_boundary\",\"speak_id\":34,\"text_offset\":0,\"text_length\":1,\"audio_offset_ms\":0}\n"));
     }
-    ASSERT_TRUE(server.WriteControl(
+    ASSERT_TRUE(fixture.server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":34,\"total_audio_bytes\":0}\n"));
 
     EXPECT_TRUE(waitJoin.Join(2000));
     EXPECT_EQ(waitResult, S_OK);
-    EXPECT_FALSE(worker.IsFaulted());
+    EXPECT_FALSE(fixture.worker->IsFaulted());
 }
 
 TEST_F(SapiEngineTests, WarningLogDoesNotFaultSession) {
-    ControlPipeTestServer server;
-    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
-
-    PipeClient client;
-    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
-    auto engine = winrt::make_self<CSapiEngine>();
-    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
-    engine->m_cpSite.copy_from(mockSite.get());
-
-    SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(43));
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(43));
 
     std::thread serverThread([&] {
-        server.WriteControl("{\"event\":\"log\",\"speak_id\":43,\"severity\":\"warning\",\"message\":\"Cancel ignored: speak_id 43 already completed\"}\n");
-        server.WriteAudio({ 1, 2, 3, 4 });
-        server.WriteControl("{\"event\":\"synthesis_complete\",\"speak_id\":43,\"total_audio_bytes\":4}\n");
+        fixture.server.WriteControl("{\"event\":\"log\",\"speak_id\":43,\"severity\":\"warning\",\"message\":\"Cancel ignored: speak_id 43 already completed\"}\n");
+        fixture.server.WriteAudio({ 1, 2, 3, 4 });
+        fixture.server.WriteControl("{\"event\":\"synthesis_complete\",\"speak_id\":43,\"total_audio_bytes\":4}\n");
     });
 
-    HRESULT hr = worker.WaitUntilFinished(mockSite.get());
+    HRESULT hr = fixture.worker->WaitUntilFinished(fixture.mockSite.get());
 
-    if (serverThread.joinable()) {
+    if (serverThread.joinable())
+    {
         serverThread.join();
     }
 
     EXPECT_EQ(hr, S_OK);
-    EXPECT_FALSE(worker.IsFaulted());
+    EXPECT_FALSE(fixture.worker->IsFaulted());
 }
 
 #if defined(_DEBUG)
 TEST_F(SapiEngineTests, FaultedSessionDoesNotForwardAnEventPausedBeforeItsSapiCallback) {
-    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
-    auto engine = winrt::make_self<CSapiEngine>();
-    auto mockToken = winrt::make_self<MockSpObjectToken>();
-    ASSERT_EQ(engine->SetObjectToken(mockToken.get()), S_OK);
+    EngineInitializedFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
 
-    GUID formatId = {};
-    WAVEFORMATEX* pWaveFormat = nullptr;
-    ASSERT_EQ(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat), S_OK);
-    ASSERT_NE(pWaveFormat, nullptr);
-
-    SpeechWorker* worker = engine->m_pWorker.get();
+    SpeechWorker* worker = fixture.engine->m_pWorker.get();
     ASSERT_NE(worker, nullptr);
     worker->PauseNextEventForwardForTest();
 
@@ -225,34 +225,30 @@ TEST_F(SapiEngineTests, FaultedSessionDoesNotForwardAnEventPausedBeforeItsSapiCa
     fragment.pTextStart = text;
     fragment.ulTextLen = static_cast<ULONG>(wcslen(text));
 
-    mockSite->rejectNextWrite = true;
-    engine->FailNextCancellationControlSendForTest();
+    fixture.mockSite->rejectNextWrite = true;
+    fixture.engine->FailNextCancellationControlSendForTest();
     HRESULT speakResult = S_OK;
     std::thread speakThread([&] {
-        speakResult = engine->Speak(0, formatId, pWaveFormat, &fragment, mockSite.get());
+        speakResult = fixture.engine->Speak(0, fixture.formatId, fixture.pWaveFormat, &fragment, fixture.mockSite.get());
     });
     ThreadJoinGuard speakJoin(speakThread);
 
     const bool pausedBeforeSapiCallback = worker->WaitForEventForwardPauseForTest(1000);
-    std::unique_lock<std::mutex> sessionLock(engine->m_sessionMutex);
-    for (int attempt = 0; attempt < 100 && mockSite->writeCallCount.load() == 0; ++attempt)
-    {
-        Sleep(10);
-    }
-    const ULONG writeCallCount = mockSite->writeCallCount.load();
+    std::unique_lock<std::mutex> sessionLock(fixture.engine->m_sessionMutex);
+    EXPECT_TRUE(WaitForCondition([&] { return fixture.mockSite->writeCallCount.load() > 0; }, 1000, 10));
+    const ULONG writeCallCount = fixture.mockSite->writeCallCount.load();
     const bool faulted = worker->WaitForFaultForTest(1000);
 
     worker->ReleaseEventForwardForTest();
     sessionLock.unlock();
     EXPECT_TRUE(speakJoin.Join(2000));
-    CoTaskMemFree(pWaveFormat);
 
     ASSERT_TRUE(pausedBeforeSapiCallback);
     ASSERT_EQ(writeCallCount, 1u);
     ASSERT_TRUE(faulted);
     EXPECT_EQ(speakResult, E_FAIL);
-    std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
-    EXPECT_TRUE(mockSite->receivedEvents.empty())
+    std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
+    EXPECT_TRUE(fixture.mockSite->receivedEvents.empty())
         << "An event authorized before fault reached SAPI after fault became visible.";
 }
 #endif

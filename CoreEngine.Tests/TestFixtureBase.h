@@ -13,10 +13,33 @@
 #include <chrono>
 #include <fstream>
 #include <filesystem>
+#include <memory>
+#include <algorithm>
+#include "ControlPipeTestServer.h"
+#include "MockSpTTSEngineSite.h"
+#include "MockSpObjectToken.h"
+#include "../CoreEngine/PipeClient.h"
+#include "../CoreEngine/SapiEngine.h"
+#include "../CoreEngine/SpeechWorker.h"
 #include "../CoreEngine/PcmFrameAssembler.h"
 
 namespace TestInfrastructure
 {
+
+template<typename Predicate>
+[[nodiscard]] inline bool WaitForCondition(Predicate&& pred, DWORD timeoutMs = 1000, DWORD pollIntervalMs = 5)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (pred())
+        {
+            return true;
+        }
+        Sleep(pollIntervalMs);
+    }
+    return pred();
+}
 
 inline std::vector<uint8_t> FeedPcmFragments(PcmFrameAssembler& assembler,
     const std::vector<std::vector<uint8_t>>& fragments,
@@ -100,24 +123,93 @@ public:
 
     bool WaitForEntryAfter(size_t snapshotSize, const std::string& entry, DWORD timeoutMs) const
     {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-        do
-        {
+        return WaitForCondition([&] {
             std::ifstream stream(m_path, std::ios::binary);
             std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
-            if (contents.size() >= snapshotSize && contents.find(entry, snapshotSize) != std::string::npos)
-            {
-                return true;
-            }
-            Sleep(10);
-        } while (std::chrono::steady_clock::now() < deadline);
-
-        return false;
+            return contents.size() >= snapshotSize && contents.find(entry, snapshotSize) != std::string::npos;
+        }, timeoutMs, 10);
     }
 
 private:
     std::filesystem::path m_path{std::filesystem::temp_directory_path() / L"ModernSapiAdapterMockProviderFaultTrace.log"};
     bool m_isActive{false};
+};
+
+struct PipeServerWorkerFixture
+{
+    ControlPipeTestServer server;
+    PipeClient client;
+    winrt::com_ptr<CSapiEngine> engine;
+    winrt::com_ptr<MockSpTTSEngineSite> mockSite;
+    std::unique_ptr<SpeechWorker> worker;
+
+    bool Initialize(WORD blockAlign = 2)
+    {
+        if (server.CreateError() != ERROR_SUCCESS)
+        {
+            return false;
+        }
+        if (FAILED(client.Connect(server.PipeName(), L"")))
+        {
+            return false;
+        }
+        engine = winrt::make_self<CSapiEngine>();
+        mockSite = winrt::make_self<MockSpTTSEngineSite>();
+        engine->m_cpSite.copy_from(mockSite.get());
+        engine->m_config.audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, blockAlign, static_cast<WORD>(blockAlign * 8), 0 };
+        worker = std::make_unique<SpeechWorker>(engine.get(), &client, blockAlign);
+        return true;
+    }
+
+    bool Start(uint64_t speakId)
+    {
+        if (!worker)
+        {
+            return false;
+        }
+        return worker->Start(speakId);
+    }
+
+    bool WaitForFault(DWORD timeoutMs = 1000)
+    {
+        return WaitForCondition([this] {
+            return worker && worker->IsFaulted();
+        }, timeoutMs);
+    }
+};
+
+struct EngineInitializedFixture
+{
+    winrt::com_ptr<MockSpTTSEngineSite> mockSite;
+    winrt::com_ptr<CSapiEngine> engine;
+    winrt::com_ptr<MockSpObjectToken> mockToken;
+    GUID formatId = {};
+    WAVEFORMATEX* pWaveFormat = nullptr;
+
+    bool Initialize()
+    {
+        mockSite = winrt::make_self<MockSpTTSEngineSite>();
+        engine = winrt::make_self<CSapiEngine>();
+        mockToken = winrt::make_self<MockSpObjectToken>();
+        if (FAILED(engine->SetObjectToken(mockToken.get())))
+        {
+            return false;
+        }
+        if (FAILED(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat)) || !pWaveFormat)
+        {
+            return false;
+        }
+        return true;
+    }
+
+    ~EngineInitializedFixture()
+    {
+        if (pWaveFormat)
+        {
+            CoTaskMemFree(pWaveFormat);
+            pWaveFormat = nullptr;
+        }
+    }
 };
 
 } // namespace TestInfrastructure

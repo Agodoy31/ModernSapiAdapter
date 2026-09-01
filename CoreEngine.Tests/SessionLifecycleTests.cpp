@@ -212,16 +212,17 @@ TEST_F(SapiEngineTests, GetObjectTokenDoesNotWaitForActiveSpeakSerialization) {
     });
     ThreadJoinGuard getterJoin(getter);
 
-    for (int attempt = 0; attempt < 100 && !getterStarted.load(std::memory_order_acquire); ++attempt) Sleep(1);
-    ASSERT_TRUE(getterStarted.load(std::memory_order_acquire));
-    for (int attempt = 0; attempt < 1000 && !getterCompleted.load(std::memory_order_acquire); ++attempt) Sleep(1);
-    EXPECT_TRUE(getterCompleted.load(std::memory_order_acquire));
+    EXPECT_TRUE(WaitForCondition([&] { return getterStarted.load(std::memory_order_acquire); }, 1000, 1));
+    EXPECT_TRUE(WaitForCondition([&] { return getterCompleted.load(std::memory_order_acquire); }, 1000, 1));
 
     tokenLock.unlock();
     ASSERT_TRUE(getterJoin.Join());
     EXPECT_EQ(getResult, S_OK);
     EXPECT_EQ(returnedToken, mockToken.get());
-    if (returnedToken) returnedToken->Release();
+    if (returnedToken)
+    {
+        returnedToken->Release();
+    }
 }
 
 TEST_F(SapiEngineTests, GetOutputFormatFailsWhenNoProviderLoaded) {

@@ -8,12 +8,18 @@
 #include "SpeechWorker.h"
 #include "ProviderSessionConfig.h"
 
+namespace TestInfrastructure
+{
+    struct PipeServerWorkerFixture;
+}
+
 /**
  * @class CSapiEngine
  * @brief Implements SAPI 5 COM engine interfaces and proxies calls to unmanaged speech providers.
  */
 class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjectWithToken>
 {
+    friend struct TestInfrastructure::PipeServerWorkerFixture;
     friend class SapiEngineTests_OnSpeechEventMapsAndDispatchesToSite_Test;
     friend class SapiEngineTests_OnSpeechEventMapsSentenceBoundaryToSite_Test;
     friend class SapiEngineTests_OnSpeechEventMapsBookmarkStringEventToSite_Test;

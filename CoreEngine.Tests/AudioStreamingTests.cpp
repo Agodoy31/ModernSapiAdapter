@@ -1,12 +1,5 @@
 #include "pch.h"
 #include "TestFixtureBase.h"
-#include "MockSpTTSEngineSite.h"
-#include "MockSpObjectToken.h"
-#include "ControlPipeTestServer.h"
-#include "../CoreEngine/PipeClient.h"
-#include "../CoreEngine/SapiEngine.h"
-#include "../CoreEngine/SpeechWorker.h"
-#include "../CoreEngine/PcmFrameAssembler.h"
 
 using namespace TestInfrastructure;
 
@@ -65,41 +58,31 @@ TEST(PcmFrameAssemblerTests, AlignedInputWithoutCarryUsesTheOriginalBuffer) {
 }
 
 TEST_F(SapiEngineTests, SpeakWaitsForSynthesisCompleteByteBoundary) {
-    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
-    auto engine = winrt::make_self<CSapiEngine>();
-    auto mockToken = winrt::make_self<MockSpObjectToken>();
-
-    ASSERT_EQ(engine->SetObjectToken(mockToken.get()), S_OK);
-
-    GUID formatId = {};
-    WAVEFORMATEX* pWaveFormat = nullptr;
-    HRESULT hrFormat = engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat);
-    ASSERT_EQ(hrFormat, S_OK);
-    ASSERT_NE(pWaveFormat, nullptr);
+    EngineInitializedFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
 
     SPVTEXTFRAG frag = {};
     wchar_t text[] = L"Hello world from mock provider";
     frag.pTextStart = text;
     frag.ulTextLen = static_cast<ULONG>(wcslen(text));
 
-    HRESULT hr = engine->Speak(0, formatId, pWaveFormat, &frag, mockSite.get());
-    CoTaskMemFree(pWaveFormat);
+    HRESULT hr = fixture.engine->Speak(0, fixture.formatId, fixture.pWaveFormat, &frag, fixture.mockSite.get());
 
     EXPECT_EQ(hr, S_OK);
-    EXPECT_GT(mockSite->writeCallCount.load(), 0u);
-    EXPECT_EQ(mockSite->totalBytesWritten.load(), 48000u);
+    EXPECT_GT(fixture.mockSite->writeCallCount.load(), 0u);
+    EXPECT_EQ(fixture.mockSite->totalBytesWritten.load(), 48000u);
     {
-        std::lock_guard<std::mutex> lock(mockSite->writesMutex);
-        ASSERT_FALSE(mockSite->requestedWriteSizes.empty());
-        EXPECT_TRUE(std::all_of(mockSite->requestedWriteSizes.begin(), mockSite->requestedWriteSizes.end(),
+        std::lock_guard<std::mutex> lock(fixture.mockSite->writesMutex);
+        ASSERT_FALSE(fixture.mockSite->requestedWriteSizes.empty());
+        EXPECT_TRUE(std::all_of(fixture.mockSite->requestedWriteSizes.begin(), fixture.mockSite->requestedWriteSizes.end(),
             [](ULONG requestedSize) { return requestedSize % 2 == 0; }));
     }
 
-    std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
-    EXPECT_GT(mockSite->receivedEvents.size(), 0u);
+    std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
+    EXPECT_GT(fixture.mockSite->receivedEvents.size(), 0u);
 
     bool foundWordBoundary = false;
-    for (const auto& evt : mockSite->receivedEvents) {
+    for (const auto& evt : fixture.mockSite->receivedEvents) {
         if (evt.eEventId == SPEI_WORD_BOUNDARY) {
             foundWordBoundary = true;
             break;
@@ -109,16 +92,8 @@ TEST_F(SapiEngineTests, SpeakWaitsForSynthesisCompleteByteBoundary) {
 }
 
 TEST_F(SapiEngineTests, SpeakPreservesNonContiguousSapiSourceOffsets) {
-    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
-    auto engine = winrt::make_self<CSapiEngine>();
-    auto mockToken = winrt::make_self<MockSpObjectToken>();
-
-    ASSERT_EQ(engine->SetObjectToken(mockToken.get()), S_OK);
-
-    GUID formatId = {};
-    WAVEFORMATEX* pWaveFormat = nullptr;
-    ASSERT_EQ(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat), S_OK);
-    ASSERT_NE(pWaveFormat, nullptr);
+    EngineInitializedFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
 
     wchar_t firstText[] = L"first";
     wchar_t secondText[] = L"second";
@@ -133,112 +108,93 @@ TEST_F(SapiEngineTests, SpeakPreservesNonContiguousSapiSourceOffsets) {
     secondFragment.ulTextSrcOffset = 23;
     firstFragment.pNext = &secondFragment;
 
-    EXPECT_EQ(engine->Speak(0, formatId, pWaveFormat, &firstFragment, mockSite.get()), S_OK);
-    CoTaskMemFree(pWaveFormat);
+    EXPECT_EQ(fixture.engine->Speak(0, fixture.formatId, fixture.pWaveFormat, &firstFragment, fixture.mockSite.get()), S_OK);
 
-    std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
-    ASSERT_EQ(mockSite->receivedEvents.size(), 2u);
-    EXPECT_EQ(mockSite->receivedEvents[0].eEventId, SPEI_WORD_BOUNDARY);
-    EXPECT_EQ(mockSite->receivedEvents[0].wParam, 5u);
-    EXPECT_EQ(mockSite->receivedEvents[0].lParam, 0);
-    EXPECT_EQ(mockSite->receivedEvents[1].eEventId, SPEI_WORD_BOUNDARY);
-    EXPECT_EQ(mockSite->receivedEvents[1].wParam, 6u);
-    EXPECT_EQ(mockSite->receivedEvents[1].lParam, 23);
+    std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
+    ASSERT_EQ(fixture.mockSite->receivedEvents.size(), 2u);
+    EXPECT_EQ(fixture.mockSite->receivedEvents[0].eEventId, SPEI_WORD_BOUNDARY);
+    EXPECT_EQ(fixture.mockSite->receivedEvents[0].wParam, 5u);
+    EXPECT_EQ(fixture.mockSite->receivedEvents[0].lParam, 0);
+    EXPECT_EQ(fixture.mockSite->receivedEvents[1].eEventId, SPEI_WORD_BOUNDARY);
+    EXPECT_EQ(fixture.mockSite->receivedEvents[1].wParam, 6u);
+    EXPECT_EQ(fixture.mockSite->receivedEvents[1].lParam, 23);
 }
 
 #if defined(_DEBUG)
 TEST_F(SapiEngineTests, TerminalBeforeOverrunAudioForwardsOnlyDeclaredFrames) {
-    ControlPipeTestServer server;
-    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
-
-    PipeClient client;
-    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
-    auto engine = winrt::make_self<CSapiEngine>();
-    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
-    engine->m_cpSite.copy_from(mockSite.get());
-    SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(26));
-    worker.PauseNextEventForwardForTest();
-    ASSERT_TRUE(server.WriteControl(
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(26));
+    fixture.worker->PauseNextEventForwardForTest();
+    ASSERT_TRUE(fixture.server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":26,\"total_audio_bytes\":2}\n"));
-    ASSERT_TRUE(worker.WaitForEventForwardPauseForTest(1000));
+    ASSERT_TRUE(fixture.worker->WaitForEventForwardPauseForTest(1000));
 
-    ASSERT_TRUE(server.WriteAudio({ 0xC1, 0xC2, 0xD1, 0xD2 }));
-    worker.ReleaseEventForwardForTest();
+    ASSERT_TRUE(fixture.server.WriteAudio({ 0xC1, 0xC2, 0xD1, 0xD2 }));
+    fixture.worker->ReleaseEventForwardForTest();
 
-    ASSERT_TRUE(worker.WaitForFaultForTest(1000));
-    std::lock_guard<std::mutex> lock(mockSite->writesMutex);
-    EXPECT_EQ(mockSite->requestedWriteSizes, (std::vector<ULONG>{ 2 }));
-    EXPECT_EQ(mockSite->acceptedAudio, (std::vector<uint8_t>{ 0xC1, 0xC2 }));
+    ASSERT_TRUE(fixture.worker->WaitForFaultForTest(1000));
+    std::lock_guard<std::mutex> lock(fixture.mockSite->writesMutex);
+    EXPECT_EQ(fixture.mockSite->requestedWriteSizes, (std::vector<ULONG>{ 2 }));
+    EXPECT_EQ(fixture.mockSite->acceptedAudio, (std::vector<uint8_t>{ 0xC1, 0xC2 }));
 }
 
 TEST_F(SapiEngineTests, WorkerReassemblesAwkward24BitStereoPipeFragments) {
-    ControlPipeTestServer server;
-    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize(6));
+    ASSERT_TRUE(fixture.Start(27));
 
-    PipeClient client;
-    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
-    auto engine = winrt::make_self<CSapiEngine>();
-    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
-    engine->m_cpSite.copy_from(mockSite.get());
-    SpeechWorker worker(engine.get(), &client, 6);
-    ASSERT_TRUE(worker.Start(27));
+    ASSERT_TRUE(fixture.server.WriteAudio({ 0x01 }));
+    EXPECT_TRUE(WaitForCondition([&] { return fixture.worker->RawAudioBytesForTest() == 1; }, 1000, 1));
+    ASSERT_EQ(fixture.worker->RawAudioBytesForTest(), 1u);
 
-    ASSERT_TRUE(server.WriteAudio({ 0x01 }));
-    for (int attempt = 0; attempt < 100 && worker.RawAudioBytesForTest() != 1; ++attempt) Sleep(1);
-    ASSERT_EQ(worker.RawAudioBytesForTest(), 1u);
-    ASSERT_TRUE(server.WriteAudio({ 0x02, 0x03, 0x04, 0x05 }));
-    for (int attempt = 0; attempt < 100 && worker.RawAudioBytesForTest() != 5; ++attempt) Sleep(1);
-    ASSERT_EQ(worker.RawAudioBytesForTest(), 5u);
-    ASSERT_TRUE(server.WriteAudio({ 0x06, 0x11, 0x12 }));
-    for (int attempt = 0; attempt < 100 && worker.RawAudioBytesForTest() != 8; ++attempt) Sleep(1);
-    ASSERT_EQ(worker.RawAudioBytesForTest(), 8u);
-    ASSERT_TRUE(server.WriteAudio({ 0x13, 0x14, 0x15, 0x16, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26 }));
-    for (int attempt = 0; attempt < 100 && worker.RawAudioBytesForTest() != 18; ++attempt) Sleep(1);
-    ASSERT_EQ(worker.RawAudioBytesForTest(), 18u);
-    ASSERT_TRUE(server.WriteControl(
+    ASSERT_TRUE(fixture.server.WriteAudio({ 0x02, 0x03, 0x04, 0x05 }));
+    EXPECT_TRUE(WaitForCondition([&] { return fixture.worker->RawAudioBytesForTest() == 5; }, 1000, 1));
+    ASSERT_EQ(fixture.worker->RawAudioBytesForTest(), 5u);
+
+    ASSERT_TRUE(fixture.server.WriteAudio({ 0x06, 0x11, 0x12 }));
+    EXPECT_TRUE(WaitForCondition([&] { return fixture.worker->RawAudioBytesForTest() == 8; }, 1000, 1));
+    ASSERT_EQ(fixture.worker->RawAudioBytesForTest(), 8u);
+
+    ASSERT_TRUE(fixture.server.WriteAudio({ 0x13, 0x14, 0x15, 0x16, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26 }));
+    EXPECT_TRUE(WaitForCondition([&] { return fixture.worker->RawAudioBytesForTest() == 18; }, 1000, 1));
+    ASSERT_EQ(fixture.worker->RawAudioBytesForTest(), 18u);
+
+    ASSERT_TRUE(fixture.server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":27,\"total_audio_bytes\":18}\n"));
-    ASSERT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
+    ASSERT_EQ(fixture.worker->WaitUntilFinished(nullptr), S_OK);
 
-    std::lock_guard<std::mutex> lock(mockSite->writesMutex);
-    ASSERT_FALSE(mockSite->requestedWriteSizes.empty());
-    EXPECT_TRUE(std::all_of(mockSite->requestedWriteSizes.begin(), mockSite->requestedWriteSizes.end(),
+    std::lock_guard<std::mutex> lock(fixture.mockSite->writesMutex);
+    ASSERT_FALSE(fixture.mockSite->requestedWriteSizes.empty());
+    EXPECT_TRUE(std::all_of(fixture.mockSite->requestedWriteSizes.begin(), fixture.mockSite->requestedWriteSizes.end(),
         [](ULONG requestedSize) { return requestedSize % 6 == 0; }));
-    EXPECT_EQ(mockSite->acceptedAudio, (std::vector<uint8_t>{
+    EXPECT_EQ(fixture.mockSite->acceptedAudio, (std::vector<uint8_t>{
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
         0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
         0x21, 0x22, 0x23, 0x24, 0x25, 0x26 }));
 }
 
 TEST_F(SapiEngineTests, SynthesisCompleteWaitsForFinalSapiWriteToFinish) {
-    ControlPipeTestServer server;
-    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(42));
 
-    PipeClient client;
-    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
-    auto engine = winrt::make_self<CSapiEngine>();
-    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
-    engine->m_cpSite.copy_from(mockSite.get());
-
-    SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(42));
-
-    mockSite->PauseNextWrite();
-    ASSERT_TRUE(server.WriteAudio({ 0x10, 0x20, 0x30, 0x40 }));
-    auto releaseWrite = wil::scope_exit([&] { mockSite->ReleaseWrite(); });
-    ASSERT_TRUE(mockSite->WaitForWritePause(1000));
-    worker.PauseNextEventForwardForTest();
-    auto releaseEventForward = wil::scope_exit([&] { worker.ReleaseEventForwardForTest(); });
-    ASSERT_TRUE(server.WriteControl(
+    fixture.mockSite->PauseNextWrite();
+    ASSERT_TRUE(fixture.server.WriteAudio({ 0x10, 0x20, 0x30, 0x40 }));
+    auto releaseWrite = wil::scope_exit([&] { fixture.mockSite->ReleaseWrite(); });
+    ASSERT_TRUE(fixture.mockSite->WaitForWritePause(1000));
+    fixture.worker->PauseNextEventForwardForTest();
+    auto releaseEventForward = wil::scope_exit([&] { fixture.worker->ReleaseEventForwardForTest(); });
+    ASSERT_TRUE(fixture.server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":42,\"total_audio_bytes\":4}\n"));
-    ASSERT_TRUE(worker.WaitForEventForwardPauseForTest(1000));
+    ASSERT_TRUE(fixture.worker->WaitForEventForwardPauseForTest(1000));
 
     std::mutex completionMutex;
     std::condition_variable completionCondition;
     bool waitReturned = false;
     HRESULT waitResult = E_UNEXPECTED;
     std::thread waitThread([&] {
-        waitResult = worker.WaitUntilFinished(nullptr);
+        waitResult = fixture.worker->WaitUntilFinished(nullptr);
         {
             std::lock_guard<std::mutex> lock(completionMutex);
             waitReturned = true;
@@ -246,7 +202,7 @@ TEST_F(SapiEngineTests, SynthesisCompleteWaitsForFinalSapiWriteToFinish) {
         completionCondition.notify_all();
     });
     auto releaseWriteBeforeJoin = wil::scope_exit([&] {
-        mockSite->ReleaseWrite();
+        fixture.mockSite->ReleaseWrite();
         if (waitThread.joinable()) {
             waitThread.join();
         }
@@ -258,50 +214,40 @@ TEST_F(SapiEngineTests, SynthesisCompleteWaitsForFinalSapiWriteToFinish) {
             return waitReturned;
         }));
     }
-    EXPECT_FALSE(worker.IsFaulted());
+    EXPECT_FALSE(fixture.worker->IsFaulted());
 
-    worker.ReleaseEventForwardForTest();
-    mockSite->ReleaseWrite();
+    fixture.worker->ReleaseEventForwardForTest();
+    fixture.mockSite->ReleaseWrite();
     waitThread.join();
 
     EXPECT_EQ(waitResult, S_OK);
-    EXPECT_EQ(mockSite->totalBytesWritten.load(), 4u);
-    EXPECT_FALSE(worker.IsFaulted());
+    EXPECT_EQ(fixture.mockSite->totalBytesWritten.load(), 4u);
+    EXPECT_FALSE(fixture.worker->IsFaulted());
 }
 #endif
 
 TEST_F(SapiEngineTests, SpeakDoesNotHoldTheSessionLockAcrossReentrantGetActions) {
-    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
-    auto engine = winrt::make_self<CSapiEngine>();
-    auto mockToken = winrt::make_self<MockSpObjectToken>();
-    ASSERT_EQ(engine->SetObjectToken(mockToken.get()), S_OK);
-
-    GUID formatId = {};
-    WAVEFORMATEX* pWaveFormat = nullptr;
-    ASSERT_EQ(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat), S_OK);
-    ASSERT_NE(pWaveFormat, nullptr);
+    EngineInitializedFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
 
     std::atomic_bool reentrantGetActionsRan{false};
     std::atomic_bool reentrantGetOutputCompleted{false};
     std::atomic_bool reentrantGetOutputCompletedBeforeReturn{false};
     HRESULT reentrantGetOutputResult = E_FAIL;
     std::thread reentrantGetOutputThread;
-    mockSite->getActionsCallback = [&] {
+    fixture.mockSite->getActionsCallback = [&] {
         bool expected = false;
         if (reentrantGetActionsRan.compare_exchange_strong(expected, true))
         {
             reentrantGetOutputThread = std::thread([&] {
                 GUID nestedFormatId = {};
                 WAVEFORMATEX* nestedFormat = nullptr;
-                reentrantGetOutputResult = engine->GetOutputFormat(nullptr, nullptr, &nestedFormatId, &nestedFormat);
+                reentrantGetOutputResult = fixture.engine->GetOutputFormat(nullptr, nullptr, &nestedFormatId, &nestedFormat);
                 CoTaskMemFree(nestedFormat);
                 reentrantGetOutputCompleted = true;
             });
 
-            for (int attempt = 0; attempt < 40 && !reentrantGetOutputCompleted.load(); ++attempt)
-            {
-                Sleep(5);
-            }
+            EXPECT_TRUE(WaitForCondition([&] { return reentrantGetOutputCompleted.load(); }, 200, 5));
             reentrantGetOutputCompletedBeforeReturn = reentrantGetOutputCompleted.load();
         }
         return SPVES_CONTINUE;
@@ -313,8 +259,7 @@ TEST_F(SapiEngineTests, SpeakDoesNotHoldTheSessionLockAcrossReentrantGetActions)
     fragment.ulTextLen = static_cast<ULONG>(wcslen(text));
 
     const auto speakStart = std::chrono::steady_clock::now();
-    const HRESULT speakResult = engine->Speak(0, formatId, pWaveFormat, &fragment, mockSite.get());
-    CoTaskMemFree(pWaveFormat);
+    const HRESULT speakResult = fixture.engine->Speak(0, fixture.formatId, fixture.pWaveFormat, &fragment, fixture.mockSite.get());
     if (reentrantGetOutputThread.joinable())
     {
         reentrantGetOutputThread.join();
@@ -330,44 +275,35 @@ TEST_F(SapiEngineTests, SpeakDoesNotHoldTheSessionLockAcrossReentrantGetActions)
 }
 
 TEST_F(SapiEngineTests, InFlightAudioFromCancelledRequestDoesNotIncrementNextRequestBytes) {
-    ControlPipeTestServer server;
-    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(50));
 
-    PipeClient client;
-    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
-    auto engine = winrt::make_self<CSapiEngine>();
-    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
-    engine->m_cpSite.copy_from(mockSite.get());
-
-    SpeechWorker worker(engine.get(), &client, 2);
-    ASSERT_TRUE(worker.Start(50));
-
-    mockSite->PauseNextWrite();
+    fixture.mockSite->PauseNextWrite();
     auto releaseWriteGuard = wil::scope_exit([&] {
-        mockSite->ReleaseWrite();
+        fixture.mockSite->ReleaseWrite();
     });
 
-    ASSERT_TRUE(server.WriteAudio({ 0x11, 0x22, 0x33, 0x44 }));
-    ASSERT_TRUE(mockSite->WaitForWritePause(1000));
+    ASSERT_TRUE(fixture.server.WriteAudio({ 0x11, 0x22, 0x33, 0x44 }));
+    ASSERT_TRUE(fixture.mockSite->WaitForWritePause(1000));
 
-    worker.Stop();
-    ASSERT_TRUE(worker.Start(51));
+    fixture.worker->Stop();
+    ASSERT_TRUE(fixture.worker->Start(51));
 
-    mockSite->ReleaseWrite();
+    fixture.mockSite->ReleaseWrite();
 
-    ASSERT_TRUE(server.WriteAudio({ 0x55, 0x66, 0x77, 0x88 }));
-    ASSERT_TRUE(server.WriteControl(
+    ASSERT_TRUE(fixture.server.WriteAudio({ 0x55, 0x66, 0x77, 0x88 }));
+    ASSERT_TRUE(fixture.server.WriteControl(
         "{\"event\":\"synthesis_complete\",\"speak_id\":51,\"total_audio_bytes\":4}\n"));
 
-    EXPECT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
-    EXPECT_FALSE(worker.IsFaulted());
-    EXPECT_EQ(mockSite->totalBytesWritten.load(), 8u);
+    EXPECT_EQ(fixture.worker->WaitUntilFinished(nullptr), S_OK);
+    EXPECT_FALSE(fixture.worker->IsFaulted());
+    EXPECT_EQ(fixture.mockSite->totalBytesWritten.load(), 8u);
     {
-        std::lock_guard<std::mutex> lock(mockSite->writesMutex);
-        EXPECT_EQ(mockSite->acceptedAudio, (std::vector<uint8_t>{
+        std::lock_guard<std::mutex> lock(fixture.mockSite->writesMutex);
+        EXPECT_EQ(fixture.mockSite->acceptedAudio, (std::vector<uint8_t>{
             0x11, 0x22, 0x33, 0x44,
             0x55, 0x66, 0x77, 0x88
         }));
     }
 }
-
