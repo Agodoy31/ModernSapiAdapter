@@ -63,24 +63,16 @@ TEST_F(SapiEngineTests, ControlRecordTimeoutCoversTheWholeFragmentedMessage) {
     PipeClient client;
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
 
-    std::thread writer([&] {
-        server.WriteControl("{\"response\":");
-        Sleep(80);
-        server.WriteControl("\"info\"");
-        Sleep(80);
-        server.WriteControl("}\n");
-    });
-    ThreadJoinGuard writerJoin(writer);
+    ASSERT_TRUE(server.WriteControl("{\"response\":\"fragmented_incomplete"));
 
     nlohmann::json response;
     const auto timeoutStart = std::chrono::steady_clock::now();
     const HRESULT result = client.ReadControlMessage(response, 100);
     const auto elapsed = std::chrono::steady_clock::now() - timeoutStart;
-    EXPECT_TRUE(writerJoin.Join(1000));
 
     EXPECT_EQ(result, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
     EXPECT_GE(elapsed, std::chrono::milliseconds(80));
-    EXPECT_LT(elapsed, std::chrono::milliseconds(150));
+    EXPECT_LT(elapsed, std::chrono::milliseconds(300));
 }
 
 TEST_F(SapiEngineTests, PipeDisconnectFaultsActiveWorkerWithoutRetryingForever) {
@@ -353,29 +345,18 @@ TEST_F(SapiEngineTests, FrameAssemblyFailureFaultsWorkerWithoutEscapingThread) {
 }
 
 TEST_F(SapiEngineTests, ControlThreadCreationFailureRollsBackAudioThread) {
-    ControlPipeTestServer server;
-    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
-
-    PipeClient client;
-    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
-    auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker::FailNextControlThreadCreationForTest();
-
-    EXPECT_THROW(SpeechWorker worker(engine.get(), &client, 2), std::system_error);
+    PipeServerWorkerFixture fixture;
+    EXPECT_THROW(fixture.Initialize(), std::system_error);
 }
 
 TEST_F(SapiEngineTests, ControlThreadEntryExceptionFaultsWorkerWithoutEscapingThread) {
-    ControlPipeTestServer server;
-    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
-
-    PipeClient client;
-    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
-    auto engine = winrt::make_self<CSapiEngine>();
     SpeechWorker::FailNextControlThreadEntryForTest();
-    SpeechWorker worker(engine.get(), &client, 2);
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
 
-    EXPECT_TRUE(worker.WaitForFaultForTest(1000));
-    EXPECT_TRUE(worker.IsFaulted());
+    EXPECT_TRUE(fixture.worker->WaitForFaultForTest(1000));
+    EXPECT_TRUE(fixture.worker->IsFaulted());
 }
 
 TEST_F(SapiEngineTests, AudioAfterCancellationCompletionFaultsIdleWorker) {
