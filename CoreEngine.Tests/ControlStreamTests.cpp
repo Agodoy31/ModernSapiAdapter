@@ -17,22 +17,34 @@ TEST_F(SapiEngineTests, ControlWriteTimeoutIncludesMutexContention)
     client.PauseNextControlWriteAfterLockForTest();
 
     HRESULT firstWriteResult = E_FAIL;
-    std::thread firstWriteThread([&] {
-        firstWriteResult = client.SendControlMessage({ {"command", "first"} });
-    });
+    std::thread firstWriteThread(
+        [&]
+        {
+            firstWriteResult = client.SendControlMessage({{"command", "first"}});
+        });
     ThreadJoinGuard firstWriteJoin(firstWriteThread);
-    auto releaseControlWrite = wil::scope_exit([&] { client.ReleaseControlWriteForTest(); });
+    auto releaseControlWrite = wil::scope_exit(
+        [&]
+        {
+            client.ReleaseControlWriteForTest();
+        });
     ASSERT_TRUE(client.WaitForControlWritePauseForTest(1000));
 
     wil::unique_event secondWriteFinished(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     ASSERT_TRUE(secondWriteFinished);
     HRESULT secondWriteResult = E_FAIL;
-    std::thread secondWriteThread([&] {
-        secondWriteResult = client.SendControlMessage({ {"command", "second"} }, 50);
-        SetEvent(secondWriteFinished.get());
-    });
+    std::thread secondWriteThread(
+        [&]
+        {
+            secondWriteResult = client.SendControlMessage({{"command", "second"}}, 50);
+            SetEvent(secondWriteFinished.get());
+        });
     ThreadJoinGuard secondWriteJoin(secondWriteThread);
-    auto releaseControlWriteBeforeJoins = wil::scope_exit([&] { client.ReleaseControlWriteForTest(); });
+    auto releaseControlWriteBeforeJoins = wil::scope_exit(
+        [&]
+        {
+            client.ReleaseControlWriteForTest();
+        });
 
     const DWORD completionBeforeRelease = WaitForSingleObject(secondWriteFinished.get(), 500);
     client.ReleaseControlWriteForTest();
@@ -73,10 +85,12 @@ TEST_F(SapiEngineTests, ReadControlMessageReassemblesFragmentedJsonLine)
     ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
 
     std::atomic_bool writesSucceeded{true};
-    std::thread writer([&server, &writesSucceeded] {
-        writesSucceeded = server.WriteControl("{\"event\":\"");
-        writesSucceeded = server.WriteControl("fragmented\"}\n") && writesSucceeded.load();
-    });
+    std::thread writer(
+        [&server, &writesSucceeded]
+        {
+            writesSucceeded = server.WriteControl("{\"event\":\"");
+            writesSucceeded = server.WriteControl("fragmented\"}\n") && writesSucceeded.load();
+        });
     ThreadJoinGuard writerJoin(writer);
 
     nlohmann::json message;
@@ -152,10 +166,11 @@ TEST_F(SapiEngineTests, ReadControlMessageCompactsBufferAndPreservesMessagesAcro
         stream += buf;
     }
 
-    std::thread writer([&server, stream]()
-    {
-        server.WriteControl(stream.c_str());
-    });
+    std::thread writer(
+        [&server, stream]()
+        {
+            server.WriteControl(stream.c_str());
+        });
 
     for (int i = 0; i < totalMsgs; ++i)
     {
@@ -179,10 +194,11 @@ TEST_F(SapiEngineTests, ReadControlMessageHandlesLargePayloadAcrossCompactionThr
     std::string msgStr1 = "{\"data\":\"" + largeVal + "\"}\n";
     std::string msgStr2 = "{\"data\":\"small\"}\n";
 
-    std::thread writer([&server, msgStr1, msgStr2]()
-    {
-        server.WriteControl((msgStr1 + msgStr2).c_str());
-    });
+    std::thread writer(
+        [&server, msgStr1, msgStr2]()
+        {
+            server.WriteControl((msgStr1 + msgStr2).c_str());
+        });
 
     nlohmann::json msg1;
     nlohmann::json msg2;
@@ -233,7 +249,7 @@ TEST_F(SapiEngineTests, ReadControlMessage_O_N_LinearSearch)
     server.WriteControl("{\"type\":\"event\"}\n");
 
     nlohmann::json outJson;
-    HRESULT hr = client.ReadControlMessage(outJson, 5000); 
+    HRESULT hr = client.ReadControlMessage(outJson, 5000);
     EXPECT_EQ(hr, S_OK);
     if (!outJson.is_null())
     {
@@ -258,7 +274,7 @@ TEST_F(SapiEngineTests, ReadControlMessage_MalformedJson)
 
     auto logs = GetTestLogs();
     bool foundParseError = false;
-    for (const auto& log : logs)
+    for (const auto &log : logs)
     {
         if (log.find(L"JSON Parse Error:") != std::wstring::npos)
         {

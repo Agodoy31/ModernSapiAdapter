@@ -21,7 +21,7 @@ TEST_F(SapiEngineTests, SetObjectTokenConnectsToPipeAndQueriesInfo)
     EXPECT_LT(elapsed, std::chrono::seconds(3));
 
     GUID formatId = {};
-    WAVEFORMATEX* pWaveFormat = nullptr;
+    WAVEFORMATEX *pWaveFormat = nullptr;
     hr = engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat);
     EXPECT_EQ(hr, S_OK);
     EXPECT_EQ(formatId, SPDFID_WaveFormatEx);
@@ -45,16 +45,28 @@ TEST_F(SapiEngineTests, GetObjectTokenDoesNotWaitForActiveSpeakSerialization)
     std::atomic_bool getterStarted{false};
     std::atomic_bool getterCompleted{false};
     HRESULT getResult = E_FAIL;
-    ISpObjectToken* returnedToken = nullptr;
-    std::thread getter([&] {
-        getterStarted.store(true, std::memory_order_release);
-        getResult = engine->GetObjectToken(&returnedToken);
-        getterCompleted.store(true, std::memory_order_release);
-    });
+    ISpObjectToken *returnedToken = nullptr;
+    std::thread getter(
+        [&]
+        {
+            getterStarted.store(true, std::memory_order_release);
+            getResult = engine->GetObjectToken(&returnedToken);
+            getterCompleted.store(true, std::memory_order_release);
+        });
     ThreadJoinGuard getterJoin(getter);
 
-    EXPECT_TRUE(WaitForCondition([&] { return getterStarted.load(std::memory_order_acquire); }, 1000, 1));
-    EXPECT_TRUE(WaitForCondition([&] { return getterCompleted.load(std::memory_order_acquire); }, 1000, 1));
+    EXPECT_TRUE(WaitForCondition(
+        [&]
+        {
+            return getterStarted.load(std::memory_order_acquire);
+        },
+        1000, 1));
+    EXPECT_TRUE(WaitForCondition(
+        [&]
+        {
+            return getterCompleted.load(std::memory_order_acquire);
+        },
+        1000, 1));
 
     tokenLock.unlock();
     ASSERT_TRUE(getterJoin.Join());
@@ -69,10 +81,10 @@ TEST_F(SapiEngineTests, GetObjectTokenDoesNotWaitForActiveSpeakSerialization)
 TEST_F(SapiEngineTests, GetOutputFormatFailsWhenNoProviderLoaded)
 {
     auto engine = winrt::make_self<CSapiEngine>();
-    
+
     GUID formatId = GUID_NULL;
-    WAVEFORMATEX* pWaveFormat = reinterpret_cast<WAVEFORMATEX*>(static_cast<uintptr_t>(0xDEADBEEF));
-    
+    WAVEFORMATEX *pWaveFormat = reinterpret_cast<WAVEFORMATEX *>(static_cast<uintptr_t>(0xDEADBEEF));
+
     HRESULT hr = engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat);
     EXPECT_EQ(hr, SPERR_UNINITIALIZED);
     EXPECT_EQ(pWaveFormat, nullptr);
@@ -88,12 +100,14 @@ TEST_F(SapiEngineTests, CreateProviderSessionDoesNotPublishAnInvalidInfoResponse
     engine->m_config.pipeName = server.PipeName();
 
     std::atomic_bool infoResponseSent{false};
-    std::thread infoResponder([&server, &infoResponseSent] {
-        std::string request;
-        infoResponseSent = server.ReadControl(request) &&
-            request == "{\"command\":\"info\"}\n" &&
-            server.WriteControl("{\"response\":\"not_info\",\"audio_format\":{\"sample_rate\":24000,\"bits_per_sample\":16,\"channels\":1}}\n");
-    });
+    std::thread infoResponder(
+        [&server, &infoResponseSent]
+        {
+            std::string request;
+            infoResponseSent = server.ReadControl(request) && request == "{\"command\":\"info\"}\n" &&
+                               server.WriteControl("{\"response\":\"not_info\",\"audio_format\":{\"sample_rate\":24000,"
+                                                   "\"bits_per_sample\":16,\"channels\":1}}\n");
+        });
 
     EXPECT_EQ(engine->CreateProviderSessionLocked(), E_FAIL);
     infoResponder.join();
@@ -112,13 +126,14 @@ TEST_F(SapiEngineTests, CreateProviderSessionAcceptsIntegralFloatAudioFormatNumb
     engine->m_config.pipeName = server.PipeName();
 
     std::atomic_bool infoResponseSent{false};
-    std::thread infoResponder([&server, &infoResponseSent] {
-        std::string request;
-        infoResponseSent = server.ReadControl(request) &&
-            request == "{\"command\":\"info\"}\n" &&
-            server.WriteControl(
-                "{\"response\":\"info\",\"audio_format\":{\"sample_rate\":24000.0,\"bits_per_sample\":16.0,\"channels\":1.0}}\n");
-    });
+    std::thread infoResponder(
+        [&server, &infoResponseSent]
+        {
+            std::string request;
+            infoResponseSent = server.ReadControl(request) && request == "{\"command\":\"info\"}\n" &&
+                               server.WriteControl("{\"response\":\"info\",\"audio_format\":{\"sample_rate\":24000.0,"
+                                                   "\"bits_per_sample\":16.0,\"channels\":1.0}}\n");
+        });
 
     const HRESULT sessionResult = engine->CreateProviderSessionLocked();
     infoResponder.join();
@@ -137,7 +152,7 @@ TEST_F(SapiEngineTests, SpeakRebuildsProviderSessionAfterSynthesisTimeout)
     ASSERT_EQ(engine->SetObjectToken(mockToken.get()), S_OK);
 
     GUID formatId = {};
-    WAVEFORMATEX* pWaveFormat = nullptr;
+    WAVEFORMATEX *pWaveFormat = nullptr;
     ASSERT_EQ(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat), S_OK);
     ASSERT_NE(pWaveFormat, nullptr);
 
@@ -175,7 +190,7 @@ TEST_F(SapiEngineTests, FailedSpeakDispatchQuarantinesSessionAndNextSpeakRecover
     ASSERT_EQ(engine->SetObjectToken(mockToken.get()), S_OK);
 
     GUID formatId = {};
-    WAVEFORMATEX* pWaveFormat = nullptr;
+    WAVEFORMATEX *pWaveFormat = nullptr;
     ASSERT_EQ(engine->GetOutputFormat(nullptr, nullptr, &formatId, &pWaveFormat), S_OK);
     ASSERT_NE(pWaveFormat, nullptr);
 
@@ -213,8 +228,7 @@ TEST_F(SapiEngineTests, IdleProviderRemainsUsableBeyondTheActiveRequestDeadline)
     Sleep(1700);
 
     ASSERT_TRUE(worker.Start(33));
-    ASSERT_TRUE(server.WriteControl(
-        "{\"event\":\"synthesis_complete\",\"speak_id\":33,\"total_audio_bytes\":0}\n"));
+    ASSERT_TRUE(server.WriteControl("{\"event\":\"synthesis_complete\",\"speak_id\":33,\"total_audio_bytes\":0}\n"));
     EXPECT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
     EXPECT_FALSE(worker.IsFaulted());
 }

@@ -10,20 +10,20 @@
 
 class AsyncLoggerTestAccess final
 {
-public:
-    using WriteCallback = std::function<void(const std::wstring&)>;
+  public:
+    using WriteCallback = std::function<void(const std::wstring &)>;
 
-    static void SetWriteCallback(AsyncLogger& logger, WriteCallback callback)
+    static void SetWriteCallback(AsyncLogger &logger, WriteCallback callback)
     {
         logger.SetWriteCallbackForTesting(std::move(callback));
     }
 
-    [[nodiscard]] static bool WaitForWorkerStopped(AsyncLogger& logger, DWORD timeoutMs) noexcept
+    [[nodiscard]] static bool WaitForWorkerStopped(AsyncLogger &logger, DWORD timeoutMs) noexcept
     {
         return logger.WaitForWorkerStoppedForTesting(timeoutMs);
     }
 
-private:
+  private:
     AsyncLoggerTestAccess() = delete;
 };
 

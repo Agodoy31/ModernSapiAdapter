@@ -10,10 +10,11 @@ TEST_F(SapiEngineTests, InvalidCancellationBoundaryFaultsTheWorker)
     ASSERT_TRUE(fixture.Start(7));
 
     HRESULT cancellationResult = S_OK;
-    std::thread cancellationThread([&]
-    {
-        cancellationResult = fixture.worker->CancelAndDrain();
-    });
+    std::thread cancellationThread(
+        [&]
+        {
+            cancellationResult = fixture.worker->CancelAndDrain();
+        });
     ThreadJoinGuard cancellationJoin(cancellationThread);
 
     std::string cancellationRequest;
@@ -33,8 +34,8 @@ TEST_F(SapiEngineTests, MisalignedSynthesisCompleteTotalFaultsTheWorker)
     ASSERT_TRUE(fixture.Initialize());
     ASSERT_TRUE(fixture.Start(11));
 
-    ASSERT_TRUE(fixture.server.WriteControl(
-        "{\"event\":\"synthesis_complete\",\"speak_id\":11,\"total_audio_bytes\":1}\n"));
+    ASSERT_TRUE(
+        fixture.server.WriteControl("{\"event\":\"synthesis_complete\",\"speak_id\":11,\"total_audio_bytes\":1}\n"));
 
     EXPECT_TRUE(fixture.worker->WaitForFaultForTest(1000));
     EXPECT_TRUE(fixture.worker->IsFaulted());
@@ -46,8 +47,7 @@ TEST_F(SapiEngineTests, MissingSynthesisCompleteTotalFaultsTheWorker)
     ASSERT_TRUE(fixture.Initialize());
     ASSERT_TRUE(fixture.Start(21));
 
-    ASSERT_TRUE(fixture.server.WriteControl(
-        "{\"event\":\"synthesis_complete\",\"speak_id\":21}\n"));
+    ASSERT_TRUE(fixture.server.WriteControl("{\"event\":\"synthesis_complete\",\"speak_id\":21}\n"));
 
     EXPECT_TRUE(fixture.worker->WaitForFaultForTest(1000));
     EXPECT_TRUE(fixture.worker->IsFaulted());
@@ -59,8 +59,8 @@ TEST_F(SapiEngineTests, NonIntegerSynthesisCompleteTotalFaultsTheWorker)
     ASSERT_TRUE(fixture.Initialize());
     ASSERT_TRUE(fixture.Start(22));
 
-    ASSERT_TRUE(fixture.server.WriteControl(
-        "{\"event\":\"synthesis_complete\",\"speak_id\":22,\"total_audio_bytes\":2.5}\n"));
+    ASSERT_TRUE(
+        fixture.server.WriteControl("{\"event\":\"synthesis_complete\",\"speak_id\":22,\"total_audio_bytes\":2.5}\n"));
 
     EXPECT_TRUE(fixture.worker->WaitForFaultForTest(1000));
     EXPECT_TRUE(fixture.worker->IsFaulted());
@@ -87,11 +87,11 @@ TEST_F(SapiEngineTests, DuplicateSynthesisCompleteTotalFaultsTheWorker)
     ASSERT_TRUE(fixture.Initialize());
     ASSERT_TRUE(fixture.Start(23));
 
-    ASSERT_TRUE(fixture.server.WriteControl(
-        "{\"event\":\"synthesis_complete\",\"speak_id\":23,\"total_audio_bytes\":0}\n"));
+    ASSERT_TRUE(
+        fixture.server.WriteControl("{\"event\":\"synthesis_complete\",\"speak_id\":23,\"total_audio_bytes\":0}\n"));
     ASSERT_EQ(fixture.worker->WaitUntilFinished(nullptr), S_OK);
-    ASSERT_TRUE(fixture.server.WriteControl(
-        "{\"event\":\"synthesis_complete\",\"speak_id\":23,\"total_audio_bytes\":0}\n"));
+    ASSERT_TRUE(
+        fixture.server.WriteControl("{\"event\":\"synthesis_complete\",\"speak_id\":23,\"total_audio_bytes\":0}\n"));
 
     EXPECT_TRUE(fixture.worker->WaitForFaultForTest(1000));
     EXPECT_TRUE(fixture.worker->IsFaulted());
@@ -105,15 +105,16 @@ TEST_F(SapiEngineTests, MisalignedCancellationTotalFaultsTheWorker)
     ASSERT_TRUE(fixture.Start(12));
 
     HRESULT cancellationResult = S_OK;
-    std::thread cancellationThread([&]
-    {
-        cancellationResult = fixture.worker->CancelAndDrain();
-    });
+    std::thread cancellationThread(
+        [&]
+        {
+            cancellationResult = fixture.worker->CancelAndDrain();
+        });
     ThreadJoinGuard cancellationJoin(cancellationThread);
     std::string cancellationRequest;
     ASSERT_TRUE(fixture.server.ReadControl(cancellationRequest));
-    ASSERT_TRUE(fixture.server.WriteControl(
-        "{\"event\":\"synthesis_cancelled\",\"speak_id\":12,\"audio_bytes_written\":1}\n"));
+    ASSERT_TRUE(
+        fixture.server.WriteControl("{\"event\":\"synthesis_cancelled\",\"speak_id\":12,\"audio_bytes_written\":1}\n"));
 
     EXPECT_TRUE(cancellationJoin.Join(2000));
     EXPECT_EQ(cancellationResult, E_FAIL);
@@ -128,14 +129,16 @@ TEST_F(SapiEngineTests, RequestErrorFailsUtteranceWithoutKillingProvider)
 
     const auto cancelStart = std::chrono::steady_clock::now();
 
-    std::thread serverThread([&]
-    {
-        fixture.server.WriteControl("{\"event\":\"log\",\"speak_id\":44,\"severity\":\"error\",\"message\":\"Synthesis failed: 400 Bad Request\"}\n");
-    });
+    std::thread serverThread(
+        [&]
+        {
+            fixture.server.WriteControl("{\"event\":\"log\",\"speak_id\":44,\"severity\":\"error\",\"message\":"
+                                        "\"Synthesis failed: 400 Bad Request\"}\n");
+        });
 
     HRESULT hr = fixture.worker->WaitUntilFinished(fixture.mockSite.get());
-    const auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - cancelStart).count();
+    const auto durationMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - cancelStart).count();
 
     if (serverThread.joinable())
     {
@@ -153,10 +156,12 @@ TEST_F(SapiEngineTests, FatalErrorFaultsSessionAndTriggersRestart)
     ASSERT_TRUE(fixture.Initialize());
     ASSERT_TRUE(fixture.Start(45));
 
-    std::thread serverThread([&]
-    {
-        fixture.server.WriteControl("{\"event\":\"log\",\"speak_id\":45,\"severity\":\"fatal\",\"message\":\"Fatal provider crash\"}\n");
-    });
+    std::thread serverThread(
+        [&]
+        {
+            fixture.server.WriteControl(
+                "{\"event\":\"log\",\"speak_id\":45,\"severity\":\"fatal\",\"message\":\"Fatal provider crash\"}\n");
+        });
 
     HRESULT hr = fixture.worker->WaitUntilFinished(fixture.mockSite.get());
 
@@ -180,35 +185,41 @@ TEST_F(SapiEngineTests, LogEventsDoNotExtendSynthesisInactivityTimeout)
     std::mutex waitMutex;
     std::condition_variable waitCv;
     const auto waitStart = std::chrono::steady_clock::now();
-    std::thread waitThread([&]
-    {
-        waitResult = fixture.worker->WaitUntilFinished(nullptr);
+    std::thread waitThread(
+        [&]
         {
-            std::lock_guard<std::mutex> lock(waitMutex);
-            waitReturned = true;
-        }
-        waitCv.notify_all();
-    });
+            waitResult = fixture.worker->WaitUntilFinished(nullptr);
+            {
+                std::lock_guard<std::mutex> lock(waitMutex);
+                waitReturned = true;
+            }
+            waitCv.notify_all();
+        });
     ThreadJoinGuard waitJoin(waitThread);
 
-    std::thread logThread([&]
-    {
-        auto loopStart = std::chrono::steady_clock::now();
-        std::unique_lock<std::mutex> lock(waitMutex);
-        while (!waitReturned.load() && std::chrono::steady_clock::now() - loopStart < std::chrono::seconds(3))
+    std::thread logThread(
+        [&]
         {
-            fixture.server.WriteControl("{\"event\":\"log\",\"speak_id\":61,\"severity\":\"info\",\"message\":\"progress\"}\n");
-            waitCv.wait_for(lock, std::chrono::milliseconds(500), [&]
+            auto loopStart = std::chrono::steady_clock::now();
+            std::unique_lock<std::mutex> lock(waitMutex);
+            while (!waitReturned.load() && std::chrono::steady_clock::now() - loopStart < std::chrono::seconds(3))
             {
-                return waitReturned.load();
-            });
-        }
-    });
+                fixture.server.WriteControl(
+                    "{\"event\":\"log\",\"speak_id\":61,\"severity\":\"info\",\"message\":\"progress\"}\n");
+                waitCv.wait_for(lock, std::chrono::milliseconds(500),
+                                [&]
+                                {
+                                    return waitReturned.load();
+                                });
+            }
+        });
 
-    EXPECT_TRUE(WaitForCondition([&]
-    {
-        return waitReturned.load();
-    }, 2500));
+    EXPECT_TRUE(WaitForCondition(
+        [&]
+        {
+            return waitReturned.load();
+        },
+        2500));
     {
         std::lock_guard<std::mutex> lock(waitMutex);
         waitCv.notify_all();

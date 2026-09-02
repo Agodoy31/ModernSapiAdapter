@@ -20,34 +20,22 @@ namespace TestInfrastructure
 
 class ControlPipeTestServer
 {
-public:
+  public:
     ControlPipeTestServer()
     {
         static std::atomic_uint64_t nextPipeId{0};
-        m_pipeName = L"CoreEngineTests_" + std::to_wstring(GetCurrentProcessId()) + L"_" + std::to_wstring(++nextPipeId);
+        m_pipeName =
+            L"CoreEngineTests_" + std::to_wstring(GetCurrentProcessId()) + L"_" + std::to_wstring(++nextPipeId);
 
         const std::wstring sid = PipeSecurityUtils::GetCurrentUserSidString();
         const std::wstring controlPath = PipeSecurityUtils::BuildPipePath(m_pipeName, sid, L"control");
         const std::wstring audioPath = PipeSecurityUtils::BuildPipePath(m_pipeName, sid, L"audio");
 
-        m_controlPipe.reset(CreateNamedPipeW(
-            controlPath.c_str(),
-            PIPE_ACCESS_DUPLEX,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            1,
-            4096,
-            4096,
-            0,
-            nullptr));
-        m_audioPipe.reset(CreateNamedPipeW(
-            audioPath.c_str(),
-            PIPE_ACCESS_DUPLEX,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            1,
-            4096,
-            4096,
-            0,
-            nullptr));
+        m_controlPipe.reset(CreateNamedPipeW(controlPath.c_str(), PIPE_ACCESS_DUPLEX,
+                                             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0,
+                                             nullptr));
+        m_audioPipe.reset(CreateNamedPipeW(audioPath.c_str(), PIPE_ACCESS_DUPLEX,
+                                           PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, nullptr));
 
         if (!m_controlPipe || !m_audioPipe)
         {
@@ -55,10 +43,12 @@ public:
             return;
         }
 
-        m_connectThread = std::thread([this] {
-            ConnectPipe(m_controlPipe.get());
-            ConnectPipe(m_audioPipe.get());
-        });
+        m_connectThread = std::thread(
+            [this]
+            {
+                ConnectPipe(m_controlPipe.get());
+                ConnectPipe(m_audioPipe.get());
+            });
     }
 
     ~ControlPipeTestServer()
@@ -79,10 +69,16 @@ public:
         }
     }
 
-    const std::wstring& PipeName() const { return m_pipeName; }
-    DWORD CreateError() const { return m_createError; }
+    const std::wstring &PipeName() const
+    {
+        return m_pipeName;
+    }
+    DWORD CreateError() const
+    {
+        return m_createError;
+    }
 
-    bool WriteControl(const std::string& text)
+    bool WriteControl(const std::string &text)
     {
         if (m_connectThread.joinable())
         {
@@ -94,10 +90,11 @@ public:
         }
 
         DWORD bytesWritten = 0;
-        return WriteFile(m_controlPipe.get(), text.data(), static_cast<DWORD>(text.size()), &bytesWritten, nullptr) && bytesWritten == text.size();
+        return WriteFile(m_controlPipe.get(), text.data(), static_cast<DWORD>(text.size()), &bytesWritten, nullptr) &&
+               bytesWritten == text.size();
     }
 
-    bool WriteAudio(const std::vector<uint8_t>& bytes)
+    bool WriteAudio(const std::vector<uint8_t> &bytes)
     {
         if (m_connectThread.joinable())
         {
@@ -110,10 +107,10 @@ public:
 
         DWORD bytesWritten = 0;
         return WriteFile(m_audioPipe.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &bytesWritten, nullptr) &&
-            bytesWritten == bytes.size();
+               bytesWritten == bytes.size();
     }
 
-    bool ReadControl(std::string& text)
+    bool ReadControl(std::string &text)
     {
         if (m_connectThread.joinable())
         {
@@ -145,7 +142,7 @@ public:
         m_audioPipe.reset();
     }
 
-private:
+  private:
     void ConnectPipe(HANDLE pipe)
     {
         if (m_connectError != ERROR_SUCCESS)

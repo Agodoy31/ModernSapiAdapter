@@ -9,11 +9,10 @@
 #include <windows.h>
 
 #pragma warning(push)
-#pragma warning(disable: 4996)
+#pragma warning(disable : 4996)
 #include <sapi.h>
 #include <sphelper.h>
 #pragma warning(pop)
-
 
 #include <sapiddk.h>
 
@@ -41,6 +40,6 @@
 
 #include "gtest/gtest.h"
 
-void CoreLog(const wchar_t* fmt, ...) noexcept;
+void CoreLog(const wchar_t *fmt, ...) noexcept;
 std::vector<std::wstring> GetTestLogs();
 void ClearTestLogs();

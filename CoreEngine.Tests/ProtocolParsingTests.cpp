@@ -22,12 +22,7 @@ TEST(SpeechProtocolUtilsTests, ParseProviderEventTypeMapsAllKnownStrings)
 TEST(SpeechProtocolUtilsTests, ParseControlEvent_WordBoundaryWithValidOffsets)
 {
     const nlohmann::json json = {
-        {"event", "word_boundary"},
-        {"speak_id", 42},
-        {"audio_offset_ms", 150},
-        {"text_offset", 5},
-        {"text_length", 4}
-    };
+        {"event", "word_boundary"}, {"speak_id", 42}, {"audio_offset_ms", 150}, {"text_offset", 5}, {"text_length", 4}};
 
     const ProviderControlEvent event = ParseControlEvent(json);
 
@@ -45,13 +40,11 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_WordBoundaryWithValidOffsets)
 
 TEST(SpeechProtocolUtilsTests, ParseControlEvent_SentenceBoundaryWithValidOffsets)
 {
-    const nlohmann::json json = {
-        {"event", "sentence_boundary"},
-        {"speak_id", 42},
-        {"audio_offset_ms", 300},
-        {"text_offset", 0},
-        {"text_length", 25}
-    };
+    const nlohmann::json json = {{"event", "sentence_boundary"},
+                                 {"speak_id", 42},
+                                 {"audio_offset_ms", 300},
+                                 {"text_offset", 0},
+                                 {"text_length", 25}};
 
     const ProviderControlEvent event = ParseControlEvent(json);
 
@@ -70,11 +63,7 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_SentenceBoundaryWithValidOffset
 TEST(SpeechProtocolUtilsTests, ParseControlEvent_BookmarkWithValidOffsets)
 {
     const nlohmann::json json = {
-        {"event", "bookmark_reached"},
-        {"speak_id", 42},
-        {"audio_offset_ms", 250},
-        {"bookmark", "mark1"}
-    };
+        {"event", "bookmark_reached"}, {"speak_id", 42}, {"audio_offset_ms", 250}, {"bookmark", "mark1"}};
 
     const ProviderControlEvent event = ParseControlEvent(json);
 
@@ -90,11 +79,7 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_BookmarkWithValidOffsets)
 
 TEST(SpeechProtocolUtilsTests, ParseControlEvent_SynthesisComplete_ValidIntegerAndFloat)
 {
-    const nlohmann::json intJson = {
-        {"event", "synthesis_complete"},
-        {"speak_id", 100},
-        {"total_audio_bytes", 4096}
-    };
+    const nlohmann::json intJson = {{"event", "synthesis_complete"}, {"speak_id", 100}, {"total_audio_bytes", 4096}};
 
     const ProviderControlEvent intEvent = ParseControlEvent(intJson);
 
@@ -108,10 +93,7 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_SynthesisComplete_ValidIntegerA
     EXPECT_TRUE(intEvent.IsProgress());
 
     const nlohmann::json floatJson = {
-        {"event", "synthesis_complete"},
-        {"speak_id", 100},
-        {"total_audio_bytes", 8192.0}
-    };
+        {"event", "synthesis_complete"}, {"speak_id", 100}, {"total_audio_bytes", 8192.0}};
 
     const ProviderControlEvent floatEvent = ParseControlEvent(floatJson);
 
@@ -122,11 +104,7 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_SynthesisComplete_ValidIntegerA
 
 TEST(SpeechProtocolUtilsTests, ParseControlEvent_SynthesisCancelled_ValidBytes)
 {
-    const nlohmann::json json = {
-        {"event", "synthesis_cancelled"},
-        {"speak_id", 101},
-        {"audio_bytes_written", 2048}
-    };
+    const nlohmann::json json = {{"event", "synthesis_cancelled"}, {"speak_id", 101}, {"audio_bytes_written", 2048}};
 
     const ProviderControlEvent event = ParseControlEvent(json);
 
@@ -143,11 +121,7 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_SynthesisCancelled_ValidBytes)
 TEST(SpeechProtocolUtilsTests, ParseControlEvent_LogEventWithSeverityAndMessage)
 {
     const nlohmann::json json = {
-        {"event", "log"},
-        {"speak_id", 10},
-        {"severity", "warning"},
-        {"message", "Low buffer warning"}
-    };
+        {"event", "log"}, {"speak_id", 10}, {"severity", "warning"}, {"message", "Low buffer warning"}};
 
     const ProviderControlEvent event = ParseControlEvent(json);
 
@@ -192,69 +166,45 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_MalformedOrMissingFieldsHandled
 
     {
         const nlohmann::json json = {
-            {"event", "word_boundary"},
-            {"speak_id", 1},
-            {"text_offset", 0},
-            {"text_length", 5}
-        };
+            {"event", "word_boundary"}, {"speak_id", 1}, {"text_offset", 0}, {"text_length", 5}};
         const ProviderControlEvent event = ParseControlEvent(json);
         EXPECT_FALSE(event.hasValidSpeechOffsets);
     }
 
     {
         const nlohmann::json json = {
-            {"event", "word_boundary"},
-            {"speak_id", 1},
-            {"audio_offset_ms", 100},
-            {"text_length", 5}
-        };
+            {"event", "word_boundary"}, {"speak_id", 1}, {"audio_offset_ms", 100}, {"text_length", 5}};
         const ProviderControlEvent event = ParseControlEvent(json);
         EXPECT_FALSE(event.hasValidSpeechOffsets);
     }
 
     {
         const nlohmann::json json = {
-            {"event", "word_boundary"},
-            {"speak_id", 1},
-            {"audio_offset_ms", 100},
-            {"text_offset", 0}
-        };
+            {"event", "word_boundary"}, {"speak_id", 1}, {"audio_offset_ms", 100}, {"text_offset", 0}};
         const ProviderControlEvent event = ParseControlEvent(json);
         EXPECT_FALSE(event.hasValidSpeechOffsets);
     }
 
     {
-        const nlohmann::json json = {
-            {"event", "synthesis_complete"},
-            {"speak_id", 1}
-        };
+        const nlohmann::json json = {{"event", "synthesis_complete"}, {"speak_id", 1}};
         const ProviderControlEvent event = ParseControlEvent(json);
         EXPECT_FALSE(event.hasValidTerminalBytes);
     }
 
     {
-        const nlohmann::json json = {
-            {"event", "synthesis_cancelled"},
-            {"speak_id", 1}
-        };
+        const nlohmann::json json = {{"event", "synthesis_cancelled"}, {"speak_id", 1}};
         const ProviderControlEvent event = ParseControlEvent(json);
         EXPECT_FALSE(event.hasValidTerminalBytes);
     }
 
     {
-        const nlohmann::json json = {
-            {"event", "bookmark_reached"},
-            {"speak_id", 1}
-        };
+        const nlohmann::json json = {{"event", "bookmark_reached"}, {"speak_id", 1}};
         const ProviderControlEvent event = ParseControlEvent(json);
         EXPECT_FALSE(event.hasValidSpeechOffsets);
     }
 
     {
-        const nlohmann::json json = {
-            {"event", "log"},
-            {"speak_id", 1}
-        };
+        const nlohmann::json json = {{"event", "log"}, {"speak_id", 1}};
         const ProviderControlEvent event = ParseControlEvent(json);
         EXPECT_EQ(event.type, ProviderEventType::Log);
         EXPECT_TRUE(event.logSeverity.empty());
@@ -264,15 +214,10 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_MalformedOrMissingFieldsHandled
 
 TEST(SpeechProtocolUtilsTests, ParseControlEvent_NonObjectJsonReturnsUnknown)
 {
-    const std::vector<nlohmann::json> nonObjects = {
-        nlohmann::json::array(),
-        nlohmann::json("just a string"),
-        nlohmann::json(nullptr),
-        nlohmann::json(123),
-        nlohmann::json(true)
-    };
+    const std::vector<nlohmann::json> nonObjects = {nlohmann::json::array(), nlohmann::json("just a string"),
+                                                    nlohmann::json(nullptr), nlohmann::json(123), nlohmann::json(true)};
 
-    for (const auto& nonObj : nonObjects)
+    for (const auto &nonObj : nonObjects)
     {
         const ProviderControlEvent event = ParseControlEvent(nonObj);
         EXPECT_EQ(event.type, ProviderEventType::Unknown);

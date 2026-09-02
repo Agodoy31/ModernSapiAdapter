@@ -1,15 +1,10 @@
 #include "pch.h"
 #include "../CoreEngine/AudioFormatUtils.h"
 
-TEST(AudioFormatUtilsTests, TryParseAudioFormatJsonParsesValidFormat) {
-    nlohmann::json formatJson = {
-        {"type", "raw"},
-        {"container", "raw"},
-        {"encoding", "pcm"},
-        {"sample_rate", 22050},
-        {"bits_per_sample", 16},
-        {"channels", 1}
-    };
+TEST(AudioFormatUtilsTests, TryParseAudioFormatJsonParsesValidFormat)
+{
+    nlohmann::json formatJson = {{"type", "raw"},        {"container", "raw"},    {"encoding", "pcm"},
+                                 {"sample_rate", 22050}, {"bits_per_sample", 16}, {"channels", 1}};
 
     WAVEFORMATEX format = {};
     EXPECT_TRUE(AudioFormatUtils::TryParseAudioFormatJson(formatJson, format));
@@ -22,15 +17,16 @@ TEST(AudioFormatUtilsTests, TryParseAudioFormatJsonParsesValidFormat) {
     EXPECT_EQ(format.cbSize, 0u);
 }
 
-TEST(AudioFormatUtilsTests, TryParseAudioFormatJsonRejectsInvalidFormats) {
+TEST(AudioFormatUtilsTests, TryParseAudioFormatJsonRejectsInvalidFormats)
+{
     WAVEFORMATEX format = {};
 
     EXPECT_FALSE(AudioFormatUtils::TryParseAudioFormatJson(nlohmann::json(nullptr), format));
     EXPECT_FALSE(AudioFormatUtils::TryParseAudioFormatJson(nlohmann::json::array(), format));
 
     // Missing sample_rate
-    EXPECT_FALSE(AudioFormatUtils::TryParseAudioFormatJson(
-        nlohmann::json{{"bits_per_sample", 16}, {"channels", 1}}, format));
+    EXPECT_FALSE(
+        AudioFormatUtils::TryParseAudioFormatJson(nlohmann::json{{"bits_per_sample", 16}, {"channels", 1}}, format));
 
     // Zero sample_rate
     EXPECT_FALSE(AudioFormatUtils::TryParseAudioFormatJson(
@@ -41,7 +37,8 @@ TEST(AudioFormatUtilsTests, TryParseAudioFormatJsonRejectsInvalidFormats) {
         nlohmann::json{{"sample_rate", 22050}, {"bits_per_sample", 7}, {"channels", 1}}, format));
 }
 
-TEST(AudioFormatUtilsTests, WaveFormatExToJsonSerializesCorrectly) {
+TEST(AudioFormatUtilsTests, WaveFormatExToJsonSerializesCorrectly)
+{
     WAVEFORMATEX format = {};
     format.wFormatTag = WAVE_FORMAT_PCM;
     format.nSamplesPerSec = 44100;

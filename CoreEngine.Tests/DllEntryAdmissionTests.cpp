@@ -15,11 +15,13 @@ TEST(DllEntryAdmissionTests, ClosingWaitsForAnAlreadyAdmittedLease)
     ASSERT_TRUE(closingStarted);
     ASSERT_TRUE(closingCompleted);
     bool closeSucceeded = false;
-    std::thread closer([&] {
-        SetEvent(closingStarted.get());
-        closeSucceeded = admission.BeginClosingAndWaitForEntries(1000);
-        SetEvent(closingCompleted.get());
-    });
+    std::thread closer(
+        [&]
+        {
+            SetEvent(closingStarted.get());
+            closeSucceeded = admission.BeginClosingAndWaitForEntries(1000);
+            SetEvent(closingCompleted.get());
+        });
     ThreadJoinGuard closerJoin(closer);
 
     ASSERT_EQ(WaitForSingleObject(closingStarted.get(), 1000), WAIT_OBJECT_0);

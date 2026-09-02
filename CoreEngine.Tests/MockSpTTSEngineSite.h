@@ -33,9 +33,11 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
     bool WaitForBytesWritten(ULONG expectedBytes, DWORD timeoutMs = 2000)
     {
         std::unique_lock<std::mutex> lock(writesMutex);
-        return writeCondition.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&] {
-            return totalBytesWritten.load() >= expectedBytes;
-        });
+        return writeCondition.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+                                       [&]
+                                       {
+                                           return totalBytesWritten.load() >= expectedBytes;
+                                       });
     }
 
     void PauseNextWrite()
@@ -49,9 +51,11 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
     bool WaitForWritePause(DWORD timeoutMs)
     {
         std::unique_lock<std::mutex> lock(m_writePauseMutex);
-        return m_writePauseCondition.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&] {
-            return m_writePaused;
-        });
+        return m_writePauseCondition.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+                                              [&]
+                                              {
+                                                  return m_writePaused;
+                                              });
     }
 
     void ReleaseWrite()
@@ -64,7 +68,7 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
         m_writePauseCondition.notify_all();
     }
 
-    IFACEMETHODIMP AddEvents(const SPEVENT* pEventArray, ULONG ulCount) noexcept override
+    IFACEMETHODIMP AddEvents(const SPEVENT *pEventArray, ULONG ulCount) noexcept override
     {
         std::lock_guard<std::mutex> lock(eventsMutex);
         if (pEventArray && ulCount > 0)
@@ -77,7 +81,7 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
         return S_OK;
     }
 
-    IFACEMETHODIMP GetEventInterest(ULONGLONG*) noexcept override
+    IFACEMETHODIMP GetEventInterest(ULONGLONG *) noexcept override
     {
         return S_OK;
     }
@@ -87,7 +91,7 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
         return getActionsCallback ? getActionsCallback() : actions.load();
     }
 
-    IFACEMETHODIMP Write(const void* data, ULONG cb, ULONG* pcbWritten) noexcept override
+    IFACEMETHODIMP Write(const void *data, ULONG cb, ULONG *pcbWritten) noexcept override
     {
         {
             std::unique_lock<std::mutex> lock(m_writePauseMutex);
@@ -96,7 +100,11 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
                 m_pauseNextWrite = false;
                 m_writePaused = true;
                 m_writePauseCondition.notify_all();
-                m_writePauseCondition.wait(lock, [&] { return m_releaseWrite; });
+                m_writePauseCondition.wait(lock,
+                                           [&]
+                                           {
+                                               return m_releaseWrite;
+                                           });
                 m_writePaused = false;
                 m_releaseWrite = false;
             }
@@ -123,7 +131,7 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
         totalBytesWritten += cb;
         {
             std::lock_guard<std::mutex> lock(writesMutex);
-            const auto bytes = static_cast<const uint8_t*>(data);
+            const auto bytes = static_cast<const uint8_t *>(data);
             acceptedAudio.insert(acceptedAudio.end(), bytes, bytes + cb);
         }
         writeCondition.notify_all();
@@ -143,12 +151,24 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
         return bytesAcceptedAfterRejectedWrite.load();
     }
 
-    IFACEMETHODIMP GetRate(long*) noexcept override { return S_OK; }
-    IFACEMETHODIMP GetVolume(USHORT*) noexcept override { return S_OK; }
-    IFACEMETHODIMP GetSkipInfo(SPVSKIPTYPE*, long*) noexcept override { return S_OK; }
-    IFACEMETHODIMP CompleteSkip(long) noexcept override { return S_OK; }
+    IFACEMETHODIMP GetRate(long *) noexcept override
+    {
+        return S_OK;
+    }
+    IFACEMETHODIMP GetVolume(USHORT *) noexcept override
+    {
+        return S_OK;
+    }
+    IFACEMETHODIMP GetSkipInfo(SPVSKIPTYPE *, long *) noexcept override
+    {
+        return S_OK;
+    }
+    IFACEMETHODIMP CompleteSkip(long) noexcept override
+    {
+        return S_OK;
+    }
 
-private:
+  private:
     std::atomic_bool m_rejectedWriteObserved = false;
     std::mutex m_writePauseMutex;
     std::condition_variable m_writePauseCondition;

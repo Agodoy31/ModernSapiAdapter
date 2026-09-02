@@ -3,7 +3,7 @@
 static std::mutex g_testLogMutex;
 static std::vector<std::wstring> g_testLogs;
 
-void CoreLog(const wchar_t* fmt, ...) noexcept
+void CoreLog(const wchar_t *fmt, ...) noexcept
 {
     va_list args;
     va_start(args, fmt);

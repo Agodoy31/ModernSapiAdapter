@@ -26,8 +26,8 @@
 namespace TestInfrastructure
 {
 
-template<typename Predicate>
-[[nodiscard]] inline bool WaitForCondition(Predicate&& pred, DWORD timeoutMs = 1000, DWORD pollIntervalMs = 5)
+template <typename Predicate>
+[[nodiscard]] inline bool WaitForCondition(Predicate &&pred, DWORD timeoutMs = 1000, DWORD pollIntervalMs = 5)
 {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
     while (std::chrono::steady_clock::now() < deadline)
@@ -41,15 +41,15 @@ template<typename Predicate>
     return pred();
 }
 
-inline std::vector<uint8_t> FeedPcmFragments(PcmFrameAssembler& assembler,
-    const std::vector<std::vector<uint8_t>>& fragments,
-    std::vector<size_t>& emittedSizes)
+inline std::vector<uint8_t> FeedPcmFragments(PcmFrameAssembler &assembler,
+                                             const std::vector<std::vector<uint8_t>> &fragments,
+                                             std::vector<size_t> &emittedSizes)
 {
     std::vector<uint8_t> output;
-    for (const auto& fragment : fragments)
+    for (const auto &fragment : fragments)
     {
         const auto spans = assembler.Process(fragment.data(), fragment.size());
-        for (const auto& span : spans)
+        for (const auto &span : spans)
         {
             emittedSizes.push_back(span.size);
             output.insert(output.end(), span.data, span.data + span.size);
@@ -60,8 +60,10 @@ inline std::vector<uint8_t> FeedPcmFragments(PcmFrameAssembler& assembler,
 
 class ThreadJoinGuard
 {
-public:
-    explicit ThreadJoinGuard(std::thread& thread) : m_thread(thread) {}
+  public:
+    explicit ThreadJoinGuard(std::thread &thread) : m_thread(thread)
+    {
+    }
 
     bool Join(DWORD timeoutMs = 5000)
     {
@@ -84,13 +86,13 @@ public:
         Join(5000);
     }
 
-private:
-    std::thread& m_thread;
+  private:
+    std::thread &m_thread;
 };
 
 class ScopedFaultEventLog
 {
-public:
+  public:
     ScopedFaultEventLog()
     {
         for (int attempt = 0; attempt < 20 && !m_isActive; ++attempt)
@@ -113,25 +115,33 @@ public:
         std::filesystem::remove(m_path, error);
     }
 
-    bool IsActive() const noexcept { return m_isActive; }
+    bool IsActive() const noexcept
+    {
+        return m_isActive;
+    }
 
     size_t SnapshotSize() const
     {
         std::error_code error;
-        return std::filesystem::exists(m_path, error) ? static_cast<size_t>(std::filesystem::file_size(m_path, error)) : 0;
+        return std::filesystem::exists(m_path, error) ? static_cast<size_t>(std::filesystem::file_size(m_path, error))
+                                                      : 0;
     }
 
-    bool WaitForEntryAfter(size_t snapshotSize, const std::string& entry, DWORD timeoutMs) const
+    bool WaitForEntryAfter(size_t snapshotSize, const std::string &entry, DWORD timeoutMs) const
     {
-        return WaitForCondition([&] {
-            std::ifstream stream(m_path, std::ios::binary);
-            std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
-            return contents.size() >= snapshotSize && contents.find(entry, snapshotSize) != std::string::npos;
-        }, timeoutMs, 10);
+        return WaitForCondition(
+            [&]
+            {
+                std::ifstream stream(m_path, std::ios::binary);
+                std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+                return contents.size() >= snapshotSize && contents.find(entry, snapshotSize) != std::string::npos;
+            },
+            timeoutMs, 10);
     }
 
-private:
-    std::filesystem::path m_path{std::filesystem::temp_directory_path() / L"ModernSapiAdapterMockProviderFaultTrace.log"};
+  private:
+    std::filesystem::path m_path{std::filesystem::temp_directory_path() /
+                                 L"ModernSapiAdapterMockProviderFaultTrace.log"};
     bool m_isActive{false};
 };
 
@@ -156,7 +166,8 @@ struct PipeServerWorkerFixture
         engine = winrt::make_self<CSapiEngine>();
         mockSite = winrt::make_self<MockSpTTSEngineSite>();
         engine->m_cpSite.copy_from(mockSite.get());
-        engine->m_config.audioFormat = { WAVE_FORMAT_PCM, 1, 24000, 48000, blockAlign, static_cast<WORD>(blockAlign * 8), 0 };
+        engine->m_config.audioFormat = {
+            WAVE_FORMAT_PCM, 1, 24000, 48000, blockAlign, static_cast<WORD>(blockAlign * 8), 0};
         worker = std::make_unique<SpeechWorker>(engine.get(), &client, blockAlign);
         return true;
     }
@@ -172,9 +183,12 @@ struct PipeServerWorkerFixture
 
     bool WaitForFault(DWORD timeoutMs = 1000)
     {
-        return WaitForCondition([this] {
-            return worker && worker->IsFaulted();
-        }, timeoutMs);
+        return WaitForCondition(
+            [this]
+            {
+                return worker && worker->IsFaulted();
+            },
+            timeoutMs);
     }
 };
 
@@ -184,7 +198,7 @@ struct EngineInitializedFixture
     winrt::com_ptr<CSapiEngine> engine;
     winrt::com_ptr<MockSpObjectToken> mockToken;
     GUID formatId = {};
-    WAVEFORMATEX* pWaveFormat = nullptr;
+    WAVEFORMATEX *pWaveFormat = nullptr;
 
     bool Initialize()
     {
@@ -216,7 +230,7 @@ struct EngineInitializedFixture
 
 class SapiEngineTests : public ::testing::Test
 {
-protected:
+  protected:
     void SetUp() override
     {
         winrt::init_apartment(winrt::apartment_type::multi_threaded);

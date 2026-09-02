@@ -7,29 +7,23 @@ using namespace TestInfrastructure;
 TEST_F(SapiEngineTests, PipeClientFailsImmediatelyWhenControlPipeAccessIsDenied)
 {
     static std::atomic_uint64_t nextPipeId{0};
-    const std::wstring pipeName = L"CoreEngineDenied_" + std::to_wstring(GetCurrentProcessId()) + L"_" +
-        std::to_wstring(++nextPipeId);
-    const std::wstring controlPipePath = PipeSecurityUtils::BuildPipePath(
-        pipeName, PipeSecurityUtils::GetCurrentUserSidString(), L"control");
+    const std::wstring pipeName =
+        L"CoreEngineDenied_" + std::to_wstring(GetCurrentProcessId()) + L"_" + std::to_wstring(++nextPipeId);
+    const std::wstring controlPipePath =
+        PipeSecurityUtils::BuildPipePath(pipeName, PipeSecurityUtils::GetCurrentUserSidString(), L"control");
 
     PSECURITY_DESCRIPTOR securityDescriptor = nullptr;
-    ASSERT_TRUE(ConvertStringSecurityDescriptorToSecurityDescriptorW(
-        L"D:(D;;GA;;;WD)", SDDL_REVISION_1, &securityDescriptor, nullptr));
+    ASSERT_TRUE(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:(D;;GA;;;WD)", SDDL_REVISION_1,
+                                                                     &securityDescriptor, nullptr));
     wil::unique_hlocal securityDescriptorHandle(securityDescriptor);
 
     SECURITY_ATTRIBUTES securityAttributes = {};
     securityAttributes.nLength = sizeof(securityAttributes);
     securityAttributes.lpSecurityDescriptor = securityDescriptor;
 
-    wil::unique_handle deniedControlPipe(CreateNamedPipeW(
-        controlPipePath.c_str(),
-        PIPE_ACCESS_DUPLEX,
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-        1,
-        4096,
-        4096,
-        0,
-        &securityAttributes));
+    wil::unique_handle deniedControlPipe(CreateNamedPipeW(controlPipePath.c_str(), PIPE_ACCESS_DUPLEX,
+                                                          PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 4096,
+                                                          4096, 0, &securityAttributes));
     ASSERT_TRUE(deniedControlPipe);
 
     PipeClient client;
@@ -86,18 +80,21 @@ TEST_F(SapiEngineTests, PipeDisconnectFaultsActiveWorkerWithoutRetryingForever)
 
     HRESULT waitResult = S_OK;
     std::atomic_bool waitReturned{false};
-    std::thread waitThread([&]
-    {
-        waitResult = fixture.worker->WaitUntilFinished(nullptr);
-        waitReturned = true;
-    });
+    std::thread waitThread(
+        [&]
+        {
+            waitResult = fixture.worker->WaitUntilFinished(nullptr);
+            waitReturned = true;
+        });
     ThreadJoinGuard waitJoin(waitThread);
 
     fixture.server.Disconnect();
-    EXPECT_TRUE(WaitForCondition([&]
-    {
-        return waitReturned.load();
-    }, 1000));
+    EXPECT_TRUE(WaitForCondition(
+        [&]
+        {
+            return waitReturned.load();
+        },
+        1000));
 
     const bool returnedBeforeCleanup = waitReturned.load();
     if (!returnedBeforeCleanup)
@@ -120,17 +117,20 @@ TEST_F(SapiEngineTests, SilentActiveRequestTimesOutInsteadOfHoldingSapiForever)
     HRESULT waitResult = S_OK;
     std::atomic_bool waitReturned{false};
     const auto waitStart = std::chrono::steady_clock::now();
-    std::thread waitThread([&]
-    {
-        waitResult = fixture.worker->WaitUntilFinished(nullptr);
-        waitReturned = true;
-    });
+    std::thread waitThread(
+        [&]
+        {
+            waitResult = fixture.worker->WaitUntilFinished(nullptr);
+            waitReturned = true;
+        });
     ThreadJoinGuard waitJoin(waitThread);
 
-    EXPECT_TRUE(WaitForCondition([&]
-    {
-        return waitReturned.load();
-    }, 2300));
+    EXPECT_TRUE(WaitForCondition(
+        [&]
+        {
+            return waitReturned.load();
+        },
+        2300));
 
     const bool returnedBeforeCleanup = waitReturned.load();
     const auto elapsedBeforeCleanup = std::chrono::steady_clock::now() - waitStart;
@@ -162,17 +162,20 @@ TEST_F(SapiEngineTests, StalledTerminalAudioDrainTimesOut)
     HRESULT waitResult = S_OK;
     std::atomic_bool waitReturned{false};
     const auto waitStart = std::chrono::steady_clock::now();
-    std::thread waitThread([&]
-    {
-        waitResult = fixture.worker->WaitUntilFinished(fixture.mockSite.get());
-        waitReturned = true;
-    });
+    std::thread waitThread(
+        [&]
+        {
+            waitResult = fixture.worker->WaitUntilFinished(fixture.mockSite.get());
+            waitReturned = true;
+        });
     ThreadJoinGuard waitJoin(waitThread);
 
-    EXPECT_TRUE(WaitForCondition([&]
-    {
-        return waitReturned.load();
-    }, 3000));
+    EXPECT_TRUE(WaitForCondition(
+        [&]
+        {
+            return waitReturned.load();
+        },
+        3000));
 
     const bool returnedBeforeCleanup = waitReturned.load();
     const auto elapsedBeforeCleanup = std::chrono::steady_clock::now() - waitStart;

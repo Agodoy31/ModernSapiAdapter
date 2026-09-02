@@ -3,7 +3,8 @@
 #include <limits>
 #include <vector>
 
-TEST(JsonValueTests, TryGetJsonUnsignedIntegerAcceptsCompatibleNumberRepresentations) {
+TEST(JsonValueTests, TryGetJsonUnsignedIntegerAcceptsCompatibleNumberRepresentations)
+{
     uint32_t output = 0;
 
     EXPECT_TRUE(TryGetJsonUnsignedInteger(nlohmann::json(17u), output));
@@ -16,7 +17,8 @@ TEST(JsonValueTests, TryGetJsonUnsignedIntegerAcceptsCompatibleNumberRepresentat
     EXPECT_EQ(output, 19u);
 }
 
-TEST(JsonValueTests, TryGetJsonUnsignedIntegerRejectsIncompatibleValuesWithoutChangingOutput) {
+TEST(JsonValueTests, TryGetJsonUnsignedIntegerRejectsIncompatibleValuesWithoutChangingOutput)
+{
     const std::vector<nlohmann::json> invalidValues{
         nlohmann::json(-1),
         nlohmann::json(1.5),
@@ -28,10 +30,9 @@ TEST(JsonValueTests, TryGetJsonUnsignedIntegerRejectsIncompatibleValuesWithoutCh
         nlohmann::json("17"),
         nlohmann::json(nullptr),
         nlohmann::json::array(),
-        nlohmann::json::object()
-    };
+        nlohmann::json::object()};
 
-    for (const auto& invalidValue : invalidValues)
+    for (const auto &invalidValue : invalidValues)
     {
         uint32_t output = 123u;
         EXPECT_FALSE(TryGetJsonUnsignedInteger(invalidValue, output));

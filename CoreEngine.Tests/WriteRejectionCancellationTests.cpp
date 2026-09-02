@@ -16,17 +16,21 @@ TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak)
     fixture.mockSite->rejectNextWrite = true;
     HRESULT firstSpeakResult = E_FAIL;
     std::atomic_bool firstSpeakReturned = false;
-    std::thread firstSpeakThread([&]
-    {
-        firstSpeakResult = fixture.engine->Speak(0, fixture.formatId, fixture.pWaveFormat, &firstFragment, fixture.mockSite.get());
-        firstSpeakReturned = true;
-    });
+    std::thread firstSpeakThread(
+        [&]
+        {
+            firstSpeakResult =
+                fixture.engine->Speak(0, fixture.formatId, fixture.pWaveFormat, &firstFragment, fixture.mockSite.get());
+            firstSpeakReturned = true;
+        });
     ThreadJoinGuard firstSpeakJoin(firstSpeakThread);
 
-    EXPECT_TRUE(WaitForCondition([&]
-    {
-        return fixture.mockSite->writeCallCount.load() > 0;
-    }, 1000, 5));
+    EXPECT_TRUE(WaitForCondition(
+        [&]
+        {
+            return fixture.mockSite->writeCallCount.load() > 0;
+        },
+        1000, 5));
     ASSERT_EQ(fixture.mockSite->writeCallCount.load(), 1u);
 
     EXPECT_FALSE(firstSpeakReturned.load());
@@ -40,7 +44,8 @@ TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak)
     secondFragment.pTextStart = secondText;
     secondFragment.ulTextLen = static_cast<ULONG>(wcslen(secondText));
 
-    EXPECT_EQ(fixture.engine->Speak(0, fixture.formatId, fixture.pWaveFormat, &secondFragment, fixture.mockSite.get()), S_OK);
+    EXPECT_EQ(fixture.engine->Speak(0, fixture.formatId, fixture.pWaveFormat, &secondFragment, fixture.mockSite.get()),
+              S_OK);
 
     EXPECT_EQ(fixture.mockSite->totalBytesWritten.load(), 9600u);
 }
@@ -51,8 +56,8 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
     EngineInitializedFixture fixture;
     ASSERT_TRUE(fixture.Initialize());
 
-    SpeechWorker* faultedWorker = fixture.engine->m_pWorker.get();
-    PipeClient* faultedClient = fixture.engine->m_pClient.get();
+    SpeechWorker *faultedWorker = fixture.engine->m_pWorker.get();
+    PipeClient *faultedClient = fixture.engine->m_pClient.get();
     ASSERT_NE(faultedWorker, nullptr);
     ASSERT_NE(faultedClient, nullptr);
 
@@ -73,23 +78,29 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
     HRESULT firstSpeakResult = S_OK;
     std::atomic_bool firstSpeakReturned = false;
     const auto firstSpeakStart = std::chrono::steady_clock::now();
-    std::thread firstSpeakThread([&]
-    {
-        firstSpeakResult = fixture.engine->Speak(0, fixture.formatId, fixture.pWaveFormat, &firstFragment, fixture.mockSite.get());
-        firstSpeakReturned = true;
-    });
+    std::thread firstSpeakThread(
+        [&]
+        {
+            firstSpeakResult =
+                fixture.engine->Speak(0, fixture.formatId, fixture.pWaveFormat, &firstFragment, fixture.mockSite.get());
+            firstSpeakReturned = true;
+        });
     ThreadJoinGuard firstSpeakJoin(firstSpeakThread);
 
-    EXPECT_TRUE(WaitForCondition([&]
-    {
-        return fixture.mockSite->writeCallCount.load() > 0;
-    }, 1000, 5));
+    EXPECT_TRUE(WaitForCondition(
+        [&]
+        {
+            return fixture.mockSite->writeCallCount.load() > 0;
+        },
+        1000, 5));
     ASSERT_EQ(fixture.mockSite->writeCallCount.load(), 1u);
 
-    EXPECT_TRUE(WaitForCondition([&]
-    {
-        return firstSpeakReturned.load();
-    }, 1000, 5));
+    EXPECT_TRUE(WaitForCondition(
+        [&]
+        {
+            return firstSpeakReturned.load();
+        },
+        1000, 5));
     ASSERT_TRUE(firstSpeakReturned.load());
 
     EXPECT_TRUE(firstSpeakJoin.Join(2000));
@@ -108,8 +119,7 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
     EXPECT_EQ(fixture.mockSite->BytesAcceptedAfterRejectedWrite(), 0u);
     {
         std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
-        EXPECT_TRUE(fixture.mockSite->receivedEvents.empty())
-            << "Faulted provider output reached the SAPI event sink.";
+        EXPECT_TRUE(fixture.mockSite->receivedEvents.empty()) << "Faulted provider output reached the SAPI event sink.";
     }
 
     const ULONG writesBeforeNextSpeak = fixture.mockSite->writeCallCount.load();
@@ -119,7 +129,8 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
     secondFragment.pTextStart = secondText;
     secondFragment.ulTextLen = static_cast<ULONG>(wcslen(secondText));
 
-    EXPECT_EQ(fixture.engine->Speak(0, fixture.formatId, fixture.pWaveFormat, &secondFragment, fixture.mockSite.get()), S_OK);
+    EXPECT_EQ(fixture.engine->Speak(0, fixture.formatId, fixture.pWaveFormat, &secondFragment, fixture.mockSite.get()),
+              S_OK);
 
     ASSERT_NE(fixture.engine->m_pWorker, nullptr);
     ASSERT_NE(fixture.engine->m_pClient, nullptr);

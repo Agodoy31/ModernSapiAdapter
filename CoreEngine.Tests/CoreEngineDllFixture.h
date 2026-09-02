@@ -15,9 +15,9 @@ namespace TestInfrastructure
 
 class CoreEngineDll
 {
-public:
-    using DllGetClassObjectFunction = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
-    using DllCanUnloadNowFunction = HRESULT(STDAPICALLTYPE*)();
+  public:
+    using DllGetClassObjectFunction = HRESULT(STDAPICALLTYPE *)(REFCLSID, REFIID, LPVOID *);
+    using DllCanUnloadNowFunction = HRESULT(STDAPICALLTYPE *)();
 
     CoreEngineDll()
     {
@@ -41,11 +41,8 @@ public:
         constexpr auto configuration = L"Release";
 #endif
 
-        const std::filesystem::path dllPath = std::filesystem::path(executablePath)
-            .parent_path()
-            .parent_path()
-            .parent_path()
-            .parent_path() /
+        const std::filesystem::path dllPath =
+            std::filesystem::path(executablePath).parent_path().parent_path().parent_path().parent_path() /
             L"CoreEngine" / platformDirectory / configuration / L"CoreEngine.dll";
 
         m_module.reset(LoadLibraryW(dllPath.c_str()));
@@ -55,10 +52,10 @@ public:
             return;
         }
 
-        m_dllGetClassObject = reinterpret_cast<DllGetClassObjectFunction>(
-            GetProcAddress(m_module.get(), "DllGetClassObject"));
-        m_dllCanUnloadNow = reinterpret_cast<DllCanUnloadNowFunction>(
-            GetProcAddress(m_module.get(), "DllCanUnloadNow"));
+        m_dllGetClassObject =
+            reinterpret_cast<DllGetClassObjectFunction>(GetProcAddress(m_module.get(), "DllGetClassObject"));
+        m_dllCanUnloadNow =
+            reinterpret_cast<DllCanUnloadNowFunction>(GetProcAddress(m_module.get(), "DllCanUnloadNow"));
         if (!m_dllGetClassObject || !m_dllCanUnloadNow)
         {
             m_loadError = GetLastError();
@@ -78,17 +75,19 @@ public:
         return m_module && m_dllGetClassObject && m_dllCanUnloadNow;
     }
 
-    DWORD LoadError() const noexcept { return m_loadError; }
-
-    HRESULT GetClassFactory(IClassFactory** factory) const
+    DWORD LoadError() const noexcept
     {
-        static constexpr CLSID sapiEngineClsid = {
-            0x91cd243c, 0x63f7, 0x441f, { 0xae, 0x2f, 0x45, 0x05, 0x70, 0x05, 0xcb, 0x6d }
-        };
-        return GetClassObject(sapiEngineClsid, IID_IClassFactory, reinterpret_cast<void**>(factory));
+        return m_loadError;
     }
 
-    HRESULT GetClassObject(REFCLSID clsid, REFIID iid, void** object) const
+    HRESULT GetClassFactory(IClassFactory **factory) const
+    {
+        static constexpr CLSID sapiEngineClsid = {
+            0x91cd243c, 0x63f7, 0x441f, {0xae, 0x2f, 0x45, 0x05, 0x70, 0x05, 0xcb, 0x6d}};
+        return GetClassObject(sapiEngineClsid, IID_IClassFactory, reinterpret_cast<void **>(factory));
+    }
+
+    HRESULT GetClassObject(REFCLSID clsid, REFIID iid, void **object) const
     {
         m_unloadApproved = false;
         return m_dllGetClassObject(clsid, iid, object);
@@ -104,7 +103,7 @@ public:
         return result;
     }
 
-private:
+  private:
     wil::unique_hmodule m_module;
     DllGetClassObjectFunction m_dllGetClassObject = nullptr;
     DllCanUnloadNowFunction m_dllCanUnloadNow = nullptr;
