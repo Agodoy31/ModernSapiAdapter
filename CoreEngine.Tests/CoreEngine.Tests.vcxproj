@@ -128,14 +128,19 @@
     <ClCompile Include="ControlStreamTests.cpp" />
     <ClCompile Include="PcmFrameAssemblerTests.cpp" />
     <ClCompile Include="AudioStreamingTests.cpp" />
-    <ClCompile Include="CancellationTests.cpp" />
+    <ClCompile Include="SapiAbortTests.cpp" />
+    <ClCompile Include="WriteRejectionCancellationTests.cpp" />
+    <ClCompile Include="CancellationTimeoutTests.cpp" />
     <ClCompile Include="SpeechEventTests.cpp" />
-    <ClCompile Include="FaultRecoveryTests.cpp" />
+    <ClCompile Include="TransportFaultTests.cpp" />
+    <ClCompile Include="ProtocolFaultTests.cpp" />
+    <ClCompile Include="WorkerFaultTests.cpp" />
     <ClCompile Include="JsonValueTests.cpp" />
     <ClCompile Include="AudioFormatUtilsTests.cpp" />
     <ClCompile Include="PipeSecurityUtilsTests.cpp" />
     <ClCompile Include="AsyncLoggerTests.cpp" />
-    <ClCompile Include="SpeechProtocolUtilsTests.cpp" />
+    <ClCompile Include="ProtocolParsingTests.cpp" />
+    <ClCompile Include="RequestContextTests.cpp" />
     <ClCompile Include="SapiFragmentSerializationTests.cpp" />
     <ClCompile Include="ControlStreamBufferTests.cpp" />
 

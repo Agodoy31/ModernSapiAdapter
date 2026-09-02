@@ -163,7 +163,6 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_LogEventWithSeverityAndMessage)
 
 TEST(SpeechProtocolUtilsTests, ParseControlEvent_MalformedOrMissingFieldsHandledSafely)
 {
-    // Missing event
     {
         const nlohmann::json json = {{"speak_id", 42}};
         const ProviderControlEvent event = ParseControlEvent(json);
@@ -172,14 +171,12 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_MalformedOrMissingFieldsHandled
         EXPECT_EQ(event.speakId, 42ULL);
     }
 
-    // Non-string event
     {
         const nlohmann::json json = {{"event", 123}, {"speak_id", 42}};
         const ProviderControlEvent event = ParseControlEvent(json);
         EXPECT_EQ(event.type, ProviderEventType::Unknown);
     }
 
-    // Missing speak_id
     {
         const nlohmann::json json = {{"event", "word_boundary"}};
         const ProviderControlEvent event = ParseControlEvent(json);
@@ -187,14 +184,12 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_MalformedOrMissingFieldsHandled
         EXPECT_EQ(event.speakId, 0ULL);
     }
 
-    // Invalid negative speak_id
     {
         const nlohmann::json json = {{"event", "word_boundary"}, {"speak_id", -5}};
         const ProviderControlEvent event = ParseControlEvent(json);
         EXPECT_EQ(event.speakId, 0ULL);
     }
 
-    // Word boundary missing audio_offset_ms
     {
         const nlohmann::json json = {
             {"event", "word_boundary"},
@@ -206,7 +201,6 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_MalformedOrMissingFieldsHandled
         EXPECT_FALSE(event.hasValidSpeechOffsets);
     }
 
-    // Word boundary missing text_offset
     {
         const nlohmann::json json = {
             {"event", "word_boundary"},
@@ -218,7 +212,6 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_MalformedOrMissingFieldsHandled
         EXPECT_FALSE(event.hasValidSpeechOffsets);
     }
 
-    // Word boundary missing text_length
     {
         const nlohmann::json json = {
             {"event", "word_boundary"},
@@ -230,7 +223,6 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_MalformedOrMissingFieldsHandled
         EXPECT_FALSE(event.hasValidSpeechOffsets);
     }
 
-    // SynthesisComplete missing total_audio_bytes
     {
         const nlohmann::json json = {
             {"event", "synthesis_complete"},
@@ -240,7 +232,6 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_MalformedOrMissingFieldsHandled
         EXPECT_FALSE(event.hasValidTerminalBytes);
     }
 
-    // SynthesisCancelled missing audio_bytes_written
     {
         const nlohmann::json json = {
             {"event", "synthesis_cancelled"},
@@ -250,7 +241,6 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_MalformedOrMissingFieldsHandled
         EXPECT_FALSE(event.hasValidTerminalBytes);
     }
 
-    // Bookmark missing audio_offset_ms
     {
         const nlohmann::json json = {
             {"event", "bookmark_reached"},
@@ -260,7 +250,6 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_MalformedOrMissingFieldsHandled
         EXPECT_FALSE(event.hasValidSpeechOffsets);
     }
 
-    // Log missing severity/message
     {
         const nlohmann::json json = {
             {"event", "log"},
@@ -293,73 +282,3 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_NonObjectJsonReturnsUnknown)
         EXPECT_TRUE(event.rawEventName.empty());
     }
 }
-
-TEST(SpeechProtocolUtilsTests, TimeoutAndAbortPredicatesBehaveCorrectly)
-{
-    // HasSynthesisInactivityTimedOut
-    EXPECT_TRUE(HasSynthesisInactivityTimedOut(1000ULL, 500ULL, 400ULL));
-    EXPECT_TRUE(HasSynthesisInactivityTimedOut(1000ULL, 500ULL, 500ULL));
-    EXPECT_FALSE(HasSynthesisInactivityTimedOut(1000ULL, 500ULL, 600ULL));
-    EXPECT_FALSE(HasSynthesisInactivityTimedOut(500ULL, 1000ULL, 100ULL));
-
-    // HasCancellationTimedOut
-    EXPECT_FALSE(HasCancellationTimedOut(1000ULL, 0ULL));
-    EXPECT_TRUE(HasCancellationTimedOut(1000ULL, 1000ULL));
-    EXPECT_TRUE(HasCancellationTimedOut(1001ULL, 1000ULL));
-    EXPECT_FALSE(HasCancellationTimedOut(999ULL, 1000ULL));
-
-    // IsAbortRequested
-    EXPECT_TRUE(IsAbortRequested(SPVES_ABORT));
-    EXPECT_TRUE(IsAbortRequested(SPVES_ABORT | 0x02));
-    EXPECT_FALSE(IsAbortRequested(0));
-    EXPECT_FALSE(IsAbortRequested(0x02));
-}
-
-TEST(SpeechProtocolUtilsTests, RequestContext_TransitionToCancellingResetsFlagsAndSetsDeadline)
-{
-    RequestContext ctx{};
-    ctx.upstreamFinished = true;
-    ctx.upstreamTerminalBytes = 4096;
-    ctx.downstreamState = DownstreamState::Speaking;
-    ctx.cancellationDeadlineTick = 0;
-
-    ctx.TransitionToCancelling(5000ULL);
-
-    EXPECT_FALSE(ctx.upstreamFinished);
-    EXPECT_EQ(ctx.upstreamTerminalBytes, 0ULL);
-    EXPECT_EQ(ctx.cancellationDeadlineTick, 5000ULL);
-    EXPECT_EQ(ctx.downstreamState, DownstreamState::Cancelling);
-    EXPECT_TRUE(ctx.IsDrainingCancellation());
-}
-
-TEST(SpeechProtocolUtilsTests, RequestContext_SemanticPredicatesReflectDiscreteStates)
-{
-    RequestContext ctx{};
-
-    // Idle initial state
-    EXPECT_FALSE(ctx.IsActivelySynthesizing());
-    EXPECT_FALSE(ctx.IsAwaitingTerminalAudio());
-    EXPECT_FALSE(ctx.IsDrainingCancellation());
-
-    // Active synthesis
-    ctx.upstreamState = UpstreamState::Active;
-    ctx.downstreamState = DownstreamState::Speaking;
-    EXPECT_TRUE(ctx.IsActivelySynthesizing());
-    EXPECT_FALSE(ctx.IsAwaitingTerminalAudio());
-    EXPECT_FALSE(ctx.IsDrainingCancellation());
-
-    // Awaiting terminal audio (upstream completed/cancelled, downstream still delivering)
-    ctx.upstreamState = UpstreamState::Completed;
-    ctx.upstreamFinished = true;
-    ctx.downstreamState = DownstreamState::Speaking;
-    EXPECT_FALSE(ctx.IsActivelySynthesizing());
-    EXPECT_TRUE(ctx.IsAwaitingTerminalAudio());
-    EXPECT_FALSE(ctx.IsDrainingCancellation());
-
-    // Draining cancellation
-    ctx.TransitionToCancelling(1234ULL);
-    EXPECT_FALSE(ctx.IsActivelySynthesizing());
-    EXPECT_FALSE(ctx.IsAwaitingTerminalAudio());
-    EXPECT_TRUE(ctx.IsDrainingCancellation());
-}
-
