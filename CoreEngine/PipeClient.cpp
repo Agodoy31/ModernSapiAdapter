@@ -121,7 +121,7 @@ HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& ex
         }
     }
 
-    ULONGLONG deadline = GetTickCount64() + pipeReadyTimeoutMs;
+    const ULONGLONG deadline = GetTickCount64() + pipeReadyTimeoutMs;
     while (GetTickCount64() < deadline)
     {
         if (m_providerProcess.hProcess && WaitForSingleObject(m_providerProcess.hProcess, 0) == WAIT_OBJECT_0)
@@ -160,7 +160,6 @@ HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& ex
             {
                 return launchHr;
             }
-            deadline = GetTickCount64() + pipeReadyTimeoutMs;
         }
     }
 
