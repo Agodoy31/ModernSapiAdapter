@@ -18,7 +18,7 @@ TEST_F(SapiEngineTests, SetObjectTokenConnectsToPipeAndQueriesInfo)
     const auto elapsed = std::chrono::steady_clock::now() - start;
 
     EXPECT_EQ(hr, S_OK);
-    EXPECT_LT(elapsed, std::chrono::seconds(1));
+    EXPECT_LT(elapsed, std::chrono::seconds(3));
 
     GUID formatId = {};
     WAVEFORMATEX* pWaveFormat = nullptr;

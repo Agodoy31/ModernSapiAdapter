@@ -145,17 +145,20 @@ TEST_F(SapiEngineTests, ReadControlMessageCompactsBufferAndPreservesMessagesAcro
 
     std::string stream;
     constexpr int totalMsgs = 500;
-    for (int i = 0; i < totalMsgs; ++i) {
+    for (int i = 0; i < totalMsgs; ++i)
+    {
         char buf[64];
         snprintf(buf, sizeof(buf), "{\"seq\":%d}\n", i);
         stream += buf;
     }
 
-    std::thread writer([&server, stream]() {
+    std::thread writer([&server, stream]()
+    {
         server.WriteControl(stream.c_str());
     });
 
-    for (int i = 0; i < totalMsgs; ++i) {
+    for (int i = 0; i < totalMsgs; ++i)
+    {
         nlohmann::json msg;
         ASSERT_EQ(client.ReadControlMessage(msg), S_OK) << "Failed at index " << i;
         ASSERT_FALSE(msg.is_null()) << "Null json at index " << i;
@@ -176,7 +179,8 @@ TEST_F(SapiEngineTests, ReadControlMessageHandlesLargePayloadAcrossCompactionThr
     std::string msgStr1 = "{\"data\":\"" + largeVal + "\"}\n";
     std::string msgStr2 = "{\"data\":\"small\"}\n";
 
-    std::thread writer([&server, msgStr1, msgStr2]() {
+    std::thread writer([&server, msgStr1, msgStr2]()
+    {
         server.WriteControl((msgStr1 + msgStr2).c_str());
     });
 
@@ -222,7 +226,8 @@ TEST_F(SapiEngineTests, ReadControlMessage_O_N_LinearSearch)
 
     // Send a message in tiny chunks to test offset search tracking
     std::string chunk(100, ' ');
-    for (int i = 0; i < 30; ++i) {
+    for (int i = 0; i < 30; ++i)
+    {
         server.WriteControl(chunk);
     }
     server.WriteControl("{\"type\":\"event\"}\n");
@@ -230,7 +235,8 @@ TEST_F(SapiEngineTests, ReadControlMessage_O_N_LinearSearch)
     nlohmann::json outJson;
     HRESULT hr = client.ReadControlMessage(outJson, 5000); 
     EXPECT_EQ(hr, S_OK);
-    if (!outJson.is_null()) {
+    if (!outJson.is_null())
+    {
         EXPECT_EQ(outJson["type"], "event");
     }
 }
@@ -252,8 +258,10 @@ TEST_F(SapiEngineTests, ReadControlMessage_MalformedJson)
 
     auto logs = GetTestLogs();
     bool foundParseError = false;
-    for (const auto& log : logs) {
-        if (log.find(L"JSON Parse Error:") != std::wstring::npos) {
+    for (const auto& log : logs)
+    {
+        if (log.find(L"JSON Parse Error:") != std::wstring::npos)
+        {
             foundParseError = true;
             break;
         }

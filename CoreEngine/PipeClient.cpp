@@ -88,7 +88,7 @@ HRESULT PipeClient::LaunchProviderProcess(const std::wstring& exePath)
 
 HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& exePath)
 {
-    constexpr ULONGLONG pipeReadyTimeoutMs = 1000;
+    constexpr ULONGLONG pipeReadyTimeoutMs = 3000;
     constexpr DWORD pipeProbeIntervalMs = 10;
 
     m_controlBuffer.Clear();
