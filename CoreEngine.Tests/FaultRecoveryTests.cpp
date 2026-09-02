@@ -433,7 +433,8 @@ TEST_F(SapiEngineTests, RequestErrorFailsUtteranceWithoutKillingProvider) {
     const auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - cancelStart).count();
 
-    if (serverThread.joinable()) {
+    if (serverThread.joinable())
+    {
         serverThread.join();
     }
 
@@ -453,7 +454,8 @@ TEST_F(SapiEngineTests, FatalErrorFaultsSessionAndTriggersRestart) {
 
     HRESULT hr = fixture.worker->WaitUntilFinished(fixture.mockSite.get());
 
-    if (serverThread.joinable()) {
+    if (serverThread.joinable())
+    {
         serverThread.join();
     }
 
@@ -505,22 +507,34 @@ TEST_F(SapiEngineTests, LogEventsDoNotExtendSynthesisInactivityTimeout) {
 
     HRESULT waitResult = S_OK;
     std::atomic_bool waitReturned{false};
+    std::mutex waitMutex;
+    std::condition_variable waitCv;
     const auto waitStart = std::chrono::steady_clock::now();
     std::thread waitThread([&] {
         waitResult = fixture.worker->WaitUntilFinished(nullptr);
-        waitReturned = true;
+        {
+            std::lock_guard<std::mutex> lock(waitMutex);
+            waitReturned = true;
+        }
+        waitCv.notify_all();
     });
     ThreadJoinGuard waitJoin(waitThread);
 
     std::thread logThread([&] {
         auto loopStart = std::chrono::steady_clock::now();
-        while (!waitReturned.load() && std::chrono::steady_clock::now() - loopStart < std::chrono::seconds(3)) {
+        std::unique_lock<std::mutex> lock(waitMutex);
+        while (!waitReturned.load() && std::chrono::steady_clock::now() - loopStart < std::chrono::seconds(3))
+        {
             fixture.server.WriteControl("{\"event\":\"log\",\"speak_id\":61,\"severity\":\"info\",\"message\":\"progress\"}\n");
-            Sleep(500);
+            waitCv.wait_for(lock, std::chrono::milliseconds(500), [&] { return waitReturned.load(); });
         }
     });
 
     EXPECT_TRUE(WaitForCondition([&] { return waitReturned.load(); }, 2500));
+    {
+        std::lock_guard<std::mutex> lock(waitMutex);
+        waitCv.notify_all();
+    }
     logThread.join();
 
     const bool returnedBeforeCleanup = waitReturned.load();

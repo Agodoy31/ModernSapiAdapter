@@ -158,7 +158,6 @@ TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak) {
     EXPECT_TRUE(WaitForCondition([&] { return fixture.mockSite->writeCallCount.load() > 0; }, 1000, 5));
     ASSERT_EQ(fixture.mockSite->writeCallCount.load(), 1u);
 
-    Sleep(10);
     EXPECT_FALSE(firstSpeakReturned.load());
 
     EXPECT_TRUE(firstSpeakJoin.Join(2000));
@@ -258,15 +257,18 @@ TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorke
 TEST_F(SapiEngineTests, SpeakCancelsPromptlyEvenWhenOutputSiteWriteBlocks) {
     PipeServerWorkerFixture fixture;
     ASSERT_TRUE(fixture.Initialize());
-    // Simulate SAPI waveOut hardware buffer backpressure by delaying Write() for 300ms on first write
-    fixture.mockSite->writeDelayMs = 300;
+    // Simulate SAPI waveOut hardware buffer backpressure by pausing Write() on first write
+    fixture.mockSite->PauseNextWrite();
+    auto releaseWriteGuard = wil::scope_exit([&] {
+        fixture.mockSite->ReleaseWrite();
+    });
     ASSERT_TRUE(fixture.Start(42));
 
     // Send an audio chunk to trigger the blocking Write()
     ASSERT_TRUE(fixture.server.WriteAudio({ 0x10, 0x20, 0x30, 0x40 }));
 
-    // Wait a brief moment to ensure AudioThread is actively blocked in Write()
-    Sleep(30);
+    // Deterministically wait for AudioThread to enter and pause in Write()
+    ASSERT_TRUE(fixture.mockSite->WaitForWritePause(1000));
 
     // Now issue SPVES_ABORT from SAPI
     fixture.mockSite->actions = SPVES_ABORT;
@@ -276,7 +278,8 @@ TEST_F(SapiEngineTests, SpeakCancelsPromptlyEvenWhenOutputSiteWriteBlocks) {
     // Concurrently wait for cancellation request to be read by server
     std::thread serverThread([&] {
         std::string request;
-        if (fixture.server.ReadControl(request)) {
+        if (fixture.server.ReadControl(request))
+        {
             fixture.server.WriteControl("{\"event\":\"synthesis_cancelled\",\"speak_id\":42,\"audio_bytes_written\":4}\n");
         }
     });
@@ -285,12 +288,15 @@ TEST_F(SapiEngineTests, SpeakCancelsPromptlyEvenWhenOutputSiteWriteBlocks) {
     const auto cancelDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - cancelStart).count();
 
-    if (serverThread.joinable()) {
+    if (serverThread.joinable())
+    {
         serverThread.join();
     }
 
+    fixture.mockSite->ReleaseWrite();
+
     EXPECT_EQ(cancelHr, S_OK);
-    // Cancellation MUST return promptly (< 100ms), NOT waiting for the 300ms Write() sleep to finish
+    // Cancellation MUST return promptly (< 100ms), NOT waiting for the unblocked Write()
     EXPECT_LT(cancelDuration, 100);
 }
 
@@ -305,7 +311,8 @@ TEST_F(SapiEngineTests, SynthesisCompleteWhileCancellingCompletesPromptly) {
 
     std::thread serverThread([&] {
         std::string request;
-        if (fixture.server.ReadControl(request)) {
+        if (fixture.server.ReadControl(request))
+        {
             fixture.server.WriteAudio({ 1, 2, 3, 4 });
             fixture.server.WriteControl("{\"event\":\"synthesis_complete\",\"speak_id\":42,\"total_audio_bytes\":4}\n");
         }
@@ -315,7 +322,8 @@ TEST_F(SapiEngineTests, SynthesisCompleteWhileCancellingCompletesPromptly) {
     const auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - cancelStart).count();
 
-    if (serverThread.joinable()) {
+    if (serverThread.joinable())
+    {
         serverThread.join();
     }
 

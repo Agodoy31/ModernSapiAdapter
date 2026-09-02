@@ -82,8 +82,10 @@ TEST_F(SapiEngineTests, SpeakWaitsForSynthesisCompleteByteBoundary) {
     EXPECT_GT(fixture.mockSite->receivedEvents.size(), 0u);
 
     bool foundWordBoundary = false;
-    for (const auto& evt : fixture.mockSite->receivedEvents) {
-        if (evt.eEventId == SPEI_WORD_BOUNDARY) {
+    for (const auto& evt : fixture.mockSite->receivedEvents)
+    {
+        if (evt.eEventId == SPEI_WORD_BOUNDARY)
+        {
             foundWordBoundary = true;
             break;
         }
@@ -203,7 +205,8 @@ TEST_F(SapiEngineTests, SynthesisCompleteWaitsForFinalSapiWriteToFinish) {
     });
     auto releaseWriteBeforeJoin = wil::scope_exit([&] {
         fixture.mockSite->ReleaseWrite();
-        if (waitThread.joinable()) {
+        if (waitThread.joinable())
+        {
             waitThread.join();
         }
     });
