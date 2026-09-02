@@ -3,61 +3,10 @@
 
 using namespace TestInfrastructure;
 
-TEST(PcmFrameAssemblerTests, OneByteFragmentsDoNotProducePartial16BitMonoFrames) {
-    PcmFrameAssembler assembler(2);
-    std::vector<size_t> emittedSizes;
 
-    const auto output = FeedPcmFragments(assembler,
-        { { 0x10 }, { 0x11 }, { 0x20 }, { 0x21 } }, emittedSizes);
 
-    EXPECT_EQ(emittedSizes, (std::vector<size_t>{ 2, 2 }));
-    EXPECT_EQ(output, (std::vector<uint8_t>{ 0x10, 0x11, 0x20, 0x21 }));
-    EXPECT_FALSE(assembler.HasCarry());
-}
-
-TEST(PcmFrameAssemblerTests, Awkward24BitStereoBoundariesPreserveEveryProviderByte) {
-    PcmFrameAssembler assembler(6);
-    std::vector<size_t> emittedSizes;
-
-    const auto output = FeedPcmFragments(assembler,
-        { { 0x01 }, { 0x02, 0x03, 0x04, 0x05 }, { 0x06, 0x11, 0x12 },
-          { 0x13, 0x14, 0x15, 0x16, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26 } }, emittedSizes);
-
-    EXPECT_EQ(emittedSizes, (std::vector<size_t>{ 6, 6, 6 }));
-    EXPECT_EQ(output, (std::vector<uint8_t>{
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
-        0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
-        0x21, 0x22, 0x23, 0x24, 0x25, 0x26 }));
-    EXPECT_FALSE(assembler.HasCarry());
-}
-
-TEST(PcmFrameAssemblerTests, ResetPreventsPartialFrameBytesCrossingRequestBoundaries) {
-    PcmFrameAssembler assembler(6);
-    EXPECT_TRUE(assembler.Process(std::vector<uint8_t>{ 0xA1, 0xA2 }.data(), 2).empty());
-
-    assembler.Reset();
-    std::vector<size_t> emittedSizes;
-    const auto output = FeedPcmFragments(assembler,
-        { { 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6 } }, emittedSizes);
-
-    EXPECT_EQ(emittedSizes, (std::vector<size_t>{ 6 }));
-    EXPECT_EQ(output, (std::vector<uint8_t>{ 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6 }));
-    EXPECT_FALSE(assembler.HasCarry());
-}
-
-TEST(PcmFrameAssemblerTests, AlignedInputWithoutCarryUsesTheOriginalBuffer) {
-    PcmFrameAssembler assembler(6);
-    const std::vector<uint8_t> input{ 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
-                                      0x11, 0x12, 0x13, 0x14, 0x15, 0x16 };
-
-    const auto spans = assembler.Process(input.data(), input.size());
-
-    ASSERT_EQ(spans.size(), 1u);
-    EXPECT_EQ(spans[0].data, input.data());
-    EXPECT_EQ(spans[0].size, 12u);
-}
-
-TEST_F(SapiEngineTests, SpeakWaitsForSynthesisCompleteByteBoundary) {
+TEST_F(SapiEngineTests, SpeakWaitsForSynthesisCompleteByteBoundary)
+{
     EngineInitializedFixture fixture;
     ASSERT_TRUE(fixture.Initialize());
 
@@ -75,7 +24,8 @@ TEST_F(SapiEngineTests, SpeakWaitsForSynthesisCompleteByteBoundary) {
         std::lock_guard<std::mutex> lock(fixture.mockSite->writesMutex);
         ASSERT_FALSE(fixture.mockSite->requestedWriteSizes.empty());
         EXPECT_TRUE(std::all_of(fixture.mockSite->requestedWriteSizes.begin(), fixture.mockSite->requestedWriteSizes.end(),
-            [](ULONG requestedSize) { return requestedSize % 2 == 0; }));
+            [](ULONG requestedSize)
+{ return requestedSize % 2 == 0; }));
     }
 
     std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
@@ -93,7 +43,8 @@ TEST_F(SapiEngineTests, SpeakWaitsForSynthesisCompleteByteBoundary) {
     EXPECT_TRUE(foundWordBoundary);
 }
 
-TEST_F(SapiEngineTests, SpeakPreservesNonContiguousSapiSourceOffsets) {
+TEST_F(SapiEngineTests, SpeakPreservesNonContiguousSapiSourceOffsets)
+{
     EngineInitializedFixture fixture;
     ASSERT_TRUE(fixture.Initialize());
 
@@ -123,7 +74,8 @@ TEST_F(SapiEngineTests, SpeakPreservesNonContiguousSapiSourceOffsets) {
 }
 
 #if defined(_DEBUG)
-TEST_F(SapiEngineTests, TerminalBeforeOverrunAudioForwardsOnlyDeclaredFrames) {
+TEST_F(SapiEngineTests, TerminalBeforeOverrunAudioForwardsOnlyDeclaredFrames)
+{
     PipeServerWorkerFixture fixture;
     ASSERT_TRUE(fixture.Initialize());
     ASSERT_TRUE(fixture.Start(26));
@@ -141,7 +93,8 @@ TEST_F(SapiEngineTests, TerminalBeforeOverrunAudioForwardsOnlyDeclaredFrames) {
     EXPECT_EQ(fixture.mockSite->acceptedAudio, (std::vector<uint8_t>{ 0xC1, 0xC2 }));
 }
 
-TEST_F(SapiEngineTests, WorkerReassemblesAwkward24BitStereoPipeFragments) {
+TEST_F(SapiEngineTests, WorkerReassemblesAwkward24BitStereoPipeFragments)
+{
     PipeServerWorkerFixture fixture;
     ASSERT_TRUE(fixture.Initialize(6));
     ASSERT_TRUE(fixture.Start(27));
@@ -169,14 +122,16 @@ TEST_F(SapiEngineTests, WorkerReassemblesAwkward24BitStereoPipeFragments) {
     std::lock_guard<std::mutex> lock(fixture.mockSite->writesMutex);
     ASSERT_FALSE(fixture.mockSite->requestedWriteSizes.empty());
     EXPECT_TRUE(std::all_of(fixture.mockSite->requestedWriteSizes.begin(), fixture.mockSite->requestedWriteSizes.end(),
-        [](ULONG requestedSize) { return requestedSize % 6 == 0; }));
+        [](ULONG requestedSize)
+{ return requestedSize % 6 == 0; }));
     EXPECT_EQ(fixture.mockSite->acceptedAudio, (std::vector<uint8_t>{
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
         0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
         0x21, 0x22, 0x23, 0x24, 0x25, 0x26 }));
 }
 
-TEST_F(SapiEngineTests, SynthesisCompleteWaitsForFinalSapiWriteToFinish) {
+TEST_F(SapiEngineTests, SynthesisCompleteWaitsForFinalSapiWriteToFinish)
+{
     PipeServerWorkerFixture fixture;
     ASSERT_TRUE(fixture.Initialize());
     ASSERT_TRUE(fixture.Start(42));
@@ -229,7 +184,8 @@ TEST_F(SapiEngineTests, SynthesisCompleteWaitsForFinalSapiWriteToFinish) {
 }
 #endif
 
-TEST_F(SapiEngineTests, SpeakDoesNotHoldTheSessionLockAcrossReentrantGetActions) {
+TEST_F(SapiEngineTests, SpeakDoesNotHoldTheSessionLockAcrossReentrantGetActions)
+{
     EngineInitializedFixture fixture;
     ASSERT_TRUE(fixture.Initialize());
 
@@ -277,7 +233,8 @@ TEST_F(SapiEngineTests, SpeakDoesNotHoldTheSessionLockAcrossReentrantGetActions)
     EXPECT_LT(std::chrono::steady_clock::now() - speakStart, std::chrono::seconds(2));
 }
 
-TEST_F(SapiEngineTests, InFlightAudioFromCancelledRequestDoesNotIncrementNextRequestBytes) {
+TEST_F(SapiEngineTests, InFlightAudioFromCancelledRequestDoesNotIncrementNextRequestBytes)
+{
     PipeServerWorkerFixture fixture;
     ASSERT_TRUE(fixture.Initialize());
     ASSERT_TRUE(fixture.Start(50));
@@ -312,7 +269,8 @@ TEST_F(SapiEngineTests, InFlightAudioFromCancelledRequestDoesNotIncrementNextReq
 }
 
 #if defined(_DEBUG)
-TEST_F(SapiEngineTests, StaleSpansAreDroppedBetweenBatchWrites) {
+TEST_F(SapiEngineTests, StaleSpansAreDroppedBetweenBatchWrites)
+{
     PipeServerWorkerFixture fixture;
     ASSERT_TRUE(fixture.Initialize());
     ASSERT_TRUE(fixture.Start(60));

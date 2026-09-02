@@ -123,7 +123,10 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DllEntryAdmissionTests.cpp" />
-    <ClCompile Include="SessionLifecycleTests.cpp" />
+    <ClCompile Include="ComLifetimeTests.cpp" />
+    <ClCompile Include="ProviderSessionTests.cpp" />
+    <ClCompile Include="ControlStreamTests.cpp" />
+    <ClCompile Include="PcmFrameAssemblerTests.cpp" />
     <ClCompile Include="AudioStreamingTests.cpp" />
     <ClCompile Include="CancellationTests.cpp" />
     <ClCompile Include="SpeechEventTests.cpp" />
