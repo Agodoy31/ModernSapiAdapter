@@ -74,12 +74,24 @@ TEST_F(SapiEngineTests, CompleteOverlappedOperationPreservesBytesIfCompletedDuri
     }
 
     const std::string payload = "synthesis_ready\n";
-    ASSERT_TRUE(server.WriteControl(payload));
+    bool hookFired = false;
+    PipeClient::SetOverlappedTimeoutHookForTest(
+        [&]
+        {
+            hookFired = true;
+            EXPECT_TRUE(server.WriteControl(payload));
+        });
+    auto resetHook = wil::scope_exit(
+        []
+        {
+            PipeClient::SetOverlappedTimeoutHookForTest(nullptr);
+        });
 
     DWORD transferred = 0;
     const HRESULT hr = PipeClient::CompleteOverlappedOperationForTest(
         client.ControlPipeHandleForTest(), readOverlapped, transferred, 0);
 
+    EXPECT_TRUE(hookFired);
     EXPECT_EQ(hr, S_OK);
     EXPECT_EQ(transferred, payload.size());
     EXPECT_EQ(std::string_view(readBuffer, transferred), payload);

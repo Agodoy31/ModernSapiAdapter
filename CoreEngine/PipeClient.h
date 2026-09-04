@@ -85,6 +85,8 @@ public:
     {
         return m_controlPipe.get();
     }
+
+    static void SetOverlappedTimeoutHookForTest(std::function<void()> hook);
 #endif
 
 #if defined(_DEBUG)

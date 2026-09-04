@@ -79,10 +79,15 @@ class AsyncLoggerTests : public ::testing::Test
         AsyncLoggerTestAccess::SetLogFilePath(CoreEngineLogPath().wstring());
     }
 
-    static void TearDownTestSuite()
+    static void TearDownTestCase()
     {
         std::error_code ec;
         std::filesystem::remove(CoreEngineLogPath(), ec);
+    }
+
+    static void TearDownTestSuite()
+    {
+        TearDownTestCase();
     }
 };
 

@@ -4,6 +4,9 @@
 #include "JsonValue.h"
 
 namespace {
+#if defined(COREENGINE_TESTING)
+    static std::function<void()> g_onOverlappedTimeoutHookForTest;
+#endif
     [[nodiscard]] bool IsCommand(const nlohmann::json& json, std::string_view commandName) noexcept
     {
         if (!json.is_object())
@@ -228,10 +231,18 @@ HRESULT PipeClient::CompleteOverlappedOperation(
     }
 
     const DWORD completionError = GetLastError();
-    if (completionError != WAIT_TIMEOUT)
+    if (completionError != WAIT_TIMEOUT && completionError != ERROR_IO_INCOMPLETE)
     {
         return HRESULT_FROM_WIN32(completionError);
     }
+
+#if defined(COREENGINE_TESTING)
+    if (g_onOverlappedTimeoutHookForTest)
+    {
+        auto hook = std::move(g_onOverlappedTimeoutHookForTest);
+        hook();
+    }
+#endif
 
     // OVERLAPPED and its event are caller-owned stack objects. They cannot be released
     // until the kernel has completed cancellation of this exact operation.
@@ -432,6 +443,13 @@ void PipeClient::Cancel()
         CancelIoEx(m_audioPipe.get(), nullptr);
     }
 }
+
+#if defined(COREENGINE_TESTING)
+void PipeClient::SetOverlappedTimeoutHookForTest(std::function<void()> hook)
+{
+    g_onOverlappedTimeoutHookForTest = std::move(hook);
+}
+#endif
 
 #if defined(_DEBUG)
 void PipeClient::FailNextCancellationMessageForTest()
