@@ -73,6 +73,25 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_BookmarkWithValidOffsets)
     EXPECT_EQ(event.speakId, 42ULL);
     EXPECT_TRUE(event.hasValidSpeechOffsets);
     EXPECT_EQ(event.speechOffsets.audioOffsetMs, 250U);
+    EXPECT_TRUE(event.bookmarkName.empty());
+    EXPECT_TRUE(event.IsSpeechBoundary());
+    EXPECT_FALSE(event.IsTerminal());
+    EXPECT_TRUE(event.IsProgress());
+}
+
+TEST(SpeechProtocolUtilsTests, ParseControlEvent_BookmarkWithValidOffsetsAndBookmarkName)
+{
+    const nlohmann::json json = {
+        {"event", "bookmark_reached"}, {"speak_id", 42}, {"audio_offset_ms", 250}, {"bookmark_name", "mark1"}};
+
+    const ProviderControlEvent event = ParseControlEvent(json);
+
+    EXPECT_EQ(event.type, ProviderEventType::Bookmark);
+    EXPECT_EQ(event.rawEventName, "bookmark_reached");
+    EXPECT_EQ(event.speakId, 42ULL);
+    EXPECT_TRUE(event.hasValidSpeechOffsets);
+    EXPECT_EQ(event.speechOffsets.audioOffsetMs, 250U);
+    EXPECT_EQ(event.bookmarkName, "mark1");
     EXPECT_TRUE(event.IsSpeechBoundary());
     EXPECT_FALSE(event.IsTerminal());
     EXPECT_TRUE(event.IsProgress());
@@ -131,6 +150,29 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_LogEventWithSeverityAndMessage)
     EXPECT_EQ(event.speakId, 10ULL);
     EXPECT_EQ(event.logSeverity, "warning");
     EXPECT_EQ(event.logMessage, "Low buffer warning");
+    EXPECT_TRUE(event.logFriendlyText.empty());
+    EXPECT_FALSE(event.IsProgress());
+    EXPECT_FALSE(event.IsSpeechBoundary());
+    EXPECT_FALSE(event.IsTerminal());
+}
+
+TEST(SpeechProtocolUtilsTests, ParseControlEvent_LogEventWithFriendlyText)
+{
+    const nlohmann::json json = {
+        {"event", "log"},
+        {"speak_id", 10},
+        {"severity", "warning"},
+        {"message", "Low buffer warning"},
+        {"friendly_text", "Friendly log message"}};
+
+    const ProviderControlEvent event = ParseControlEvent(json);
+
+    EXPECT_EQ(event.type, ProviderEventType::Log);
+    EXPECT_EQ(event.rawEventName, "log");
+    EXPECT_EQ(event.speakId, 10ULL);
+    EXPECT_EQ(event.logSeverity, "warning");
+    EXPECT_EQ(event.logMessage, "Low buffer warning");
+    EXPECT_EQ(event.logFriendlyText, "Friendly log message");
     EXPECT_FALSE(event.IsProgress());
     EXPECT_FALSE(event.IsSpeechBoundary());
     EXPECT_FALSE(event.IsTerminal());
@@ -202,6 +244,15 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_MalformedOrMissingFieldsHandled
         const nlohmann::json json = {{"event", "bookmark_reached"}, {"speak_id", 1}};
         const ProviderControlEvent event = ParseControlEvent(json);
         EXPECT_FALSE(event.hasValidSpeechOffsets);
+        EXPECT_TRUE(event.bookmarkName.empty());
+    }
+
+    {
+        const nlohmann::json json = {
+            {"event", "bookmark_reached"}, {"speak_id", 1}, {"audio_offset_ms", 100}, {"bookmark_name", 123}};
+        const ProviderControlEvent event = ParseControlEvent(json);
+        EXPECT_TRUE(event.hasValidSpeechOffsets);
+        EXPECT_TRUE(event.bookmarkName.empty());
     }
 
     {
@@ -210,6 +261,17 @@ TEST(SpeechProtocolUtilsTests, ParseControlEvent_MalformedOrMissingFieldsHandled
         EXPECT_EQ(event.type, ProviderEventType::Log);
         EXPECT_TRUE(event.logSeverity.empty());
         EXPECT_TRUE(event.logMessage.empty());
+        EXPECT_TRUE(event.logFriendlyText.empty());
+    }
+
+    {
+        const nlohmann::json json = {
+            {"event", "log"}, {"speak_id", 1}, {"severity", "warning"}, {"message", "msg"}, {"friendly_text", 99}};
+        const ProviderControlEvent event = ParseControlEvent(json);
+        EXPECT_EQ(event.type, ProviderEventType::Log);
+        EXPECT_EQ(event.logSeverity, "warning");
+        EXPECT_EQ(event.logMessage, "msg");
+        EXPECT_TRUE(event.logFriendlyText.empty());
     }
 }
 

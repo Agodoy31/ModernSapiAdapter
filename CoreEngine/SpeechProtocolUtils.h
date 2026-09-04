@@ -167,6 +167,13 @@ namespace SpeechProtocolUtils
             if (event.IsSpeechBoundary())
             {
                 event.hasValidSpeechOffsets = TryParseSpeechOffsets(json, event.type, event.speechOffsets);
+                if (event.type == ProviderEventType::Bookmark)
+                {
+                    if (json.contains("bookmark_name") && json["bookmark_name"].is_string())
+                    {
+                        event.bookmarkName = json["bookmark_name"].get_ref<const std::string&>();
+                    }
+                }
             }
             else if (event.IsTerminal())
             {
@@ -181,6 +188,10 @@ namespace SpeechProtocolUtils
                 if (json.contains("message") && json["message"].is_string())
                 {
                     event.logMessage = json["message"].get_ref<const std::string&>();
+                }
+                if (json.contains("friendly_text") && json["friendly_text"].is_string())
+                {
+                    event.logFriendlyText = json["friendly_text"].get_ref<const std::string&>();
                 }
             }
         }

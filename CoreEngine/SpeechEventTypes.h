@@ -35,9 +35,13 @@ struct ProviderControlEvent
     uint64_t terminalAudioBytes = 0;
     bool hasValidSpeechOffsets = false;
     bool hasValidTerminalBytes = false;
+    // Non-owning views borrowing from source JSON record.
+    // Valid only for synchronous consumption while source JSON remains alive.
     std::string_view rawEventName;
     std::string_view logSeverity;
     std::string_view logMessage;
+    std::string_view bookmarkName;
+    std::string_view logFriendlyText;
 
     [[nodiscard]] constexpr bool IsSpeechBoundary() const noexcept
     {
