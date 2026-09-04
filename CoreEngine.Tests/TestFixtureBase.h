@@ -178,6 +178,11 @@ struct PipeServerWorkerFixture
         {
             return false;
         }
+        if (engine)
+        {
+            std::lock_guard<std::mutex> lock(engine->m_siteMutex);
+            engine->m_activeSpeakId = speakId;
+        }
         return worker->Start(speakId);
     }
 

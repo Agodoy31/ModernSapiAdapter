@@ -423,7 +423,7 @@ void SpeechWorker::EnterFaultedState()
 #endif
 
     {
-        std::lock_guard<std::recursive_mutex> eventForwardLock(m_eventForwardMutex);
+        std::lock_guard<std::mutex> eventForwardLock(m_eventForwardMutex);
         m_faultVisible.store(true, std::memory_order_release);
 
         std::lock_guard<std::mutex> requestLock(m_requestMutex);
@@ -436,26 +436,24 @@ void SpeechWorker::EnterFaultedState()
     }
 }
 
-void SpeechWorker::ForwardEventToSapi(const nlohmann::json& json)
+void SpeechWorker::ForwardEventToSapi(const ProviderControlEvent& event)
 {
-    std::lock_guard<std::recursive_mutex> eventForwardLock(m_eventForwardMutex);
-    if (m_faultVisible.load(std::memory_order_acquire))
     {
-        return;
-    }
+        std::lock_guard<std::mutex> eventForwardLock(m_eventForwardMutex);
+        if (m_faultVisible.load(std::memory_order_acquire))
+        {
+            return;
+        }
 
-    uint64_t eventSpeakId = 0;
-    if (!json.contains("speak_id") ||
-        !TryGetJsonUnsignedInteger(json["speak_id"], eventSpeakId))
-    {
-        return;
-    }
+        if (event.speakId == 0)
+        {
+            return;
+        }
 
-    const bool isLog = json.contains("event") && json["event"].is_string() && json["event"].get<std::string_view>() == "log";
+        const bool isLog = (event.type == ProviderEventType::Log);
 
-    {
         std::lock_guard<std::mutex> requestLock(m_requestMutex);
-        if (!ShouldForwardEventLocked(eventSpeakId, isLog))
+        if (!ShouldForwardEventLocked(event.speakId, isLog))
         {
             return;
         }
@@ -463,13 +461,13 @@ void SpeechWorker::ForwardEventToSapi(const nlohmann::json& json)
 
 #if defined(_DEBUG)
     const ULONGLONG callbackStartTick = GetTickCount64();
-    const std::string_view eventName = json.contains("event") && json["event"].is_string()
-        ? json["event"].get<std::string_view>()
+    const std::string_view eventName = !event.rawEventName.empty()
+        ? event.rawEventName
         : std::string_view("invalid");
     CoreLog(L"[CancelTrace] speak_id=%llu sapi_event_begin event=%hs tick=%llu.",
-        eventSpeakId, eventName.data(), callbackStartTick);
+        event.speakId, eventName.data(), callbackStartTick);
 #endif
-    m_pEngine->OnSpeechEvent(json);
+    m_pEngine->OnSpeechEvent(event);
 #if defined(_DEBUG)
     const ULONGLONG callbackEndTick = GetTickCount64();
     DownstreamState stateAfterCallback = DownstreamState::Faulted;
@@ -478,10 +476,11 @@ void SpeechWorker::ForwardEventToSapi(const nlohmann::json& json)
         stateAfterCallback = m_context.downstreamState;
     }
     const ULONGLONG callbackDuration = callbackEndTick - callbackStartTick;
+    const bool isLog = (event.type == ProviderEventType::Log);
     if (callbackDuration >= 5 || (stateAfterCallback != DownstreamState::Speaking && !isLog))
     {
         CoreLog(L"[CancelTrace] speak_id=%llu sapi_event_end event=%hs tick=%llu duration_ms=%llu state_after=%u.",
-            eventSpeakId, eventName.data(), callbackEndTick, callbackDuration,
+            event.speakId, eventName.data(), callbackEndTick, callbackDuration,
             static_cast<unsigned>(stateAfterCallback));
     }
 #endif
@@ -1206,7 +1205,7 @@ void SpeechWorker::ControlThreadProc()
                     }
                 }
 #endif
-                ForwardEventToSapi(json);
+                ForwardEventToSapi(event);
             }
 
             if (faultAfterStateUpdate)

@@ -45,6 +45,13 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_GetObjectTokenDoesNotWaitForActiveSpeakSerialization_Test;
     friend class SapiEngineTests_InFlightAudioFromCancelledRequestDoesNotIncrementNextRequestBytes_Test;
     friend class SapiEngineTests_StalledTerminalAudioDrainTimesOut_Test;
+    friend class SapiEngineTests_OnSpeechEventRejectsMissingZeroOrMismatchedSpeakId_Test;
+    friend class SapiEngineTests_IgnoredEventTypesDoNotCallAddEvents_Test;
+    friend class SapiEngineTests_EventAfterReplacementSitePublishedIsDropped_Test;
+    friend class SapiEngineTests_EventWithCapturedOldSiteCompletesOnlyAgainstOldSite_Test;
+    friend class SapiEngineTests_AddEventsBlockingDoesNotDelayWorkerFaultPublication_Test;
+    friend class SapiEngineTests_RealControlPipeBoundaryAndBookmarkEndToEnd_Test;
+    friend class SapiEngineTests_RealControlPipeLogWithFriendlyTextEndToEnd_Test;
 public:
     /**
      * @brief Constructs a new CSapiEngine instance.
@@ -107,10 +114,10 @@ public:
     bool OnAudioData(const uint8_t* pAudioBytes, uint32_t byteCount);
 
     /**
-     * @brief Parses incoming JSON event payloads and translates them into SAPI SPEVENT notifications.
-     * @param eventJson JSON event payload received from Control Pipe.
+     * @brief Translates typed provider speech events into SAPI SPEVENT notifications.
+     * @param event Parsed provider control event received from Control Pipe.
      */
-    void OnSpeechEvent(const nlohmann::json& eventJson);
+    void OnSpeechEvent(const ProviderControlEvent& event);
 
 #if defined(_DEBUG)
     /**
@@ -124,6 +131,7 @@ private:
     mutable std::mutex m_tokenMutex;
     winrt::com_ptr<ISpObjectToken> m_cpToken;
     winrt::com_ptr<ISpTTSEngineSite> m_cpSite;
+    uint64_t m_activeSpeakId{0};
     std::mutex m_siteMutex;
 
     std::mutex m_sessionMutex;
@@ -139,10 +147,9 @@ private:
     void RetireFaultedSessionLocked();
     [[nodiscard]] bool IsSessionActiveLocked() const noexcept;
 
-    [[nodiscard]] static SapiSpeechEventType ParseSpeechEventType(std::string_view name) noexcept;
-    void DispatchBoundaryEvent(const nlohmann::json& json, SPEVENTENUM eventId);
-    void DispatchBookmarkEvent(const nlohmann::json& json);
-    void DispatchLogEvent(const nlohmann::json& json);
+    void DispatchBoundaryEvent(ISpTTSEngineSite* site, const ProviderControlEvent& event, SPEVENTENUM eventId);
+    void DispatchBookmarkEvent(ISpTTSEngineSite* site, const ProviderControlEvent& event);
+    void DispatchLogEvent(const ProviderControlEvent& event);
 
     [[nodiscard]] static bool IsValidInfoResponse(const nlohmann::json& response) noexcept;
 

@@ -29,16 +29,6 @@ enum class DownstreamState : uint8_t
     Faulted = 3       // Fatal engine fault
 };
 
-enum class SapiSpeechEventType : uint8_t
-{
-    WordBoundary = 0,
-    SentenceBoundary = 1,
-    BookmarkReached = 2,
-    Log = 3,
-    Unknown = 4
-};
-
-
 struct RequestToken
 {
     uint64_t speakId = 0;

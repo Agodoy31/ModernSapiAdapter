@@ -148,13 +148,20 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
         GetTickCount64(), GetTickCount64() - speakMutexWaitStart);
 #endif
 
+    const uint64_t speakId = ++m_speakIdCounter;
     {
         std::lock_guard<std::mutex> lock(m_siteMutex);
         m_cpSite.copy_from(pOutputSite);
+        m_activeSpeakId = speakId;
     }
-    auto siteCleanup = wil::scope_exit([this] {
+    auto siteCleanup = wil::scope_exit([this, speakId]
+    {
         std::lock_guard<std::mutex> lock(m_siteMutex);
-        m_cpSite = nullptr;
+        if (m_activeSpeakId == speakId)
+        {
+            m_cpSite = nullptr;
+            m_activeSpeakId = 0;
+        }
     });
 
     SpeechWorker* worker = nullptr;
@@ -184,7 +191,6 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
         voiceId = m_config.voiceId;
     }
 
-    uint64_t speakId = ++m_speakIdCounter;
     nlohmann::json speakReq = {
         {"command", "sapi_speak"},
         {"speak_id", speakId}
@@ -289,45 +295,9 @@ uint64_t CSapiEngine::AudioOffsetMsToBytes(uint32_t audioMs) const
 
 
 
-SapiSpeechEventType CSapiEngine::ParseSpeechEventType(std::string_view name) noexcept
+void CSapiEngine::DispatchBoundaryEvent(ISpTTSEngineSite* site, const ProviderControlEvent& event, SPEVENTENUM eventId)
 {
-    if (name == "word_boundary")
-    {
-        return SapiSpeechEventType::WordBoundary;
-    }
-    if (name == "sentence_boundary")
-    {
-        return SapiSpeechEventType::SentenceBoundary;
-    }
-    if (name == "bookmark_reached")
-    {
-        return SapiSpeechEventType::BookmarkReached;
-    }
-    if (name == "log")
-    {
-        return SapiSpeechEventType::Log;
-    }
-    return SapiSpeechEventType::Unknown;
-}
-
-void CSapiEngine::DispatchBoundaryEvent(const nlohmann::json& json, SPEVENTENUM eventId)
-{
-    winrt::com_ptr<ISpTTSEngineSite> site;
-    {
-        std::lock_guard<std::mutex> lock(m_siteMutex);
-        if (!m_cpSite)
-        {
-            return;
-        }
-        site = m_cpSite;
-    }
-
-    uint32_t audioMs = 0;
-    uint32_t textOffset = 0;
-    uint32_t textLength = 0;
-    if (!json.contains("audio_offset_ms") || !TryGetJsonUnsignedInteger(json["audio_offset_ms"], audioMs) ||
-        !json.contains("text_offset") || !TryGetJsonUnsignedInteger(json["text_offset"], textOffset) ||
-        !json.contains("text_length") || !TryGetJsonUnsignedInteger(json["text_length"], textLength))
+    if (!site || !event.hasValidSpeechOffsets)
     {
         return;
     }
@@ -335,114 +305,112 @@ void CSapiEngine::DispatchBoundaryEvent(const nlohmann::json& json, SPEVENTENUM 
     SPEVENT spEvent = {};
     spEvent.eEventId = eventId;
     spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
-    spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
-    spEvent.wParam = static_cast<WPARAM>(textLength);
-    spEvent.lParam = static_cast<LPARAM>(textOffset);
+    spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(event.speechOffsets.audioOffsetMs);
+    spEvent.wParam = static_cast<WPARAM>(event.speechOffsets.textLength);
+    spEvent.lParam = static_cast<LPARAM>(event.speechOffsets.textOffset);
 
     site->AddEvents(&spEvent, 1);
 }
 
-void CSapiEngine::DispatchBookmarkEvent(const nlohmann::json& json)
+void CSapiEngine::DispatchBookmarkEvent(ISpTTSEngineSite* site, const ProviderControlEvent& event)
 {
-    winrt::com_ptr<ISpTTSEngineSite> site;
-    {
-        std::lock_guard<std::mutex> lock(m_siteMutex);
-        if (!m_cpSite)
-        {
-            return;
-        }
-        site = m_cpSite;
-    }
-
-    uint32_t audioMs = 0;
-    if (!json.contains("audio_offset_ms") || !TryGetJsonUnsignedInteger(json["audio_offset_ms"], audioMs))
+    if (!site || !event.hasValidSpeechOffsets)
     {
         return;
     }
 
     SPEVENT spEvent = {};
     spEvent.eEventId = SPEI_TTS_BOOKMARK;
-    spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(audioMs);
+    spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(event.speechOffsets.audioOffsetMs);
     spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
 
-    if (json.contains("bookmark_name") && json["bookmark_name"].is_string())
+    if (!event.bookmarkName.empty())
     {
-        const auto bNameStr = json["bookmark_name"].get<std::string>();
-        if (!bNameStr.empty())
+        wil::unique_cotaskmem_string pStr = StringUtils::Utf8ToCoTaskMemWide(event.bookmarkName);
+        if (pStr)
         {
-            wil::unique_cotaskmem_string pStr = StringUtils::Utf8ToCoTaskMemWide(bNameStr);
-            if (pStr)
-            {
-                spEvent.elParamType = SPET_LPARAM_IS_STRING;
-                spEvent.wParam = static_cast<WPARAM>(_wtol(pStr.get()));
-                spEvent.lParam = reinterpret_cast<LPARAM>(pStr.release());
-            }
+            spEvent.elParamType = SPET_LPARAM_IS_STRING;
+            spEvent.wParam = static_cast<WPARAM>(_wtol(pStr.get()));
+            spEvent.lParam = reinterpret_cast<LPARAM>(pStr.release());
         }
     }
 
     site->AddEvents(&spEvent, 1);
 }
 
-void CSapiEngine::DispatchLogEvent(const nlohmann::json& json)
+void CSapiEngine::DispatchLogEvent(const ProviderControlEvent& event)
 {
-    auto getUtf16String = [](const nlohmann::json& j, const char* key, const wchar_t* defaultVal) -> std::wstring
+    auto toUtf16 = [](std::string_view sv, const wchar_t* defaultVal) -> std::wstring
     {
-        if (!j.contains(key) || !j[key].is_string())
+        if (sv.empty())
         {
             return defaultVal;
         }
-        const std::string s = j[key].get<std::string>();
-        const std::wstring w = StringUtils::Utf8ToWide(s);
+        const std::wstring w = StringUtils::Utf8ToWide(sv);
         return w.empty() ? defaultVal : w;
     };
 
-    const std::wstring msg = getUtf16String(json, "message", L"Unknown log");
-    const std::wstring severity = getUtf16String(json, "severity", L"error");
-    const std::wstring friendly = getUtf16String(json, "friendly_text", L"");
+    const std::wstring msg = toUtf16(event.logMessage, L"Unknown log");
+    const std::wstring severity = toUtf16(event.logSeverity, L"error");
+    const std::wstring friendly = toUtf16(event.logFriendlyText, L"");
 
     CoreLog(L"[CoreEngine] Provider error (%s): %s %s", severity.c_str(), msg.c_str(), friendly.c_str());
 }
 
-void CSapiEngine::OnSpeechEvent(const nlohmann::json& eventJson) try
+void CSapiEngine::OnSpeechEvent(const ProviderControlEvent& event) try
 {
-    if (!eventJson.contains("event") || !eventJson["event"].is_string())
+    if (event.speakId == 0)
     {
         return;
     }
 
-    if (eventJson.contains("speak_id"))
+    winrt::com_ptr<ISpTTSEngineSite> site;
     {
-        uint64_t eventSpeakId = 0;
-        if (!TryGetJsonUnsignedInteger(eventJson["speak_id"], eventSpeakId))
+        std::lock_guard<std::mutex> lock(m_siteMutex);
+        if (event.speakId != m_activeSpeakId)
         {
             return;
         }
-        if (eventSpeakId != m_speakIdCounter.load())
+        if (event.IsSpeechBoundary())
         {
-            return; // Drop stale event
+            if (!m_cpSite)
+            {
+                return;
+            }
+            site = m_cpSite;
         }
     }
 
-    const std::string_view eventStr = eventJson["event"].get<std::string_view>();
-    const SapiSpeechEventType eventType = ParseSpeechEventType(eventStr);
-
-    switch (eventType)
+    switch (event.type)
     {
-    case SapiSpeechEventType::WordBoundary:
-        DispatchBoundaryEvent(eventJson, SPEI_WORD_BOUNDARY);
+    case ProviderEventType::WordBoundary:
+    {
+        DispatchBoundaryEvent(site.get(), event, SPEI_WORD_BOUNDARY);
         break;
-    case SapiSpeechEventType::SentenceBoundary:
-        DispatchBoundaryEvent(eventJson, SPEI_SENTENCE_BOUNDARY);
+    }
+    case ProviderEventType::SentenceBoundary:
+    {
+        DispatchBoundaryEvent(site.get(), event, SPEI_SENTENCE_BOUNDARY);
         break;
-    case SapiSpeechEventType::BookmarkReached:
-        DispatchBookmarkEvent(eventJson);
+    }
+    case ProviderEventType::Bookmark:
+    {
+        DispatchBookmarkEvent(site.get(), event);
         break;
-    case SapiSpeechEventType::Log:
-        DispatchLogEvent(eventJson);
+    }
+    case ProviderEventType::Log:
+    {
+        DispatchLogEvent(event);
         break;
-    case SapiSpeechEventType::Unknown:
+    }
+    case ProviderEventType::SynthesisComplete:
+    case ProviderEventType::SynthesisCancelled:
+    case ProviderEventType::LegacyCompleted:
+    case ProviderEventType::Unknown:
     default:
+    {
         break;
+    }
     }
 }
 catch (...)

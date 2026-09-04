@@ -23,6 +23,7 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
     std::atomic<DWORD> writeDelayMs = 0;
     std::atomic<DWORD> actions = SPVES_CONTINUE;
     std::function<DWORD()> getActionsCallback;
+    std::function<void(const SPEVENT*, ULONG)> onAddEvents;
     std::mutex eventsMutex;
     std::vector<SPEVENT> receivedEvents;
     std::mutex writesMutex;
@@ -70,6 +71,10 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
 
     IFACEMETHODIMP AddEvents(const SPEVENT *pEventArray, ULONG ulCount) noexcept override
     {
+        if (onAddEvents)
+        {
+            onAddEvents(pEventArray, ulCount);
+        }
         std::lock_guard<std::mutex> lock(eventsMutex);
         if (pEventArray && ulCount > 0)
         {
