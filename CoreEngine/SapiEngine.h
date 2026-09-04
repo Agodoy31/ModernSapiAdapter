@@ -152,6 +152,7 @@ private:
     void DispatchLogEvent(const ProviderControlEvent& event);
 
     [[nodiscard]] static bool IsValidInfoResponse(const nlohmann::json& response) noexcept;
+    [[nodiscard]] static std::string GetFragmentUtf8Text(const SPVTEXTFRAG* fragment);
 
 public:
     [[nodiscard]] static nlohmann::json SerializeFragmentsToJson(const SPVTEXTFRAG* pFragList);

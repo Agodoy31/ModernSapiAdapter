@@ -128,3 +128,185 @@ TEST(SapiFragmentSerializationTests, ExplicitLengthFragmentWithEmbeddedNullSeria
     ASSERT_EQ(result.size(), 1u);
     EXPECT_EQ(result[0]["text"], std::string("Hello\0World", 11));
 }
+
+TEST(SapiFragmentSerializationTests, NullTextPointerBookmarkSerializesToNull)
+{
+    SPVTEXTFRAG frag{};
+    frag.State.eAction = SPVA_Bookmark;
+    frag.pTextStart = nullptr;
+    frag.ulTextLen = 10;
+    frag.pNext = nullptr;
+
+    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    ASSERT_TRUE(result.is_array());
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_TRUE(result[0].is_null());
+}
+
+TEST(SapiFragmentSerializationTests, NullTextPointerSpeakSerializesProsodyWithoutTextOrOffset)
+{
+    SPVTEXTFRAG frag{};
+    frag.State.eAction = SPVA_Speak;
+    frag.pTextStart = nullptr;
+    frag.ulTextLen = 10;
+    frag.ulTextSrcOffset = 42;
+    frag.State.Volume = 75;
+    frag.State.PitchAdj.MiddleAdj = -2;
+    frag.State.RateAdj = 3;
+    frag.pNext = nullptr;
+
+    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    ASSERT_TRUE(result.is_array());
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_FALSE(result[0].contains("text"));
+    EXPECT_FALSE(result[0].contains("source_offset"));
+    EXPECT_EQ(result[0]["volume"], 75);
+    EXPECT_EQ(result[0]["pitch"], -2);
+    EXPECT_EQ(result[0]["rate"], 3);
+}
+
+TEST(SapiFragmentSerializationTests, ZeroTextLengthBookmarkSerializesToNull)
+{
+    const wchar_t bookmarkText[] = L"bookmark_zero";
+    SPVTEXTFRAG frag{};
+    frag.State.eAction = SPVA_Bookmark;
+    frag.pTextStart = bookmarkText;
+    frag.ulTextLen = 0;
+    frag.pNext = nullptr;
+
+    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    ASSERT_TRUE(result.is_array());
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_TRUE(result[0].is_null());
+}
+
+TEST(SapiFragmentSerializationTests, ZeroTextLengthSpeakSerializesProsodyWithoutTextOrOffset)
+{
+    const wchar_t speechText[] = L"Ignored text";
+    SPVTEXTFRAG frag{};
+    frag.State.eAction = SPVA_Speak;
+    frag.pTextStart = speechText;
+    frag.ulTextLen = 0;
+    frag.ulTextSrcOffset = 15;
+    frag.State.Volume = 90;
+    frag.State.PitchAdj.MiddleAdj = 1;
+    frag.State.RateAdj = -1;
+    frag.pNext = nullptr;
+
+    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    ASSERT_TRUE(result.is_array());
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_FALSE(result[0].contains("text"));
+    EXPECT_FALSE(result[0].contains("source_offset"));
+    EXPECT_EQ(result[0]["volume"], 90);
+    EXPECT_EQ(result[0]["pitch"], 1);
+    EXPECT_EQ(result[0]["rate"], -1);
+}
+
+TEST(SapiFragmentSerializationTests, PronounceActionSerializesTextOffsetsAndProsody)
+{
+    const wchar_t text[] = L"PronounceMe";
+    SPVTEXTFRAG frag{};
+    frag.State.eAction = SPVA_Pronounce;
+    frag.pTextStart = text;
+    frag.ulTextLen = static_cast<ULONG>(wcslen(text));
+    frag.ulTextSrcOffset = 10;
+    frag.State.Volume = 85;
+    frag.State.PitchAdj.MiddleAdj = 2;
+    frag.State.RateAdj = 1;
+    frag.pNext = nullptr;
+
+    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    ASSERT_TRUE(result.is_array());
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0]["text"], "PronounceMe");
+    EXPECT_EQ(result[0]["source_offset"], 10u);
+    EXPECT_EQ(result[0]["volume"], 85);
+    EXPECT_EQ(result[0]["pitch"], 2);
+    EXPECT_EQ(result[0]["rate"], 1);
+}
+
+TEST(SapiFragmentSerializationTests, SpellOutActionSerializesTextOffsetsAndProsody)
+{
+    const wchar_t text[] = L"SpellOutMe";
+    SPVTEXTFRAG frag{};
+    frag.State.eAction = SPVA_SpellOut;
+    frag.pTextStart = text;
+    frag.ulTextLen = static_cast<ULONG>(wcslen(text));
+    frag.ulTextSrcOffset = 20;
+    frag.State.Volume = 70;
+    frag.State.PitchAdj.MiddleAdj = 0;
+    frag.State.RateAdj = -2;
+    frag.pNext = nullptr;
+
+    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    ASSERT_TRUE(result.is_array());
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0]["text"], "SpellOutMe");
+    EXPECT_EQ(result[0]["source_offset"], 20u);
+    EXPECT_EQ(result[0]["volume"], 70);
+    EXPECT_EQ(result[0]["pitch"], 0);
+    EXPECT_EQ(result[0]["rate"], -2);
+}
+
+TEST(SapiFragmentSerializationTests, SectionActionSerializesTextOffsetsAndProsody)
+{
+    const wchar_t text[] = L"SectionHeading";
+    SPVTEXTFRAG frag{};
+    frag.State.eAction = SPVA_Section;
+    frag.pTextStart = text;
+    frag.ulTextLen = static_cast<ULONG>(wcslen(text));
+    frag.ulTextSrcOffset = 30;
+    frag.State.Volume = 95;
+    frag.State.PitchAdj.MiddleAdj = 4;
+    frag.State.RateAdj = 0;
+    frag.pNext = nullptr;
+
+    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    ASSERT_TRUE(result.is_array());
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0]["text"], "SectionHeading");
+    EXPECT_EQ(result[0]["source_offset"], 30u);
+    EXPECT_EQ(result[0]["volume"], 95);
+    EXPECT_EQ(result[0]["pitch"], 4);
+    EXPECT_EQ(result[0]["rate"], 0);
+}
+
+TEST(SapiFragmentSerializationTests, ParseUnknownTagActionSerializesTextOffsetsAndProsody)
+{
+    const wchar_t text[] = L"<custom-tag>";
+    SPVTEXTFRAG frag{};
+    frag.State.eAction = SPVA_ParseUnknownTag;
+    frag.pTextStart = text;
+    frag.ulTextLen = static_cast<ULONG>(wcslen(text));
+    frag.ulTextSrcOffset = 40;
+    frag.State.Volume = 60;
+    frag.State.PitchAdj.MiddleAdj = -3;
+    frag.State.RateAdj = 2;
+    frag.pNext = nullptr;
+
+    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    ASSERT_TRUE(result.is_array());
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0]["text"], "<custom-tag>");
+    EXPECT_EQ(result[0]["source_offset"], 40u);
+    EXPECT_EQ(result[0]["volume"], 60);
+    EXPECT_EQ(result[0]["pitch"], -3);
+    EXPECT_EQ(result[0]["rate"], 2);
+}
+
+TEST(SapiFragmentSerializationTests, UnsupportedActionSerializesToNull)
+{
+    const wchar_t text[] = L"Ignored";
+    SPVTEXTFRAG frag{};
+    frag.State.eAction = static_cast<SPVACTIONS>(999);
+    frag.pTextStart = text;
+    frag.ulTextLen = static_cast<ULONG>(wcslen(text));
+    frag.ulTextSrcOffset = 50;
+    frag.pNext = nullptr;
+
+    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    ASSERT_TRUE(result.is_array());
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_TRUE(result[0].is_null());
+}

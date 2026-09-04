@@ -555,6 +555,16 @@ void CSapiEngine::RetireFaultedSessionLocked()
     m_pClient.reset();
 }
 
+std::string CSapiEngine::GetFragmentUtf8Text(const SPVTEXTFRAG* fragment)
+{
+    if (!fragment || !fragment->pTextStart || fragment->ulTextLen == 0)
+    {
+        return std::string{};
+    }
+
+    return StringUtils::WideToUtf8(fragment->pTextStart, fragment->ulTextLen);
+}
+
 nlohmann::json CSapiEngine::SerializeFragmentsToJson(const SPVTEXTFRAG* pFragList)
 {
     nlohmann::json fragments = nlohmann::json::array();
@@ -567,13 +577,10 @@ nlohmann::json CSapiEngine::SerializeFragmentsToJson(const SPVTEXTFRAG* pFragLis
         {
         case SPVA_Bookmark:
         {
-            if (pFrag->pTextStart && pFrag->ulTextLen > 0)
+            const std::string bookmarkText = GetFragmentUtf8Text(pFrag);
+            if (!bookmarkText.empty())
             {
-                std::string textStr = StringUtils::WideToUtf8(pFrag->pTextStart, pFrag->ulTextLen);
-                if (!textStr.empty())
-                {
-                    fragJson["bookmark"] = textStr;
-                }
+                fragJson["bookmark"] = bookmarkText;
             }
             break;
         }
@@ -590,18 +597,20 @@ nlohmann::json CSapiEngine::SerializeFragmentsToJson(const SPVTEXTFRAG* pFragLis
         case SPVA_Section:
         case SPVA_ParseUnknownTag:
         {
-            if (pFrag->pTextStart && pFrag->ulTextLen > 0)
+            const std::string speechText = GetFragmentUtf8Text(pFrag);
+            if (!speechText.empty())
             {
-                std::string textStr = StringUtils::WideToUtf8(pFrag->pTextStart, pFrag->ulTextLen);
-                if (!textStr.empty())
-                {
-                    fragJson["text"] = textStr;
-                    fragJson["source_offset"] = pFrag->ulTextSrcOffset;
-                }
+                fragJson["text"] = speechText;
+                fragJson["source_offset"] = pFrag->ulTextSrcOffset;
             }
             fragJson["volume"] = pFrag->State.Volume;
             fragJson["pitch"] = pFrag->State.PitchAdj.MiddleAdj;
             fragJson["rate"] = pFrag->State.RateAdj;
+            break;
+        }
+
+        default:
+        {
             break;
         }
         }
