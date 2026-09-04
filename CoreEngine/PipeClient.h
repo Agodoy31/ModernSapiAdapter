@@ -61,7 +61,10 @@ public:
      * @param[out] bytesRead Output count of bytes read.
      * @return S_OK on success, or HRESULT error code on failure.
      */
-    HRESULT ReadAudioChunk(std::vector<uint8_t>& buffer, DWORD& bytesRead);
+    HRESULT ReadAudioChunk(
+        std::vector<uint8_t>& buffer,
+        DWORD& bytesRead,
+        DWORD timeoutMs = INFINITE);
 
     /**
      * @brief Cancels pending overlapped I/O operations on Control and Audio pipes.

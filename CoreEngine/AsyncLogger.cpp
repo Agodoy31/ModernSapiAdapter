@@ -3,11 +3,26 @@
 
 #ifdef _DEBUG
 
+#if defined(COREENGINE_TESTING)
+static std::wstring g_testLogFilePath;
+
+void AsyncLogger::SetLogFilePathForTesting(const std::wstring& path) noexcept
+{
+    g_testLogFilePath = path;
+}
+#endif
+
 namespace
 {
 
 [[nodiscard]] std::wstring ResolveLogFilePath()
 {
+#if defined(COREENGINE_TESTING)
+    if (!g_testLogFilePath.empty())
+    {
+        return g_testLogFilePath;
+    }
+#endif
     wil::unique_cotaskmem_string appDataPath;
     if (FAILED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appDataPath)))
     {

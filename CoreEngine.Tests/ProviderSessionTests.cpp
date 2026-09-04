@@ -18,7 +18,7 @@ TEST_F(SapiEngineTests, SetObjectTokenConnectsToPipeAndQueriesInfo)
     const auto elapsed = std::chrono::steady_clock::now() - start;
 
     EXPECT_EQ(hr, S_OK);
-    EXPECT_LT(elapsed, std::chrono::seconds(3));
+    EXPECT_LT(elapsed, std::chrono::seconds(1));
 
     GUID formatId = {};
     WAVEFORMATEX *pWaveFormat = nullptr;
@@ -217,18 +217,13 @@ TEST_F(SapiEngineTests, FailedSpeakDispatchQuarantinesSessionAndNextSpeakRecover
 
 TEST_F(SapiEngineTests, IdleProviderRemainsUsableBeyondTheActiveRequestDeadline)
 {
-    ControlPipeTestServer server;
-    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
-
-    PipeClient client;
-    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
-    auto engine = winrt::make_self<CSapiEngine>();
-    SpeechWorker worker(engine.get(), &client, 2);
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
 
     Sleep(1700);
 
-    ASSERT_TRUE(worker.Start(33));
-    ASSERT_TRUE(server.WriteControl("{\"event\":\"synthesis_complete\",\"speak_id\":33,\"total_audio_bytes\":0}\n"));
-    EXPECT_EQ(worker.WaitUntilFinished(nullptr), S_OK);
-    EXPECT_FALSE(worker.IsFaulted());
+    ASSERT_TRUE(fixture.Start(33));
+    ASSERT_TRUE(fixture.server.WriteControl("{\"event\":\"synthesis_complete\",\"speak_id\":33,\"total_audio_bytes\":0}\n"));
+    EXPECT_EQ(fixture.worker->WaitUntilFinished(nullptr), S_OK);
+    EXPECT_FALSE(fixture.worker->IsFaulted());
 }

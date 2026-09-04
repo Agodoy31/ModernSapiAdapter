@@ -900,7 +900,13 @@ void SpeechWorker::AudioThreadProc()
     while (!m_exit.load())
     {
         DWORD bytesRead = 0;
-        HRESULT hr = m_pClient->ReadAudioChunk(buffer, bytesRead);
+        constexpr DWORD audioPollIntervalMs = 250;
+        HRESULT hr = m_pClient->ReadAudioChunk(buffer, bytesRead, audioPollIntervalMs);
+        if (hr == HRESULT_FROM_WIN32(ERROR_TIMEOUT))
+        {
+            continue;
+        }
+
         if (FAILED(hr))
         {
             if (m_exit.load())
@@ -1059,10 +1065,22 @@ bool SpeechWorker::HandleLogEventLocked(
 void SpeechWorker::ControlThreadProc()
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    auto apartmentCleanup = wil::scope_exit(
+        []
+        {
+            winrt::uninit_apartment();
+        });
+
     while (!m_exit.load())
     {
         nlohmann::json json;
-        HRESULT hr = m_pClient->ReadControlMessage(json);
+        constexpr DWORD controlPollIntervalMs = 250;
+        HRESULT hr = m_pClient->ReadControlMessage(json, controlPollIntervalMs);
+        if (hr == HRESULT_FROM_WIN32(ERROR_TIMEOUT))
+        {
+            continue;
+        }
+
         if (FAILED(hr))
         {
             if (m_exit.load())

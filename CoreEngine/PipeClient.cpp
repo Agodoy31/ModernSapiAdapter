@@ -88,7 +88,7 @@ HRESULT PipeClient::LaunchProviderProcess(const std::wstring& exePath)
 
 HRESULT PipeClient::Connect(const std::wstring& pipeName, const std::wstring& exePath)
 {
-    constexpr ULONGLONG pipeReadyTimeoutMs = 3000;
+    constexpr ULONGLONG pipeReadyTimeoutMs = 1000;
     constexpr DWORD pipeProbeIntervalMs = 10;
 
     m_controlBuffer.Clear();
@@ -386,7 +386,10 @@ HRESULT PipeClient::ReadControlMessageUtf8(
 
 
 
-HRESULT PipeClient::ReadAudioChunk(std::vector<uint8_t>& buffer, DWORD& bytesRead)
+HRESULT PipeClient::ReadAudioChunk(
+    std::vector<uint8_t>& buffer,
+    DWORD& bytesRead,
+    DWORD timeoutMs)
 {
     if (!m_audioPipe)
     {
@@ -410,12 +413,7 @@ HRESULT PipeClient::ReadAudioChunk(std::vector<uint8_t>& buffer, DWORD& bytesRea
         return HRESULT_FROM_WIN32(GetLastError());
     }
 
-    if (!GetOverlappedResult(m_audioPipe.get(), &overlapped, &bytesRead, TRUE))
-    {
-        return HRESULT_FROM_WIN32(GetLastError());
-    }
-
-    return S_OK;
+    return CompleteOverlappedOperation(m_audioPipe.get(), overlapped, bytesRead, timeoutMs);
 }
 
 void PipeClient::Cancel()

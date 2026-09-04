@@ -7,14 +7,10 @@ namespace
 
 [[nodiscard]] std::filesystem::path CoreEngineLogPath()
 {
-    PWSTR roamingPath = nullptr;
-    if (FAILED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &roamingPath)))
-    {
-        return {};
-    }
-
-    const std::filesystem::path path = std::filesystem::path(roamingPath) / L"ModernSapiAdapter" / L"CoreEngine.log";
-    CoTaskMemFree(roamingPath);
+    static const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                              (L"ModernSapiAdapter_AsyncLoggerTest_" +
+                                               std::to_wstring(GetCurrentProcessId()) + L".log");
+    AsyncLoggerTestAccess::SetLogFilePath(path.wstring());
     return path;
 }
 
@@ -75,7 +71,16 @@ namespace
 
 } // namespace
 
-TEST(AsyncLoggerTests, ShutdownDrainsEveryAcceptedMessage)
+class AsyncLoggerTests : public ::testing::Test
+{
+  protected:
+    void SetUp() override
+    {
+        AsyncLoggerTestAccess::SetLogFilePath(CoreEngineLogPath().wstring());
+    }
+};
+
+TEST_F(AsyncLoggerTests, ShutdownDrainsEveryAcceptedMessage)
 {
     auto *logger = AsyncLogger::GetInstance();
     ASSERT_NE(nullptr, logger);
@@ -91,7 +96,7 @@ TEST(AsyncLoggerTests, ShutdownDrainsEveryAcceptedMessage)
     EXPECT_NE(logTail.find(MarkerBytes(second)), std::string::npos);
 }
 
-TEST(AsyncLoggerTests, ConcurrentShutdownCallsAreIdempotent)
+TEST_F(AsyncLoggerTests, ConcurrentShutdownCallsAreIdempotent)
 {
     auto *logger = AsyncLogger::GetInstance();
     ASSERT_NE(nullptr, logger);
@@ -144,7 +149,7 @@ TEST(AsyncLoggerTests, ConcurrentShutdownCallsAreIdempotent)
     EXPECT_TRUE(secondShutdownSucceeded.load(std::memory_order_acquire));
 }
 
-TEST(AsyncLoggerTests, ShutdownDrainsMessagesFromConcurrentProducers)
+TEST_F(AsyncLoggerTests, ShutdownDrainsMessagesFromConcurrentProducers)
 {
     constexpr size_t producerCount = 4;
     constexpr size_t messagesPerProducer = 8;
@@ -196,7 +201,7 @@ TEST(AsyncLoggerTests, ShutdownDrainsMessagesFromConcurrentProducers)
     }
 }
 
-TEST(AsyncLoggerTests, LoggingAfterShutdownStartsANewSession)
+TEST_F(AsyncLoggerTests, LoggingAfterShutdownStartsANewSession)
 {
     auto *logger = AsyncLogger::GetInstance();
     ASSERT_NE(nullptr, logger);
@@ -210,7 +215,7 @@ TEST(AsyncLoggerTests, LoggingAfterShutdownStartsANewSession)
     EXPECT_NE(logTail.find(MarkerBytes(marker)), std::string::npos);
 }
 
-TEST(AsyncLoggerTests, QuiescenceRejectsNewMessagesUntilAnUnloadRejectionResumesIt)
+TEST_F(AsyncLoggerTests, QuiescenceRejectsNewMessagesUntilAnUnloadRejectionResumesIt)
 {
     auto *logger = AsyncLogger::GetInstance();
     ASSERT_NE(nullptr, logger);
@@ -248,7 +253,7 @@ TEST(AsyncLoggerTests, QuiescenceRejectsNewMessagesUntilAnUnloadRejectionResumes
     EXPECT_TRUE(ContainsMarker(writtenMessages, acceptedAfterResume));
 }
 
-TEST(AsyncLoggerTests, QuiescenceTimeoutReturnsFalseWithoutAbandoningTheWorker)
+TEST_F(AsyncLoggerTests, QuiescenceTimeoutReturnsFalseWithoutAbandoningTheWorker)
 {
     auto *logger = AsyncLogger::GetInstance();
     ASSERT_NE(nullptr, logger);
