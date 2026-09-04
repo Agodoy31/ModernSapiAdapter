@@ -181,7 +181,7 @@ private:
     std::atomic_bool m_exit;                 /**< Flag indicating worker shutdown. */
     std::atomic<ULONGLONG> m_lastProviderProgressTick{0}; /**< Monotonic tick of active-request PCM or control progress. */
     mutable std::mutex m_requestMutex;       /**< Serializes request lifecycle state across audio and control threads. */
-    std::mutex m_eventForwardMutex;          /**< Admission gate serializing event callbacks with Faulted publication. */
+    std::mutex m_eventForwardMutex;          /**< Admission gate serializing event admission with fault publication; no longer serializes callbacks and is never held during OnSpeechEvent/AddEvents. */
     std::atomic_bool m_faultPublicationStarted{false}; /**< Ensures concurrent pipe failures publish quarantine once. */
     std::atomic_bool m_faultVisible{false};  /**< Prevents new SAPI event callbacks once a fault is visible. */
     std::condition_variable m_requestChanged;/**< Wakes synchronous Speak and purge callers at terminal boundaries. */

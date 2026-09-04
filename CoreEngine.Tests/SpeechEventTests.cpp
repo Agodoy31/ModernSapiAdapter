@@ -426,11 +426,23 @@ TEST_F(SapiEngineTests, AddEventsBlockingDoesNotDelayWorkerFaultPublication)
 
     wil::unique_event addEventsEntered(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     wil::unique_event releaseAddEvents(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    wil::unique_event faultCompleted(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+
+    std::thread faultThread;
+    auto cleanup = wil::scope_exit(
+        [&]
+        {
+            SetEvent(releaseAddEvents.get());
+            if (faultThread.joinable())
+            {
+                faultThread.join();
+            }
+        });
 
     fixture.mockSite->onAddEvents = [&](const SPEVENT*, ULONG)
     {
         SetEvent(addEventsEntered.get());
-        WaitForSingleObject(releaseAddEvents.get(), 5000);
+        WaitForSingleObject(releaseAddEvents.get(), INFINITE);
     };
 
     ASSERT_TRUE(fixture.server.WriteControl(
@@ -438,12 +450,24 @@ TEST_F(SapiEngineTests, AddEventsBlockingDoesNotDelayWorkerFaultPublication)
 
     ASSERT_EQ(WaitForSingleObject(addEventsEntered.get(), 2000), WAIT_OBJECT_0);
 
-    // EnterFaultedState must complete and publish m_faultVisible without waiting for AddEvents
-    fixture.worker->EnterFaultedState();
+    // Invoke EnterFaultedState on a separate guarded thread while AddEvents is still blocked
+    faultThread = std::thread(
+        [&]
+        {
+            fixture.worker->EnterFaultedState();
+            SetEvent(faultCompleted.get());
+        });
 
+    // EnterFaultedState must publish m_faultVisible and complete promptly without waiting for AddEvents
+    ASSERT_EQ(WaitForSingleObject(faultCompleted.get(), 2000), WAIT_OBJECT_0);
     EXPECT_TRUE(fixture.worker->m_faultVisible.load(std::memory_order_acquire));
 
+    // Release AddEvents and disconnect
     SetEvent(releaseAddEvents.get());
+    if (faultThread.joinable())
+    {
+        faultThread.join();
+    }
     fixture.server.Disconnect();
 }
 
