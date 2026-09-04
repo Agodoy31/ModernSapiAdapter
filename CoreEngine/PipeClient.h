@@ -71,6 +71,22 @@ public:
      */
     void Cancel();
 
+#if defined(COREENGINE_TESTING)
+    static HRESULT CompleteOverlappedOperationForTest(
+        HANDLE pipe,
+        OVERLAPPED& overlapped,
+        DWORD& bytesTransferred,
+        DWORD timeoutMs) noexcept
+    {
+        return CompleteOverlappedOperation(pipe, overlapped, bytesTransferred, timeoutMs);
+    }
+
+    [[nodiscard]] HANDLE ControlPipeHandleForTest() const noexcept
+    {
+        return m_controlPipe.get();
+    }
+#endif
+
 #if defined(_DEBUG)
     void FailNextCancellationMessageForTest();
     void FailNextSpeakMessageForTest();

@@ -16,7 +16,7 @@ public:
     using WriteCallback = std::function<void(const std::wstring&)>;
     void SetWriteCallbackForTesting(WriteCallback callback) noexcept;
     [[nodiscard]] bool WaitForWorkerStoppedForTesting(DWORD timeoutMs) noexcept;
-    static void SetLogFilePathForTesting(const std::wstring& path) noexcept;
+    static void SetLogFilePathForTesting(const std::wstring& path);
 #endif
 
     AsyncLogger(const AsyncLogger&) = delete;

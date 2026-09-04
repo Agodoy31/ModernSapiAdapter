@@ -52,6 +52,68 @@ TEST_F(SapiEngineTests, TimedOutControlReadCancelsItsOverlappedOperationBeforeRe
     EXPECT_EQ(response["response"], "info");
 }
 
+TEST_F(SapiEngineTests, CompleteOverlappedOperationPreservesBytesIfCompletedDuringCancellation)
+{
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+
+    char readBuffer[64] = {};
+    wil::unique_event readEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    ASSERT_TRUE(readEvent);
+    OVERLAPPED readOverlapped = {};
+    readOverlapped.hEvent = readEvent.get();
+
+    DWORD initialRead = 0;
+    BOOL readSuccess = ReadFile(client.ControlPipeHandleForTest(), readBuffer, sizeof(readBuffer), &initialRead, &readOverlapped);
+    if (!readSuccess)
+    {
+        ASSERT_EQ(GetLastError(), static_cast<DWORD>(ERROR_IO_PENDING));
+    }
+
+    const std::string payload = "synthesis_ready\n";
+    ASSERT_TRUE(server.WriteControl(payload));
+
+    DWORD transferred = 0;
+    const HRESULT hr = PipeClient::CompleteOverlappedOperationForTest(
+        client.ControlPipeHandleForTest(), readOverlapped, transferred, 0);
+
+    EXPECT_EQ(hr, S_OK);
+    EXPECT_EQ(transferred, payload.size());
+    EXPECT_EQ(std::string_view(readBuffer, transferred), payload);
+}
+
+TEST_F(SapiEngineTests, CompleteOverlappedOperationReturnsTimeoutWhenOperationTrulyCancelled)
+{
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+
+    char readBuffer[64] = {};
+    wil::unique_event readEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    ASSERT_TRUE(readEvent);
+    OVERLAPPED readOverlapped = {};
+    readOverlapped.hEvent = readEvent.get();
+
+    DWORD initialRead = 0;
+    BOOL readSuccess = ReadFile(client.ControlPipeHandleForTest(), readBuffer, sizeof(readBuffer), &initialRead, &readOverlapped);
+    if (!readSuccess)
+    {
+        ASSERT_EQ(GetLastError(), static_cast<DWORD>(ERROR_IO_PENDING));
+    }
+
+    DWORD transferred = 0;
+    const HRESULT hr = PipeClient::CompleteOverlappedOperationForTest(
+        client.ControlPipeHandleForTest(), readOverlapped, transferred, 20);
+
+    EXPECT_EQ(hr, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+    EXPECT_EQ(transferred, 0u);
+}
+
 TEST_F(SapiEngineTests, ControlRecordTimeoutCoversTheWholeFragmentedMessage)
 {
     ControlPipeTestServer server;

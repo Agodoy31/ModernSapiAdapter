@@ -6,7 +6,7 @@
 #if defined(COREENGINE_TESTING)
 static std::wstring g_testLogFilePath;
 
-void AsyncLogger::SetLogFilePathForTesting(const std::wstring& path) noexcept
+void AsyncLogger::SetLogFilePathForTesting(const std::wstring& path)
 {
     g_testLogFilePath = path;
 }

@@ -23,7 +23,7 @@ class AsyncLoggerTestAccess final
         return logger.WaitForWorkerStoppedForTesting(timeoutMs);
     }
 
-    static void SetLogFilePath(const std::wstring &path) noexcept
+    static void SetLogFilePath(const std::wstring &path)
     {
         AsyncLogger::SetLogFilePathForTesting(path);
     }

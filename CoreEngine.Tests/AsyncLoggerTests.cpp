@@ -78,6 +78,12 @@ class AsyncLoggerTests : public ::testing::Test
     {
         AsyncLoggerTestAccess::SetLogFilePath(CoreEngineLogPath().wstring());
     }
+
+    static void TearDownTestSuite()
+    {
+        std::error_code ec;
+        std::filesystem::remove(CoreEngineLogPath(), ec);
+    }
 };
 
 TEST_F(AsyncLoggerTests, ShutdownDrainsEveryAcceptedMessage)

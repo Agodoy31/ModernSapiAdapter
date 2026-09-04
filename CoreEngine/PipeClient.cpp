@@ -241,14 +241,19 @@ HRESULT PipeClient::CompleteOverlappedOperation(
         cancellationError = GetLastError();
     }
 
-    DWORD cancelledBytes = 0;
-    if (!GetOverlappedResult(pipe, &overlapped, &cancelledBytes, TRUE))
+    DWORD reapedBytes = 0;
+    if (GetOverlappedResult(pipe, &overlapped, &reapedBytes, TRUE))
     {
-        const DWORD reapError = GetLastError();
-        if (reapError != ERROR_OPERATION_ABORTED)
-        {
-            return HRESULT_FROM_WIN32(reapError);
-        }
+        // The operation completed successfully before or during cancellation.
+        // Return S_OK with the actual transferred bytes to prevent data loss.
+        bytesTransferred = reapedBytes;
+        return S_OK;
+    }
+
+    const DWORD reapError = GetLastError();
+    if (reapError != ERROR_OPERATION_ABORTED)
+    {
+        return HRESULT_FROM_WIN32(reapError);
     }
 
     if (cancellationError != ERROR_SUCCESS && cancellationError != ERROR_NOT_FOUND)
