@@ -181,6 +181,7 @@
     <ClInclude Include="SpeechEventTypes.h" />
     <ClInclude Include="SpeechWorkerTypes.h" />
     <ClInclude Include="SpeechProtocolUtils.h" />
+    <ClInclude Include="StringUtils.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AsyncLogger.cpp" />
@@ -194,6 +195,7 @@
     <ClCompile Include="PcmFrameAssembler.cpp" />
     <ClCompile Include="SapiEngine.cpp" />
     <ClCompile Include="SpeechWorker.cpp" />
+    <ClCompile Include="StringUtils.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Create</PrecompiledHeader>

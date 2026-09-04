@@ -143,6 +143,7 @@
     <ClCompile Include="RequestContextTests.cpp" />
     <ClCompile Include="SapiFragmentSerializationTests.cpp" />
     <ClCompile Include="ControlStreamBufferTests.cpp" />
+    <ClCompile Include="StringUtilsTests.cpp" />
 
     <ClCompile Include="..\CoreEngine\SapiEngine.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -173,6 +174,10 @@
       <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
     </ClCompile>
     <ClCompile Include="..\CoreEngine\DllEntryAdmission.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
+    </ClCompile>
+    <ClCompile Include="..\CoreEngine\StringUtils.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
     </ClCompile>
