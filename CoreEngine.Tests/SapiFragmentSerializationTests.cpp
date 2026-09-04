@@ -94,3 +94,38 @@ TEST(SapiFragmentSerializationTests, MultipleLinkedFragmentsPreserveSequence)
     EXPECT_EQ(result[1]["silence_ms"], 250u);
     EXPECT_EQ(result[2]["bookmark"], "mark");
 }
+
+TEST(SapiFragmentSerializationTests, NonAsciiTextFragmentSerializesCorrectly)
+{
+    const wchar_t speechText[] = L"\u3053\u3093\u306B\u3061\u306F\u4E16\u754C \xD83D\xDE00 caf\u00E9";
+    SPVTEXTFRAG frag{};
+    frag.State.eAction = SPVA_Speak;
+    frag.pTextStart = speechText;
+    frag.ulTextLen = static_cast<ULONG>(wcslen(speechText));
+    frag.ulTextSrcOffset = 0;
+    frag.State.Volume = 100;
+    frag.pNext = nullptr;
+
+    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    ASSERT_TRUE(result.is_array());
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0]["text"].get<std::string>(), "\xE3\x81\x93\xE3\x82\x93\xE3\x81\xAB\xE3\x81\xA1\xE3\x81\xAF\xE4\xB8\x96\xE7\x95\x8C \xF0\x9F\x98\x80 caf\xC3\xA9");
+}
+
+TEST(SapiFragmentSerializationTests, ExplicitLengthFragmentWithEmbeddedNullSerializesCorrectly)
+{
+    const wchar_t speechText[] = L"Hello\0World";
+    SPVTEXTFRAG frag{};
+    frag.State.eAction = SPVA_Speak;
+    frag.pTextStart = speechText;
+    frag.ulTextLen = 11;
+    frag.ulTextSrcOffset = 0;
+    frag.State.Volume = 100;
+    frag.pNext = nullptr;
+
+    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    ASSERT_TRUE(result.is_array());
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0]["text"], std::string("Hello\0World", 11));
+}
+

@@ -23,6 +23,7 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_OnSpeechEventMapsAndDispatchesToSite_Test;
     friend class SapiEngineTests_OnSpeechEventMapsSentenceBoundaryToSite_Test;
     friend class SapiEngineTests_OnSpeechEventMapsBookmarkStringEventToSite_Test;
+    friend class SapiEngineTests_OnSpeechEventMapsBookmarkStringEventWithNonAsciiNameToSite_Test;
     friend class SapiEngineTests_OnSpeechEventPreservesLongAudioOffsets_Test;
     friend class SapiEngineTests_RejectedAudioWriteWithFailedCancellationQuarantinesWorker_Test;
     friend class SapiEngineTests_CreateProviderSessionDoesNotPublishAnInvalidInfoResponse_Test;

@@ -136,6 +136,33 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsBookmarkStringEventToSite)
     CoTaskMemFree(reinterpret_cast<void *>(received.lParam));
 }
 
+TEST_F(SapiEngineTests, OnSpeechEventMapsBookmarkStringEventWithNonAsciiNameToSite)
+{
+    auto engine = winrt::make_self<CSapiEngine>();
+    auto mockSite = winrt::make_self<MockSpTTSEngineSite>();
+    engine->m_cpSite.copy_from(mockSite.get());
+    engine->m_config.audioFormat = {WAVE_FORMAT_PCM, 1, 24000, 48000, 2, 16, 0};
+
+    nlohmann::json eventJson;
+    eventJson["event"] = "bookmark_reached";
+    eventJson["audio_offset_ms"] = 100u;
+    eventJson["bookmark_name"] = "42_ブックマーク_\xF0\x9F\x98\x80";
+
+    engine->OnSpeechEvent(eventJson);
+
+    std::lock_guard<std::mutex> lock(mockSite->eventsMutex);
+    ASSERT_EQ(mockSite->receivedEvents.size(), 1u);
+    const SPEVENT &received = mockSite->receivedEvents.front();
+    EXPECT_EQ(received.eEventId, SPEI_TTS_BOOKMARK);
+    EXPECT_EQ(received.elParamType, SPET_LPARAM_IS_STRING);
+    EXPECT_EQ(received.ullAudioStreamOffset, 4800u);
+    EXPECT_EQ(received.wParam, 42u);
+    ASSERT_NE(received.lParam, 0);
+    EXPECT_STREQ(reinterpret_cast<const wchar_t *>(received.lParam), L"42_\u30D6\u30C3\u30AF\u30DE\u30FC\u30AF_\xD83D\xDE00");
+    CoTaskMemFree(reinterpret_cast<void *>(received.lParam));
+}
+
+
 TEST_F(SapiEngineTests, MatchingProviderEventsKeepLongRequestAlive)
 {
     PipeServerWorkerFixture fixture;

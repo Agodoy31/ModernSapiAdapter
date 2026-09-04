@@ -2,30 +2,7 @@
 #include "SapiEngine.h"
 #include "AudioFormatUtils.h"
 #include "JsonValue.h"
-
-namespace {
-    std::string WideToUtf8(const wchar_t* wstr, size_t len) {
-        if (len == 0 || !wstr) return "";
-        std::string utf8(len * 3, '\0');
-        int written = WideCharToMultiByte(CP_UTF8, 0, wstr, static_cast<int>(len), utf8.data(), static_cast<int>(utf8.size()), nullptr, nullptr);
-        if (written > 0) {
-            utf8.resize(written);
-            return utf8;
-        }
-        return "";
-    }
-
-    std::wstring Utf8ToWide(const std::string& utf8Str) {
-        if (utf8Str.empty()) return L"";
-        std::wstring wide(utf8Str.size(), L'\0');
-        int written = MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), static_cast<int>(utf8Str.size()), wide.data(), static_cast<int>(wide.size()));
-        if (written > 0) {
-            wide.resize(written);
-            return wide;
-        }
-        return L"";
-    }
-}
+#include "StringUtils.h"
 
 CSapiEngine::CSapiEngine() = default;
 
@@ -214,7 +191,7 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
     };
     if (!voiceId.empty())
     {
-        std::string utf8VoiceId = WideToUtf8(voiceId.c_str(), voiceId.size());
+        std::string utf8VoiceId = StringUtils::WideToUtf8(voiceId);
         if (!utf8VoiceId.empty())
         {
             speakReq["voice_id"] = utf8VoiceId;
@@ -393,22 +370,12 @@ void CSapiEngine::DispatchBookmarkEvent(const nlohmann::json& json)
         const auto bNameStr = json["bookmark_name"].get<std::string>();
         if (!bNameStr.empty())
         {
-            wchar_t* pStr = static_cast<wchar_t*>(CoTaskMemAlloc((bNameStr.size() + 1) * sizeof(wchar_t)));
+            wil::unique_cotaskmem_string pStr = StringUtils::Utf8ToCoTaskMemWide(bNameStr);
             if (pStr)
             {
-                const int written = MultiByteToWideChar(
-                    CP_UTF8, 0, bNameStr.c_str(), static_cast<int>(bNameStr.size()), pStr, static_cast<int>(bNameStr.size()));
-                if (written > 0)
-                {
-                    pStr[written] = L'\0';
-                    spEvent.elParamType = SPET_LPARAM_IS_STRING;
-                    spEvent.wParam = static_cast<WPARAM>(_wtol(pStr));
-                    spEvent.lParam = reinterpret_cast<LPARAM>(pStr);
-                }
-                else
-                {
-                    CoTaskMemFree(pStr);
-                }
+                spEvent.elParamType = SPET_LPARAM_IS_STRING;
+                spEvent.wParam = static_cast<WPARAM>(_wtol(pStr.get()));
+                spEvent.lParam = reinterpret_cast<LPARAM>(pStr.release());
             }
         }
     }
@@ -418,13 +385,14 @@ void CSapiEngine::DispatchBookmarkEvent(const nlohmann::json& json)
 
 void CSapiEngine::DispatchLogEvent(const nlohmann::json& json)
 {
-    auto getUtf16String = [](const nlohmann::json& j, const char* key, const wchar_t* defaultVal) -> std::wstring {
+    auto getUtf16String = [](const nlohmann::json& j, const char* key, const wchar_t* defaultVal) -> std::wstring
+    {
         if (!j.contains(key) || !j[key].is_string())
         {
             return defaultVal;
         }
         const std::string s = j[key].get<std::string>();
-        const std::wstring w = Utf8ToWide(s);
+        const std::wstring w = StringUtils::Utf8ToWide(s);
         return w.empty() ? defaultVal : w;
     };
 
@@ -633,7 +601,7 @@ nlohmann::json CSapiEngine::SerializeFragmentsToJson(const SPVTEXTFRAG* pFragLis
         {
             if (pFrag->pTextStart && pFrag->ulTextLen > 0)
             {
-                std::string textStr = WideToUtf8(pFrag->pTextStart, pFrag->ulTextLen);
+                std::string textStr = StringUtils::WideToUtf8(pFrag->pTextStart, pFrag->ulTextLen);
                 if (!textStr.empty())
                 {
                     fragJson["bookmark"] = textStr;
@@ -656,7 +624,7 @@ nlohmann::json CSapiEngine::SerializeFragmentsToJson(const SPVTEXTFRAG* pFragLis
         {
             if (pFrag->pTextStart && pFrag->ulTextLen > 0)
             {
-                std::string textStr = WideToUtf8(pFrag->pTextStart, pFrag->ulTextLen);
+                std::string textStr = StringUtils::WideToUtf8(pFrag->pTextStart, pFrag->ulTextLen);
                 if (!textStr.empty())
                 {
                     fragJson["text"] = textStr;
