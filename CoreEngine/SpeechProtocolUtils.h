@@ -19,6 +19,7 @@
 #include <string_view>
 #include <nlohmann/json.hpp>
 
+#include "SpeechEventTypes.h"
 #include "SpeechWorkerTypes.h"
 #include "JsonValue.h"
 

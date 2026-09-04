@@ -178,6 +178,7 @@
     <ClInclude Include="SapiEngine.h" />
     <ClInclude Include="SpeechWorker.h" />
     <ClInclude Include="SpeechWorkerTestHooks.h" />
+    <ClInclude Include="SpeechEventTypes.h" />
     <ClInclude Include="SpeechWorkerTypes.h" />
     <ClInclude Include="SpeechProtocolUtils.h" />
   </ItemGroup>

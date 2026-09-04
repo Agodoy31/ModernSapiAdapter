@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "../CoreEngine/SpeechEventTypes.h"
 #include "../CoreEngine/SpeechProtocolUtils.h"
 #include "../CoreEngine/SpeechWorkerTypes.h"
 #include <limits>

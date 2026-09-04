@@ -52,6 +52,9 @@
     <ClInclude Include="SpeechWorkerTestHooks.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="SpeechEventTypes.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="SpeechWorkerTypes.h">
       <Filter>Header Files</Filter>
     </ClInclude>
