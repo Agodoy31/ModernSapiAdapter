@@ -6,11 +6,12 @@
 #endif
 #include <windows.h>
 #include <combaseapi.h>
+#include <cstddef>
 #include <limits>
 
 namespace StringUtils
 {
-    std::string WideToUtf8(const wchar_t* text, size_t length)
+    std::string WideToUtf8(const wchar_t* text, std::size_t length)
     {
         if (length == 0)
         {
@@ -22,7 +23,7 @@ namespace StringUtils
             return std::string{};
         }
 
-        if (length > static_cast<size_t>((std::numeric_limits<int>::max)()))
+        if (length > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
         {
             return std::string{};
         }
@@ -43,7 +44,7 @@ namespace StringUtils
             return std::string{};
         }
 
-        std::string utf8(static_cast<size_t>(requiredSize), '\0');
+        std::string utf8(static_cast<std::size_t>(requiredSize), '\0');
         const int converted = ::WideCharToMultiByte(
             CP_UTF8,
             0,
@@ -67,7 +68,7 @@ namespace StringUtils
         return WideToUtf8(text.data(), text.size());
     }
 
-    std::wstring Utf8ToWide(const char* text, size_t length)
+    std::wstring Utf8ToWide(const char* text, std::size_t length)
     {
         if (length == 0)
         {
@@ -79,7 +80,7 @@ namespace StringUtils
             return std::wstring{};
         }
 
-        if (length > static_cast<size_t>((std::numeric_limits<int>::max)()))
+        if (length > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
         {
             return std::wstring{};
         }
@@ -98,7 +99,7 @@ namespace StringUtils
             return std::wstring{};
         }
 
-        std::wstring wide(static_cast<size_t>(requiredSize), L'\0');
+        std::wstring wide(static_cast<std::size_t>(requiredSize), L'\0');
         const int converted = ::MultiByteToWideChar(
             CP_UTF8,
             0,
@@ -122,7 +123,7 @@ namespace StringUtils
 
     wil::unique_cotaskmem_string Utf8ToCoTaskMemWide(std::string_view text)
     {
-        if (text.size() > static_cast<size_t>((std::numeric_limits<int>::max)()))
+        if (text.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
         {
             return nullptr;
         }
@@ -158,13 +159,13 @@ namespace StringUtils
             return nullptr;
         }
 
-        const size_t charCountWithNull = static_cast<size_t>(wideCharacterCount) + 1;
-        if (charCountWithNull > (std::numeric_limits<size_t>::max)() / sizeof(wchar_t))
+        const std::size_t charCountWithNull = static_cast<std::size_t>(wideCharacterCount) + 1;
+        if (charCountWithNull > (std::numeric_limits<std::size_t>::max)() / sizeof(wchar_t))
         {
             return nullptr;
         }
 
-        const size_t bytesToAllocate = charCountWithNull * sizeof(wchar_t);
+        const std::size_t bytesToAllocate = charCountWithNull * sizeof(wchar_t);
         wchar_t* rawBuffer = static_cast<wchar_t*>(::CoTaskMemAlloc(bytesToAllocate));
         if (rawBuffer == nullptr)
         {

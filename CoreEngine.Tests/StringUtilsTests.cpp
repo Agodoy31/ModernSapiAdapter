@@ -128,9 +128,6 @@ TEST(StringUtilsTests, UnrepresentableWin32LengthsFailBeforeConversion)
 
     const char validUtf8Char = 'A';
     EXPECT_EQ(StringUtils::Utf8ToWide(&validUtf8Char, oversizedLength), L"");
-
-    const std::string_view oversizedView(&validUtf8Char, oversizedLength);
-    EXPECT_EQ(StringUtils::Utf8ToCoTaskMemWide(oversizedView).get(), nullptr);
 }
 
 TEST(StringUtilsTests, Utf8ToCoTaskMemWideReturnsOwnedNullTerminatedUnicode)

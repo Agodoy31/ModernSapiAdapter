@@ -146,7 +146,7 @@ TEST_F(SapiEngineTests, OnSpeechEventMapsBookmarkStringEventWithNonAsciiNameToSi
     nlohmann::json eventJson;
     eventJson["event"] = "bookmark_reached";
     eventJson["audio_offset_ms"] = 100u;
-    eventJson["bookmark_name"] = "42_ブックマーク_\xF0\x9F\x98\x80";
+    eventJson["bookmark_name"] = "42_\xE3\x83\x96\xE3\x83\x83\xE3\x82\xAF\xE3\x83\x9E\xE3\x83\xBC\xE3\x82\xAF_\xF0\x9F\x98\x80";
 
     engine->OnSpeechEvent(eventJson);
 

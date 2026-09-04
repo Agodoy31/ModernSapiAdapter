@@ -128,4 +128,3 @@ TEST(SapiFragmentSerializationTests, ExplicitLengthFragmentWithEmbeddedNullSeria
     ASSERT_EQ(result.size(), 1u);
     EXPECT_EQ(result[0]["text"], std::string("Hello\0World", 11));
 }
-
