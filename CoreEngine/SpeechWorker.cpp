@@ -1231,5 +1231,4 @@ void SpeechWorker::ControlThreadProc()
             CoreLog(L"[SpeechWorker] Unknown exception in ControlThreadProc.");
         }
     }
-    winrt::uninit_apartment();
 }
