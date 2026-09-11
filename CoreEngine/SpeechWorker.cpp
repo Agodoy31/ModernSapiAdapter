@@ -1061,6 +1061,114 @@ bool SpeechWorker::HandleLogEventLocked(
     return false;
 }
 
+SpeechWorker::ControlEventDisposition SpeechWorker::HandleParsedControlEventLocked(
+    const ProviderControlEvent& event)
+{
+    ControlEventDisposition disposition;
+    disposition.shouldForwardToSapi = (m_context.upstreamState != UpstreamState::Faulted &&
+                                       m_context.downstreamState != DownstreamState::Faulted &&
+                                       !m_context.faultPending);
+
+    if (event.speakId == m_context.token.speakId)
+    {
+        const bool hasValidPayload = (!event.IsSpeechBoundary() || event.hasValidSpeechOffsets) &&
+                                     (!event.IsTerminal() || event.hasValidTerminalBytes);
+        if (event.IsProgress() && hasValidPayload &&
+            (m_context.downstreamState == DownstreamState::Speaking || m_context.IsDrainingCancellation()))
+        {
+            m_lastProviderProgressTick.store(GetTickCount64(), std::memory_order_release);
+        }
+
+        if (event.IsSpeechBoundary())
+        {
+            if (!event.hasValidSpeechOffsets)
+            {
+                disposition.shouldForwardToSapi = false;
+                disposition.shouldEnterFaultedState = true;
+            }
+            else if (m_context.downstreamState != DownstreamState::Speaking)
+            {
+                // SAPI has aborted this request, so delayed provider callbacks must not move focus.
+                disposition.shouldForwardToSapi = false;
+            }
+        }
+
+        switch (event.type)
+        {
+        case ProviderEventType::WordBoundary:
+        case ProviderEventType::SentenceBoundary:
+        case ProviderEventType::Bookmark:
+        {
+            break;
+        }
+
+        case ProviderEventType::SynthesisComplete:
+        case ProviderEventType::SynthesisCancelled:
+        {
+            disposition.shouldEnterFaultedState = HandleTerminalEventLocked(
+                event.type, event.speakId, event.terminalAudioBytes, event.hasValidTerminalBytes, event.rawEventName);
+            break;
+        }
+
+        case ProviderEventType::LegacyCompleted:
+        {
+            CoreLog(L"[SpeechWorker] Ignoring legacy completed event for speak_id %llu.", event.speakId);
+            break;
+        }
+
+        case ProviderEventType::Log:
+        {
+            disposition.shouldEnterFaultedState = HandleLogEventLocked(event.speakId, event.logSeverity, event.logMessage);
+            break;
+        }
+
+        case ProviderEventType::Unknown:
+        {
+            CoreLog(L"[SpeechWorker] Unknown event received: %.*hs",
+                static_cast<int>(event.rawEventName.size()), event.rawEventName.data());
+            break;
+        }
+        }
+
+        if (disposition.shouldEnterFaultedState)
+        {
+            m_context.faultPending = true;
+        }
+    }
+
+    return disposition;
+}
+
+void SpeechWorker::DispatchOrForwardEvent(
+    const ProviderControlEvent& event,
+    const ControlEventDisposition& disposition)
+{
+    if (disposition.shouldForwardToSapi)
+    {
+#if defined(_DEBUG)
+        {
+            std::unique_lock<std::mutex> testLock(m_testHooks.eventForwardMutex);
+            if (m_testHooks.pauseNextEventForward)
+            {
+                m_testHooks.pauseNextEventForward = false;
+                m_testHooks.eventForwardPaused = true;
+                m_testHooks.eventForwardChanged.notify_all();
+                m_testHooks.eventForwardChanged.wait(testLock, [this]
+                {
+                    return !m_testHooks.eventForwardPaused || m_exit.load();
+                });
+            }
+        }
+#endif
+        ForwardEventToSapi(event);
+    }
+
+    if (disposition.shouldEnterFaultedState)
+    {
+        EnterFaultedState();
+    }
+}
+
 void SpeechWorker::ControlThreadProc()
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -1103,7 +1211,8 @@ void SpeechWorker::ControlThreadProc()
             {
                 {
                     std::lock_guard<std::mutex> lock(m_requestMutex);
-                    if (m_context.upstreamState != UpstreamState::Faulted && m_context.downstreamState != DownstreamState::Faulted)
+                    if (m_context.upstreamState != UpstreamState::Faulted &&
+                        m_context.downstreamState != DownstreamState::Faulted)
                     {
                         m_context.faultPending = true;
                     }
@@ -1112,106 +1221,13 @@ void SpeechWorker::ControlThreadProc()
                 continue;
             }
 
-            bool forwardToSapi = false;
-            bool faultAfterStateUpdate = false;
-
+            ControlEventDisposition disposition;
             {
                 std::lock_guard<std::mutex> lock(m_requestMutex);
-                forwardToSapi = (m_context.upstreamState != UpstreamState::Faulted &&
-                                 m_context.downstreamState != DownstreamState::Faulted &&
-                                 !m_context.faultPending);
-
-                if (event.speakId == m_context.token.speakId)
-                {
-                    const bool hasValidPayload = (!event.IsSpeechBoundary() || event.hasValidSpeechOffsets) &&
-                                                 (!event.IsTerminal() || event.hasValidTerminalBytes);
-                    if (event.IsProgress() && hasValidPayload &&
-                        (m_context.downstreamState == DownstreamState::Speaking || m_context.IsDrainingCancellation()))
-                    {
-                        m_lastProviderProgressTick.store(GetTickCount64(), std::memory_order_release);
-                    }
-
-                    if (event.IsSpeechBoundary())
-                    {
-                        if (!event.hasValidSpeechOffsets)
-                        {
-                            forwardToSapi = false;
-                            faultAfterStateUpdate = true;
-                        }
-                        else if (m_context.downstreamState != DownstreamState::Speaking)
-                        {
-                            // SAPI has aborted this request, so delayed provider callbacks must not move focus.
-                            forwardToSapi = false;
-                        }
-                    }
-
-                    switch (event.type)
-                    {
-                    case ProviderEventType::WordBoundary:
-                    case ProviderEventType::SentenceBoundary:
-                    case ProviderEventType::Bookmark:
-                    {
-                        break;
-                    }
-
-                    case ProviderEventType::SynthesisComplete:
-                    case ProviderEventType::SynthesisCancelled:
-                    {
-                        faultAfterStateUpdate = HandleTerminalEventLocked(
-                            event.type, event.speakId, event.terminalAudioBytes, event.hasValidTerminalBytes, event.rawEventName);
-                        break;
-                    }
-
-                    case ProviderEventType::LegacyCompleted:
-                    {
-                        CoreLog(L"[SpeechWorker] Ignoring legacy completed event for speak_id %llu.", event.speakId);
-                        break;
-                    }
-
-                    case ProviderEventType::Log:
-                    {
-                        faultAfterStateUpdate = HandleLogEventLocked(event.speakId, event.logSeverity, event.logMessage);
-                        break;
-                    }
-
-                    case ProviderEventType::Unknown:
-                    {
-                        CoreLog(L"[SpeechWorker] Unknown event received: %.*hs",
-                            static_cast<int>(event.rawEventName.size()), event.rawEventName.data());
-                        break;
-                    }
-                    }
-
-                    if (faultAfterStateUpdate)
-                    {
-                        m_context.faultPending = true;
-                    }
-                }
+                disposition = HandleParsedControlEventLocked(event);
             }
 
-            if (forwardToSapi)
-            {
-#if defined(_DEBUG)
-                {
-                    std::unique_lock<std::mutex> testLock(m_testHooks.eventForwardMutex);
-                    if (m_testHooks.pauseNextEventForward)
-                    {
-                        m_testHooks.pauseNextEventForward = false;
-                        m_testHooks.eventForwardPaused = true;
-                        m_testHooks.eventForwardChanged.notify_all();
-                        m_testHooks.eventForwardChanged.wait(testLock, [this] {
-                            return !m_testHooks.eventForwardPaused || m_exit.load();
-                        });
-                    }
-                }
-#endif
-                ForwardEventToSapi(event);
-            }
-
-            if (faultAfterStateUpdate)
-            {
-                EnterFaultedState();
-            }
+            DispatchOrForwardEvent(event, disposition);
         }
         catch (const nlohmann::json::exception& e)
         {

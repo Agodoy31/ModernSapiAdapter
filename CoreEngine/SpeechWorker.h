@@ -108,6 +108,31 @@ private:
      */
     void ControlThreadProc();
 
+    struct ControlEventDisposition
+    {
+        bool shouldForwardToSapi = false;
+        bool shouldEnterFaultedState = false;
+    };
+
+    /**
+     * @brief Evaluates a parsed control event and updates active request state while locked.
+     * @pre m_requestMutex must be held by caller.
+     * @param event The parsed provider control event.
+     * @return Disposition indicating whether SAPI forwarding and/or faulted state transition is required.
+     */
+    [[nodiscard]] ControlEventDisposition HandleParsedControlEventLocked(
+        const ProviderControlEvent& event);
+
+    /**
+     * @brief Dispatches or forwards a control event to SAPI and handles fault transitions outside lock.
+     * @pre m_requestMutex must NOT be held by caller.
+     * @param event The parsed provider control event.
+     * @param disposition The disposition returned from HandleParsedControlEventLocked.
+     */
+    void DispatchOrForwardEvent(
+        const ProviderControlEvent& event,
+        const ControlEventDisposition& disposition);
+
     struct AudioIngestResult
     {
         RequestToken token{};
