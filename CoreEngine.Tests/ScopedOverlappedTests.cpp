@@ -14,7 +14,7 @@ TEST(ScopedOverlappedTests, IsNonCopyableAndNonMovable)
 TEST(ScopedOverlappedTests, InitializesWithValidEventAndZeroesOtherFields)
 {
     ScopedOverlapped scoped;
-    
+
     // Validate HRESULT
     EXPECT_EQ(scoped.CreationResult(), S_OK);
 
@@ -25,7 +25,7 @@ TEST(ScopedOverlappedTests, InitializesWithValidEventAndZeroesOtherFields)
     EXPECT_EQ(overlapped.InternalHigh, 0u);
     EXPECT_EQ(overlapped.Offset, 0u);
     EXPECT_EQ(overlapped.OffsetHigh, 0u);
-    
+
     // Ensure event is manual-reset and initially nonsignaled
     const DWORD waitResult = WaitForSingleObject(overlapped.hEvent, 0);
     EXPECT_EQ(waitResult, WAIT_TIMEOUT);

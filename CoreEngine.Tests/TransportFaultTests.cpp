@@ -300,7 +300,7 @@ TEST_F(SapiEngineTests, TimedOutAudioReadCancelsItsOverlappedOperationBeforeRetu
 
     std::vector<uint8_t> buffer(4096);
     DWORD bytesRead = 0;
-    
+
     const auto timeoutStart = std::chrono::steady_clock::now();
     EXPECT_EQ(client.ReadAudioChunk(buffer, bytesRead, 100), HRESULT_FROM_WIN32(ERROR_TIMEOUT));
     EXPECT_LT(std::chrono::steady_clock::now() - timeoutStart, std::chrono::seconds(1));
