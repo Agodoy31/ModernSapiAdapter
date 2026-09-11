@@ -45,6 +45,40 @@ TEST_F(SapiEngineTests, OutputSiteAbortCancelsTheActiveRequest)
     EXPECT_FALSE(forwardedLateSentenceBoundary);
 }
 
+TEST_F(SapiEngineTests, BoundaryDuringCancellationIsSuppressedWithoutFault)
+{
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(57));
+
+    HRESULT cancellationResult = S_OK;
+    std::thread cancellationThread(
+        [&]
+        {
+            cancellationResult = fixture.worker->CancelAndDrain();
+        });
+    ThreadJoinGuard cancellationJoin(cancellationThread);
+
+    std::string cancellationRequest;
+    ASSERT_TRUE(fixture.server.ReadControl(cancellationRequest));
+    ASSERT_NE(cancellationRequest.find("\"command\":\"cancel\""), std::string::npos);
+
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"word_boundary\",\"speak_id\":57,\"text_offset\":0,\"text_length\":4,\"audio_offset_ms\":10}\n"));
+
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"synthesis_cancelled\",\"speak_id\":57,\"audio_bytes_written\":0}\n"));
+
+    EXPECT_TRUE(cancellationJoin.Join(2000));
+    EXPECT_EQ(cancellationResult, S_OK);
+    EXPECT_FALSE(fixture.worker->IsFaulted());
+
+    {
+        std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
+        EXPECT_TRUE(fixture.mockSite->receivedEvents.empty());
+    }
+}
+
 #if defined(_DEBUG)
 TEST_F(SapiEngineTests, AbortObservationRejectsPcmBeforeCancellationTransportStarts)
 {

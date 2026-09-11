@@ -43,6 +43,26 @@ TEST_F(SapiEngineTests, MalformedRequiredSpeechEventNumbersQuarantineTheWorker)
         EXPECT_TRUE(fixture.worker->IsFaulted());
     }
 }
+
+TEST_F(SapiEngineTests, UnknownNamedEventWithoutSpeakIdQuarantinesTheWorker)
+{
+    const std::vector<std::string> unknownEventsWithoutSpeakId{
+        "{\"event\":\"custom_unknown_action\"}\n",
+        "{\"event\":\"another_unrecognized_event\",\"speak_id\":0}\n",
+        "{\"event\":\"third_unrecognized_event\",\"speak_id\":\"not_an_int\"}\n"};
+
+    for (const auto &eventPayload : unknownEventsWithoutSpeakId)
+    {
+        PipeServerWorkerFixture fixture;
+        ASSERT_TRUE(fixture.Initialize());
+        ASSERT_TRUE(fixture.Start(56));
+
+        ASSERT_TRUE(fixture.server.WriteControl(eventPayload));
+
+        EXPECT_TRUE(fixture.worker->WaitForFaultForTest(1000));
+        EXPECT_TRUE(fixture.worker->IsFaulted());
+    }
+}
 #endif
 
 TEST_F(SapiEngineTests, StaleSpeechEventWithValidSpeakIdDoesNotQuarantineTheWorker)
@@ -58,6 +78,27 @@ TEST_F(SapiEngineTests, StaleSpeechEventWithValidSpeakIdDoesNotQuarantineTheWork
 
     EXPECT_EQ(fixture.worker->WaitUntilFinished(nullptr), S_OK);
     EXPECT_FALSE(fixture.worker->IsFaulted());
+}
+
+TEST_F(SapiEngineTests, MissingEventNameIsSilentlyIgnored)
+{
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(55));
+
+    ASSERT_TRUE(fixture.server.WriteControl("{\"speak_id\":55,\"audio_offset_ms\":0}\n"));
+    ASSERT_TRUE(fixture.server.WriteControl("{\"event\":123,\"speak_id\":55}\n"));
+    ASSERT_TRUE(fixture.server.WriteControl("{}\n"));
+
+    ASSERT_TRUE(fixture.server.WriteControl("{\"event\":\"synthesis_complete\",\"speak_id\":55,\"total_audio_bytes\":0}\n"));
+
+    EXPECT_EQ(fixture.worker->WaitUntilFinished(nullptr), S_OK);
+    EXPECT_FALSE(fixture.worker->IsFaulted());
+
+    {
+        std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
+        EXPECT_TRUE(fixture.mockSite->receivedEvents.empty());
+    }
 }
 
 #if defined(_DEBUG)

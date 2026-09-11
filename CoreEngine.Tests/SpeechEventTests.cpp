@@ -618,6 +618,43 @@ TEST_F(SapiEngineTests, WarningLogDoesNotFaultSession)
     EXPECT_FALSE(fixture.worker->IsFaulted());
 }
 
+TEST_F(SapiEngineTests, RequestErrorLogIsForwardedAndFailsOnlyTheUtterance)
+{
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(59));
+
+    ClearTestLogs();
+
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"log\",\"speak_id\":59,\"severity\":\"error\",\"message\":\"Synthesis rejected\",\"friendly_text\":\"Invalid token\"}\n"));
+
+    HRESULT hr = fixture.worker->WaitUntilFinished(fixture.mockSite.get());
+    EXPECT_EQ(hr, E_FAIL);
+    EXPECT_FALSE(fixture.worker->IsFaulted());
+
+    const bool foundLog = WaitForCondition(
+        [&]
+        {
+            for (const auto &line : GetTestLogs())
+            {
+                if (line.find(L"Provider error (error): Synthesis rejected Invalid token") != std::wstring::npos)
+                {
+                    return true;
+                }
+            }
+            return false;
+        },
+        1000, 5);
+    EXPECT_TRUE(foundLog);
+
+    ASSERT_TRUE(fixture.Start(60));
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":60,\"total_audio_bytes\":0}\n"));
+    EXPECT_EQ(fixture.worker->WaitUntilFinished(fixture.mockSite.get()), S_OK);
+    EXPECT_FALSE(fixture.worker->IsFaulted());
+}
+
 #if defined(_DEBUG)
 TEST_F(SapiEngineTests, FaultedSessionDoesNotForwardAnEventPausedBeforeItsSapiCallback)
 {
@@ -666,5 +703,41 @@ TEST_F(SapiEngineTests, FaultedSessionDoesNotForwardAnEventPausedBeforeItsSapiCa
     std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
     EXPECT_TRUE(fixture.mockSite->receivedEvents.empty())
         << "An event authorized before fault reached SAPI after fault became visible.";
+}
+
+TEST_F(SapiEngineTests, FatalLogIsForwardedBeforeFaultPublication)
+{
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(58));
+
+    ClearTestLogs();
+    fixture.worker->PauseNextFaultPublicationForTest();
+    auto releaseFaultGate = wil::scope_exit(
+        [&]
+        {
+            fixture.worker->ReleaseFaultPublicationForTest();
+        });
+
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"log\",\"speak_id\":58,\"severity\":\"fatal\",\"message\":\"Unrecoverable crash\",\"friendly_text\":\"Terminating\"}\n"));
+
+    ASSERT_TRUE(fixture.worker->WaitForFaultPublicationPauseForTest(1000));
+
+    bool foundLog = false;
+    for (const auto &line : GetTestLogs())
+    {
+        if (line.find(L"Provider error (fatal): Unrecoverable crash Terminating") != std::wstring::npos)
+        {
+            foundLog = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundLog);
+
+    fixture.worker->ReleaseFaultPublicationForTest();
+
+    EXPECT_TRUE(fixture.worker->WaitForFaultForTest(1000));
+    EXPECT_TRUE(fixture.worker->IsFaulted());
 }
 #endif
