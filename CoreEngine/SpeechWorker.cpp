@@ -511,14 +511,10 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
 #if defined(_DEBUG)
     ULONGLONG lastTerminalWaitLogTick = 0;
 #endif
-    while (m_context.downstreamState != DownstreamState::Idle &&
-           m_context.downstreamState != DownstreamState::Faulted &&
-           !m_exit.load())
+    while (!IsWaitTerminalLocked())
     {
         if (m_requestChanged.wait_for(lock, std::chrono::milliseconds(10), [this] {
-            return m_context.downstreamState == DownstreamState::Idle ||
-                   m_context.downstreamState == DownstreamState::Faulted ||
-                   m_exit.load();
+            return IsWaitTerminalLocked();
         }))
         {
             break;
@@ -570,46 +566,48 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
         const DWORD actions = pOutputSite->GetActions();
         lock.lock();
 
-        if (IsAbortRequested(actions) && m_context.downstreamState == DownstreamState::Speaking)
+        if (!IsAbortRequested(actions) || m_context.downstreamState != DownstreamState::Speaking)
         {
-            const ULONGLONG cancellationEntryTick = GetTickCount64();
-            const ULONGLONG cancellationDeadline = cancellationEntryTick + CancellationTimeoutMs;
-#if defined(_DEBUG)
-            CoreLog(L"[CancelTrace] speak_id=%llu sapi_abort_observed tick=%llu state=%u raw=%llu delivered=%llu.",
-                m_context.token.speakId, cancellationEntryTick, static_cast<unsigned>(m_context.downstreamState),
-                m_context.rawAudioBytesRead, m_context.deliveredAudioBytes);
-#endif
-            uint64_t speakId = 0;
-            const HRESULT transitionHr = BeginCancellationLocked(
-                cancellationDeadline, cancellationEntryTick, speakId);
-            if (FAILED(transitionHr))
-            {
-                return transitionHr;
-            }
-#if defined(_DEBUG)
-            {
-                std::lock_guard<std::mutex> testLock(m_testHooks.abortTransitionMutex);
-                m_testHooks.wasCancellingAtAbortUnlock = m_context.IsDrainingCancellation();
-            }
-#endif
-            lock.unlock();
-#if defined(_DEBUG)
-            {
-                std::unique_lock<std::mutex> testLock(m_testHooks.abortTransitionMutex);
-                if (m_testHooks.pauseNextAbortTransition)
-                {
-                    m_testHooks.pauseNextAbortTransition = false;
-                    m_testHooks.abortTransitionPaused = true;
-                    m_testHooks.abortTransitionChanged.notify_all();
-                    m_testHooks.abortTransitionChanged.wait(testLock, [this] {
-                        return !m_testHooks.abortTransitionPaused || m_exit.load();
-                    });
-                }
-            }
-#endif
-            CoreLog(L"[SpeechWorker] SAPI requested SPVES_ABORT; cancelling active synthesis.");
-            return FinishCancellation(speakId, cancellationDeadline, cancellationEntryTick);
+            continue;
         }
+
+        const ULONGLONG cancellationEntryTick = GetTickCount64();
+        const ULONGLONG cancellationDeadline = cancellationEntryTick + CancellationTimeoutMs;
+#if defined(_DEBUG)
+        CoreLog(L"[CancelTrace] speak_id=%llu sapi_abort_observed tick=%llu state=%u raw=%llu delivered=%llu.",
+            m_context.token.speakId, cancellationEntryTick, static_cast<unsigned>(m_context.downstreamState),
+            m_context.rawAudioBytesRead, m_context.deliveredAudioBytes);
+#endif
+        uint64_t speakId = 0;
+        const HRESULT transitionHr = BeginCancellationLocked(
+            cancellationDeadline, cancellationEntryTick, speakId);
+        if (FAILED(transitionHr))
+        {
+            return transitionHr;
+        }
+#if defined(_DEBUG)
+        {
+            std::lock_guard<std::mutex> testLock(m_testHooks.abortTransitionMutex);
+            m_testHooks.wasCancellingAtAbortUnlock = m_context.IsDrainingCancellation();
+        }
+#endif
+        lock.unlock();
+#if defined(_DEBUG)
+        {
+            std::unique_lock<std::mutex> testLock(m_testHooks.abortTransitionMutex);
+            if (m_testHooks.pauseNextAbortTransition)
+            {
+                m_testHooks.pauseNextAbortTransition = false;
+                m_testHooks.abortTransitionPaused = true;
+                m_testHooks.abortTransitionChanged.notify_all();
+                m_testHooks.abortTransitionChanged.wait(testLock, [this] {
+                    return !m_testHooks.abortTransitionPaused || m_exit.load();
+                });
+            }
+        }
+#endif
+        CoreLog(L"[SpeechWorker] SAPI requested SPVES_ABORT; cancelling active synthesis.");
+        return FinishCancellation(speakId, cancellationDeadline, cancellationEntryTick);
     }
 
     if (m_exit.load())
@@ -636,6 +634,13 @@ bool SpeechWorker::IsSpeakingTerminalReachedLocked() const noexcept
 bool SpeechWorker::IsCancellingTerminalReachedLocked() const noexcept
 {
     return m_context.rawAudioBytesRead >= m_context.upstreamTerminalBytes;
+}
+
+bool SpeechWorker::IsWaitTerminalLocked() const noexcept
+{
+    return m_context.downstreamState == DownstreamState::Idle ||
+           m_context.downstreamState == DownstreamState::Faulted ||
+           m_exit.load();
 }
 
 bool SpeechWorker::ShouldForwardEventLocked(uint64_t speakId, bool isLog) const noexcept
