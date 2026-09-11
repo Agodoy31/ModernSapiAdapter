@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "PipeClient.h"
+#include "ScopedOverlapped.h"
 #include "PipeSecurityUtils.h"
 #include "JsonValue.h"
 
@@ -285,17 +286,14 @@ HRESULT PipeClient::SendControlMessageUtf8(
         return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
     }
 
-    wil::unique_event overlappedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-    if (!overlappedEvent)
+    ScopedOverlapped scopedOverlapped;
+    if (FAILED(scopedOverlapped.CreationResult()))
     {
-        return HRESULT_FROM_WIN32(GetLastError());
+        return scopedOverlapped.CreationResult();
     }
 
-    OVERLAPPED overlapped = {};
-    overlapped.hEvent = overlappedEvent.get();
-
     DWORD bytesWritten = 0;
-    BOOL result = WriteFile(m_controlPipe.get(), utf8String.data(), static_cast<DWORD>(utf8String.size()), nullptr, &overlapped);
+    BOOL result = WriteFile(m_controlPipe.get(), utf8String.data(), static_cast<DWORD>(utf8String.size()), nullptr, &scopedOverlapped.Value());
     
     if (!result && GetLastError() != ERROR_IO_PENDING)
     {
@@ -303,7 +301,7 @@ HRESULT PipeClient::SendControlMessageUtf8(
     }
 
     HRESULT hr = CompleteOverlappedOperation(
-        m_controlPipe.get(), overlapped, bytesWritten, timeoutMs);
+        m_controlPipe.get(), scopedOverlapped.Value(), bytesWritten, timeoutMs);
     if (FAILED(hr))
     {
         return hr;
@@ -355,17 +353,14 @@ HRESULT PipeClient::ReadControlMessageUtf8(
             operationTimeout = static_cast<DWORD>(deadline - now);
         }
 
-        wil::unique_event overlappedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-        if (!overlappedEvent)
+        ScopedOverlapped scopedOverlapped;
+        if (FAILED(scopedOverlapped.CreationResult()))
         {
-            return HRESULT_FROM_WIN32(GetLastError());
+            return scopedOverlapped.CreationResult();
         }
 
-        OVERLAPPED overlapped = {};
-        overlapped.hEvent = overlappedEvent.get();
-
         DWORD bytesRead = 0;
-        BOOL success = ReadFile(m_controlPipe.get(), chunk, sizeof(chunk), nullptr, &overlapped);
+        BOOL success = ReadFile(m_controlPipe.get(), chunk, sizeof(chunk), nullptr, &scopedOverlapped.Value());
         if (!success)
         {
             DWORD err = GetLastError();
@@ -376,7 +371,7 @@ HRESULT PipeClient::ReadControlMessageUtf8(
         }
 
         HRESULT hr = CompleteOverlappedOperation(
-            m_controlPipe.get(), overlapped, bytesRead, operationTimeout);
+            m_controlPipe.get(), scopedOverlapped.Value(), bytesRead, operationTimeout);
         if (FAILED(hr))
         {
             return hr;
@@ -412,24 +407,21 @@ HRESULT PipeClient::ReadAudioChunk(
         return E_UNEXPECTED;
     }
 
-    wil::unique_event overlappedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-    if (!overlappedEvent)
+    ScopedOverlapped scopedOverlapped;
+    if (FAILED(scopedOverlapped.CreationResult()))
     {
-        return HRESULT_FROM_WIN32(GetLastError());
+        return scopedOverlapped.CreationResult();
     }
 
-    OVERLAPPED overlapped = {};
-    overlapped.hEvent = overlappedEvent.get();
-
     bytesRead = 0;
-    BOOL result = ReadFile(m_audioPipe.get(), buffer.data(), static_cast<DWORD>(buffer.size()), nullptr, &overlapped);
+    BOOL result = ReadFile(m_audioPipe.get(), buffer.data(), static_cast<DWORD>(buffer.size()), nullptr, &scopedOverlapped.Value());
 
     if (!result && GetLastError() != ERROR_IO_PENDING)
     {
         return HRESULT_FROM_WIN32(GetLastError());
     }
 
-    return CompleteOverlappedOperation(m_audioPipe.get(), overlapped, bytesRead, timeoutMs);
+    return CompleteOverlappedOperation(m_audioPipe.get(), scopedOverlapped.Value(), bytesRead, timeoutMs);
 }
 
 void PipeClient::Cancel()
