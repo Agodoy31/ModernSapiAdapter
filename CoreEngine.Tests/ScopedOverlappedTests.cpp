@@ -5,6 +5,7 @@
 
 TEST(ScopedOverlappedTests, IsNonCopyableAndNonMovable)
 {
+    EXPECT_TRUE(std::is_nothrow_default_constructible_v<ScopedOverlapped>);
     EXPECT_FALSE(std::is_copy_constructible_v<ScopedOverlapped>);
     EXPECT_FALSE(std::is_copy_assignable_v<ScopedOverlapped>);
     EXPECT_FALSE(std::is_move_constructible_v<ScopedOverlapped>);
@@ -26,7 +27,19 @@ TEST(ScopedOverlappedTests, InitializesWithValidEventAndZeroesOtherFields)
     EXPECT_EQ(overlapped.Offset, 0u);
     EXPECT_EQ(overlapped.OffsetHigh, 0u);
 
-    // Ensure event is manual-reset and initially nonsignaled
-    const DWORD waitResult = WaitForSingleObject(overlapped.hEvent, 0);
-    EXPECT_EQ(waitResult, WAIT_TIMEOUT);
+    // Confirm initial zero-time wait returns WAIT_TIMEOUT
+    EXPECT_EQ(WaitForSingleObject(overlapped.hEvent, 0), static_cast<DWORD>(WAIT_TIMEOUT));
+
+    // Signal the event and verify success
+    EXPECT_TRUE(SetEvent(overlapped.hEvent));
+
+    // Manual-reset contract: consecutive waits must remain signaled (WAIT_OBJECT_0)
+    EXPECT_EQ(WaitForSingleObject(overlapped.hEvent, 0), static_cast<DWORD>(WAIT_OBJECT_0));
+    EXPECT_EQ(WaitForSingleObject(overlapped.hEvent, 0), static_cast<DWORD>(WAIT_OBJECT_0));
+
+    // Reset the event and verify success
+    EXPECT_TRUE(ResetEvent(overlapped.hEvent));
+
+    // Confirm final zero-time wait returns WAIT_TIMEOUT
+    EXPECT_EQ(WaitForSingleObject(overlapped.hEvent, 0), static_cast<DWORD>(WAIT_TIMEOUT));
 }

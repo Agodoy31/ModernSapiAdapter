@@ -1,21 +1,22 @@
 #pragma once
 #include "pch.h"
+#include <type_traits>
 
 class ScopedOverlapped final
 {
 public:
     ScopedOverlapped() noexcept
     {
-        m_event.create(wil::EventOptions::ManualReset);
-        if (m_event)
-        {
-            m_value.hEvent = m_event.get();
-            m_creationResult = S_OK;
-        }
-        else
+        HANDLE eventHandle = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!eventHandle)
         {
             m_creationResult = HRESULT_FROM_WIN32(GetLastError());
+            return;
         }
+
+        m_event.reset(eventHandle);
+        m_value.hEvent = m_event.get();
+        m_creationResult = S_OK;
     }
 
     ScopedOverlapped(const ScopedOverlapped&) = delete;
@@ -39,3 +40,6 @@ private:
     wil::unique_event m_event;
     HRESULT m_creationResult = E_UNEXPECTED;
 };
+
+static_assert(std::is_nothrow_default_constructible_v<ScopedOverlapped>,
+    "ScopedOverlapped must be nothrow default constructible");
