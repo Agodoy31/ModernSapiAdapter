@@ -393,11 +393,8 @@ void SpeechWorker::EnterFaultedState()
 {
     {
         std::lock_guard<std::mutex> requestLock(m_requestMutex);
-        m_context.completionHr = E_FAIL;
         m_frameAssembler.Reset();
-        m_context.upstreamState = UpstreamState::Faulted;
-        m_context.downstreamState = DownstreamState::Faulted;
-        m_requestChanged.notify_all();
+        TransitionRequestToFaultedLocked();
 
         bool expected = false;
         if (!m_faultPublicationStarted.compare_exchange_strong(expected, true))
@@ -659,6 +656,14 @@ bool SpeechWorker::ShouldForwardEventLocked(uint64_t speakId, bool isLog) const 
     }
 
     return m_context.downstreamState == DownstreamState::Speaking;
+}
+
+void SpeechWorker::TransitionRequestToFaultedLocked() noexcept
+{
+    m_context.upstreamState = UpstreamState::Faulted;
+    m_context.downstreamState = DownstreamState::Faulted;
+    m_context.completionHr = E_FAIL;
+    m_requestChanged.notify_all();
 }
 
 void SpeechWorker::ResetToIdleLocked() noexcept
@@ -989,30 +994,21 @@ bool SpeechWorker::HandleTerminalEventLocked(
     if (m_context.upstreamFinished)
     {
         CoreLog(L"[SpeechWorker] Duplicate terminal event for speak_id %llu.", eventSpeakId);
-        m_context.upstreamState = UpstreamState::Faulted;
-        m_context.downstreamState = DownstreamState::Faulted;
-        m_context.completionHr = E_FAIL;
-        m_requestChanged.notify_all();
+        TransitionRequestToFaultedLocked();
         return true;
     }
 
     if (!hasValidTerminalBytes)
     {
         CoreLog(L"[SpeechWorker] terminal event for speak_id %llu has an invalid audio bytes value.", eventSpeakId);
-        m_context.upstreamState = UpstreamState::Faulted;
-        m_context.downstreamState = DownstreamState::Faulted;
-        m_context.completionHr = E_FAIL;
-        m_requestChanged.notify_all();
+        TransitionRequestToFaultedLocked();
         return true;
     }
 
     if (terminalAudioBytes % m_frameAssembler.BlockAlign() != 0)
     {
         CoreLog(L"[SpeechWorker] terminal event for speak_id %llu is not PCM-frame aligned.", eventSpeakId);
-        m_context.upstreamState = UpstreamState::Faulted;
-        m_context.downstreamState = DownstreamState::Faulted;
-        m_context.completionHr = E_FAIL;
-        m_requestChanged.notify_all();
+        TransitionRequestToFaultedLocked();
         return true;
     }
 
