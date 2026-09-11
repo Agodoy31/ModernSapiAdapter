@@ -274,3 +274,34 @@ TEST_F(SapiEngineTests, ControlThreadCreationFailureRollsBackAudioThread)
     EXPECT_THROW(fixture.Initialize(), std::system_error);
 }
 #endif
+TEST_F(SapiEngineTests, TimedOutControlWriteCancelsItsOverlappedOperationBeforeReturning)
+{
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+
+    nlohmann::json largePayload;
+    largePayload["data"] = std::string(1024 * 1024, 'A');
+
+    const auto timeoutStart = std::chrono::steady_clock::now();
+    EXPECT_EQ(client.SendControlMessage(largePayload, 100), HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+    EXPECT_LT(std::chrono::steady_clock::now() - timeoutStart, std::chrono::seconds(1));
+}
+
+TEST_F(SapiEngineTests, TimedOutAudioReadCancelsItsOverlappedOperationBeforeReturning)
+{
+    ControlPipeTestServer server;
+    ASSERT_EQ(server.CreateError(), ERROR_SUCCESS);
+
+    PipeClient client;
+    ASSERT_EQ(client.Connect(server.PipeName(), L""), S_OK);
+
+    std::vector<uint8_t> buffer(4096);
+    DWORD bytesRead = 0;
+    
+    const auto timeoutStart = std::chrono::steady_clock::now();
+    EXPECT_EQ(client.ReadAudioChunk(buffer, bytesRead, 100), HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+    EXPECT_LT(std::chrono::steady_clock::now() - timeoutStart, std::chrono::seconds(1));
+}
