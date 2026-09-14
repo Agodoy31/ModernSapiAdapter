@@ -42,6 +42,7 @@ private:
 
     [[nodiscard]] bool StartLocked() noexcept;
     void WorkerThread() noexcept;
+    void CleanupFileStreamNoexcept(bool flushBeforeClose) noexcept;
 
     std::queue<std::wstring> m_queue;
     std::mutex m_mutex;

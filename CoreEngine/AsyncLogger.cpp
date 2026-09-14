@@ -47,6 +47,45 @@ AsyncLogger* AsyncLogger::GetInstance() noexcept
     return instance;
 }
 
+void AsyncLogger::CleanupFileStreamNoexcept(bool flushBeforeClose) noexcept
+{
+    try
+    {
+        if (m_file.is_open())
+        {
+            if (flushBeforeClose)
+            {
+                try
+                {
+                    m_file.flush();
+                }
+                catch (...)
+                {
+                }
+            }
+
+            try
+            {
+                m_file.close();
+            }
+            catch (...)
+            {
+            }
+        }
+
+        try
+        {
+            m_file.clear();
+        }
+        catch (...)
+        {
+        }
+    }
+    catch (...)
+    {
+    }
+}
+
 bool AsyncLogger::StartLocked() noexcept
 {
     try
@@ -61,7 +100,7 @@ bool AsyncLogger::StartLocked() noexcept
         m_file.open(logPath, std::ios::out | std::ios::app);
         if (!m_file.is_open())
         {
-            m_file.clear();
+            CleanupFileStreamNoexcept(false);
             return false;
         }
 
@@ -74,27 +113,13 @@ bool AsyncLogger::StartLocked() noexcept
         }
         catch (...)
         {
-            if (m_file.is_open())
-            {
-                m_file.close();
-            }
-            m_file.clear();
+            CleanupFileStreamNoexcept(false);
             return false;
         }
     }
     catch (...)
     {
-        try
-        {
-            if (m_file.is_open())
-            {
-                m_file.close();
-            }
-            m_file.clear();
-        }
-        catch (...)
-        {
-        }
+        CleanupFileStreamNoexcept(false);
         return false;
     }
 }
@@ -217,17 +242,7 @@ void AsyncLogger::WorkerThread() noexcept
         m_cv.notify_all();
     }
 
-    try
-    {
-        if (m_file.is_open())
-        {
-            m_file.flush();
-            m_file.close();
-        }
-    }
-    catch (...)
-    {
-    }
+    CleanupFileStreamNoexcept(true);
 
     try
     {

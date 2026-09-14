@@ -596,4 +596,29 @@ TEST_F(AsyncLoggerTests, LateWorkerCompletionAfterTimeoutReopensAdmissionViaResu
     EXPECT_TRUE(ContainsMarker(writtenMessages, blockedMessage));
     EXPECT_TRUE(ContainsMarker(writtenMessages, reopenedMessage));
 }
+
+TEST_F(AsyncLoggerTests, FailedStartFollowedBySuccessfulRestartDrainsNormally)
+{
+    auto *logger = AsyncLogger::GetInstance();
+    ASSERT_NE(nullptr, logger);
+    ASSERT_TRUE(logger->Shutdown());
+
+    const std::wstring restartedMessage = UniqueMarker(L"restarted-after-failed-start");
+
+    AsyncLoggerTestAccess::SetLogFilePath(L"::\\Invalid\\Path\\CoreEngine.log");
+    auto restoreLogPath = wil::scope_exit(
+        []
+        {
+            AsyncLoggerTestAccess::SetLogFilePath(CoreEngineLogPath().wstring());
+        });
+
+    logger->Log(L"failed-start-message");
+
+    AsyncLoggerTestAccess::SetLogFilePath(CoreEngineLogPath().wstring());
+    logger->Log(restartedMessage);
+
+    ASSERT_TRUE(logger->Shutdown());
+    const std::string logTail = ReadLogTail(CoreEngineLogPath());
+    EXPECT_NE(logTail.find(MarkerBytes(restartedMessage)), std::string::npos);
+}
 #endif
