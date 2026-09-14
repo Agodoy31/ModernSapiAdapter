@@ -316,4 +316,284 @@ TEST_F(AsyncLoggerTests, QuiescenceTimeoutReturnsFalseWithoutAbandoningTheWorker
     EXPECT_TRUE(ContainsMarker(writtenMessages, blockedMessage));
     EXPECT_TRUE(ContainsMarker(writtenMessages, restartedMessage));
 }
+
+TEST_F(AsyncLoggerTests, CallbackReentrancyIntoLogEnqueuesAndDrainsCleanly)
+{
+    auto *logger = AsyncLogger::GetInstance();
+    ASSERT_NE(nullptr, logger);
+    ASSERT_TRUE(logger->Shutdown());
+
+    const std::wstring initialMarker = UniqueMarker(L"reentrancy-initial");
+    const std::wstring reenteredMarker = UniqueMarker(L"reentered-marker");
+
+    std::atomic_bool reenteredOnce{false};
+    wil::unique_event reenteredDelivered(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    ASSERT_TRUE(reenteredDelivered);
+
+    std::mutex writtenMessagesMutex;
+    std::vector<std::wstring> writtenMessages;
+
+    AsyncLoggerTestAccess::SetWriteCallback(
+        *logger,
+        [&](const std::wstring &message)
+        {
+            if (message.find(initialMarker) != std::wstring::npos &&
+                !reenteredOnce.exchange(true))
+            {
+                logger->Log(reenteredMarker);
+            }
+            if (message.find(reenteredMarker) != std::wstring::npos)
+            {
+                SetEvent(reenteredDelivered.get());
+            }
+
+            std::lock_guard lock(writtenMessagesMutex);
+            writtenMessages.push_back(message);
+        });
+
+    auto resetWriteCallback = wil::scope_exit(
+        [logger]
+        {
+            AsyncLoggerTestAccess::SetWriteCallback(*logger, {});
+        });
+
+    logger->Log(initialMarker);
+    ASSERT_EQ(WaitForSingleObject(reenteredDelivered.get(), 2000), WAIT_OBJECT_0);
+    ASSERT_TRUE(logger->Shutdown());
+
+    EXPECT_TRUE(reenteredOnce.load(std::memory_order_acquire));
+    std::lock_guard lock(writtenMessagesMutex);
+    EXPECT_TRUE(ContainsMarker(writtenMessages, initialMarker));
+    EXPECT_TRUE(ContainsMarker(writtenMessages, reenteredMarker));
+}
+
+TEST_F(AsyncLoggerTests, RepeatedQuiescenceCallsAreIdempotent)
+{
+    auto *logger = AsyncLogger::GetInstance();
+    ASSERT_NE(nullptr, logger);
+    ASSERT_TRUE(logger->Shutdown());
+
+    const std::wstring initialMarker = UniqueMarker(L"idempotent-first");
+    const std::wstring rejectedMarker = UniqueMarker(L"idempotent-rejected");
+    const std::wstring resumedMarker = UniqueMarker(L"idempotent-resumed");
+
+    std::mutex writtenMessagesMutex;
+    std::vector<std::wstring> writtenMessages;
+
+    AsyncLoggerTestAccess::SetWriteCallback(
+        *logger,
+        [&writtenMessagesMutex, &writtenMessages](const std::wstring &message)
+        {
+            std::lock_guard lock(writtenMessagesMutex);
+            writtenMessages.push_back(message);
+        });
+
+    auto resetWriteCallback = wil::scope_exit(
+        [logger]
+        {
+            AsyncLoggerTestAccess::SetWriteCallback(*logger, {});
+        });
+
+    logger->Log(initialMarker);
+
+    EXPECT_TRUE(logger->BeginUnloadQuiescence(1000));
+    EXPECT_TRUE(logger->BeginUnloadQuiescence(1000));
+    EXPECT_TRUE(logger->BeginUnloadQuiescence(500));
+
+    logger->Log(rejectedMarker);
+
+    logger->ResumeAfterUnloadRejected();
+
+    logger->Log(resumedMarker);
+    ASSERT_TRUE(logger->Shutdown());
+
+    std::lock_guard lock(writtenMessagesMutex);
+    EXPECT_TRUE(ContainsMarker(writtenMessages, initialMarker));
+    EXPECT_FALSE(ContainsMarker(writtenMessages, rejectedMarker));
+    EXPECT_TRUE(ContainsMarker(writtenMessages, resumedMarker));
+}
+
+TEST_F(AsyncLoggerTests, CallbackReplacementWhileRunningIsSafe)
+{
+    auto *logger = AsyncLogger::GetInstance();
+    ASSERT_NE(nullptr, logger);
+    ASSERT_TRUE(logger->Shutdown());
+
+    constexpr size_t totalMessages = 30;
+    constexpr size_t phase1Messages = 10;
+
+    std::mutex deliveryMutex;
+    std::vector<std::wstring> callback1Messages;
+    std::vector<std::wstring> callback2Messages;
+
+    wil::unique_event callback1Reached(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    ASSERT_TRUE(callback1Reached);
+
+    AsyncLoggerTestAccess::SetWriteCallback(
+        *logger,
+        [&](const std::wstring &message)
+        {
+            std::lock_guard lock(deliveryMutex);
+            callback1Messages.push_back(message);
+            if (callback1Messages.size() >= phase1Messages)
+            {
+                SetEvent(callback1Reached.get());
+            }
+        });
+
+    auto resetWriteCallback = wil::scope_exit(
+        [logger]
+        {
+            AsyncLoggerTestAccess::SetWriteCallback(*logger, {});
+        });
+
+    std::vector<std::wstring> allMarkers;
+    allMarkers.reserve(totalMessages);
+    for (size_t index = 0; index < totalMessages; ++index)
+    {
+        allMarkers.push_back(UniqueMarker((L"cb-replace-" + std::to_wstring(index) + L"-token").c_str()));
+    }
+
+    for (size_t index = 0; index < phase1Messages; ++index)
+    {
+        logger->Log(allMarkers[index]);
+    }
+
+    ASSERT_EQ(WaitForSingleObject(callback1Reached.get(), 2000), WAIT_OBJECT_0);
+
+    AsyncLoggerTestAccess::SetWriteCallback(
+        *logger,
+        [&](const std::wstring &message)
+        {
+            std::lock_guard lock(deliveryMutex);
+            callback2Messages.push_back(message);
+        });
+
+    for (size_t index = phase1Messages; index < totalMessages; ++index)
+    {
+        logger->Log(allMarkers[index]);
+    }
+
+    ASSERT_TRUE(logger->Shutdown());
+
+    std::lock_guard lock(deliveryMutex);
+    EXPECT_GE(callback1Messages.size(), phase1Messages);
+    EXPECT_GT(callback2Messages.size(), 0u);
+    EXPECT_EQ(callback1Messages.size() + callback2Messages.size(), totalMessages);
+
+    for (const auto &marker : allMarkers)
+    {
+        const bool in1 = ContainsMarker(callback1Messages, marker);
+        const bool in2 = ContainsMarker(callback2Messages, marker);
+        EXPECT_TRUE(in1 || in2);
+        EXPECT_FALSE(in1 && in2);
+    }
+}
+
+TEST_F(AsyncLoggerTests, WriteCallbackExceptionDoesNotTerminateWorker)
+{
+    auto *logger = AsyncLogger::GetInstance();
+    ASSERT_NE(nullptr, logger);
+    ASSERT_TRUE(logger->Shutdown());
+
+    const std::wstring throwingMarker = UniqueMarker(L"callback-throws");
+    const std::wstring survivorMarker = UniqueMarker(L"callback-survivor");
+
+    std::atomic_bool throwTriggered{false};
+    std::mutex deliveryMutex;
+    std::vector<std::wstring> deliveredMessages;
+
+    AsyncLoggerTestAccess::SetWriteCallback(
+        *logger,
+        [&](const std::wstring &message)
+        {
+            if (message.find(throwingMarker) != std::wstring::npos)
+            {
+                throwTriggered.store(true, std::memory_order_release);
+                throw std::runtime_error("Simulated callback exception");
+            }
+
+            std::lock_guard lock(deliveryMutex);
+            deliveredMessages.push_back(message);
+        });
+
+    auto resetWriteCallback = wil::scope_exit(
+        [logger]
+        {
+            AsyncLoggerTestAccess::SetWriteCallback(*logger, {});
+        });
+
+    logger->Log(throwingMarker);
+    logger->Log(survivorMarker);
+
+    ASSERT_TRUE(logger->Shutdown());
+
+    EXPECT_TRUE(throwTriggered.load(std::memory_order_acquire));
+    std::lock_guard lock(deliveryMutex);
+    EXPECT_FALSE(ContainsMarker(deliveredMessages, throwingMarker));
+    EXPECT_TRUE(ContainsMarker(deliveredMessages, survivorMarker));
+}
+
+TEST_F(AsyncLoggerTests, LateWorkerCompletionAfterTimeoutReopensAdmissionViaResumeWhenStopped)
+{
+    auto *logger = AsyncLogger::GetInstance();
+    ASSERT_NE(nullptr, logger);
+    ASSERT_TRUE(logger->Shutdown());
+
+    wil::unique_event writeStarted(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    wil::unique_event releaseWrite(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    wil::unique_event writeCompleted(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    ASSERT_TRUE(writeStarted);
+    ASSERT_TRUE(releaseWrite);
+    ASSERT_TRUE(writeCompleted);
+
+    std::mutex writtenMessagesMutex;
+    std::vector<std::wstring> writtenMessages;
+
+    AsyncLoggerTestAccess::SetWriteCallback(
+        *logger,
+        [&](const std::wstring &message)
+        {
+            if (message.find(L"late-blocked") != std::wstring::npos)
+            {
+                SetEvent(writeStarted.get());
+                WaitForSingleObject(releaseWrite.get(), INFINITE);
+                SetEvent(writeCompleted.get());
+            }
+
+            std::lock_guard lock(writtenMessagesMutex);
+            writtenMessages.push_back(message);
+        });
+
+    auto releaseBlockedWrite = wil::scope_exit(
+        [&releaseWrite]
+        {
+            SetEvent(releaseWrite.get());
+        });
+
+    auto resetWriteCallback = wil::scope_exit(
+        [logger]
+        {
+            AsyncLoggerTestAccess::SetWriteCallback(*logger, {});
+        });
+
+    const std::wstring blockedMessage = UniqueMarker(L"late-blocked-message");
+    const std::wstring reopenedMessage = UniqueMarker(L"reopened-without-explicit-resume");
+
+    logger->Log(blockedMessage);
+    ASSERT_EQ(WaitForSingleObject(writeStarted.get(), 2000), WAIT_OBJECT_0);
+
+    EXPECT_FALSE(logger->BeginUnloadQuiescence(50));
+
+    ASSERT_TRUE(SetEvent(releaseWrite.get()));
+    ASSERT_EQ(WaitForSingleObject(writeCompleted.get(), 2000), WAIT_OBJECT_0);
+    ASSERT_TRUE(AsyncLoggerTestAccess::WaitForWorkerStopped(*logger, 2000));
+
+    logger->Log(reopenedMessage);
+    ASSERT_TRUE(logger->Shutdown());
+
+    std::lock_guard lock(writtenMessagesMutex);
+    EXPECT_TRUE(ContainsMarker(writtenMessages, blockedMessage));
+    EXPECT_TRUE(ContainsMarker(writtenMessages, reopenedMessage));
+}
 #endif
