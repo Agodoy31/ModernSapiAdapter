@@ -211,6 +211,7 @@ void AsyncLogger::WorkerThread() noexcept
             std::wstring message;
 #if defined(COREENGINE_TESTING)
             WriteCallback writeCallback;
+            bool callbackCopyFailed = false;
 #endif
             {
                 std::unique_lock lock(m_mutex);
@@ -231,9 +232,23 @@ void AsyncLogger::WorkerThread() noexcept
                 message = std::move(m_queue.front());
                 m_queue.pop();
 #if defined(COREENGINE_TESTING)
-                writeCallback = m_writeCallback;
+                try
+                {
+                    writeCallback = m_writeCallback;
+                }
+                catch (...)
+                {
+                    callbackCopyFailed = true;
+                }
 #endif
             }
+
+#if defined(COREENGINE_TESTING)
+            if (callbackCopyFailed)
+            {
+                continue;
+            }
+#endif
 
             DeliverMessageNoexcept(
                 message
@@ -274,12 +289,11 @@ void AsyncLogger::WorkerThread() noexcept
                 m_admission = Admission::Open;
             }
         }
-        m_cv.notify_all();
     }
     catch (...)
     {
-        m_cv.notify_all();
     }
+    m_cv.notify_all();
 }
 
 bool AsyncLogger::Shutdown() noexcept
