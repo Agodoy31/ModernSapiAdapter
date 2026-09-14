@@ -122,7 +122,7 @@ TEST_F(SapiEngineTests, TerminalEventDeclaringFewerBytesThanAlreadyReadFaultsThe
 
     const std::vector<uint8_t> audio(100, 0x33);
     ASSERT_TRUE(fixture.server.WriteAudio(audio));
-    EXPECT_TRUE(WaitForCondition(
+    ASSERT_TRUE(WaitForCondition(
         [&]
         {
             return fixture.mockSite->totalBytesWritten.load() >= 100;

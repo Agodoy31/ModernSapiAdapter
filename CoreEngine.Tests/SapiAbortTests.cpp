@@ -147,7 +147,7 @@ TEST_F(SapiEngineTests, ValidSynthesisCancelledWhileSpeakingCompletesWithoutFaul
 
     const std::vector<uint8_t> audio(40, 0x22);
     ASSERT_TRUE(fixture.server.WriteAudio(audio));
-    EXPECT_TRUE(WaitForCondition(
+    ASSERT_TRUE(WaitForCondition(
         [&]
         {
             return fixture.mockSite->totalBytesWritten.load() >= 40;
