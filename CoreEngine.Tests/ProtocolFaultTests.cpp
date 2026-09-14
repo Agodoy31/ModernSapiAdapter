@@ -98,6 +98,46 @@ TEST_F(SapiEngineTests, DuplicateSynthesisCompleteTotalFaultsTheWorker)
 }
 #endif
 
+TEST_F(SapiEngineTests, TerminalEventDeclaringFewerBytesThanAlreadyReadFaultsTheWorker)
+{
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(78));
+
+    HRESULT waitResult = S_OK;
+    std::thread waitThread(
+        [&]
+        {
+            waitResult = fixture.worker->WaitUntilFinished(fixture.mockSite.get());
+        });
+    auto joinWait = wil::scope_exit(
+        [&]
+        {
+            if (waitThread.joinable())
+            {
+                fixture.worker->Stop();
+                waitThread.join();
+            }
+        });
+
+    const std::vector<uint8_t> audio(100, 0x33);
+    ASSERT_TRUE(fixture.server.WriteAudio(audio));
+    EXPECT_TRUE(WaitForCondition(
+        [&]
+        {
+            return fixture.mockSite->totalBytesWritten.load() >= 100;
+        },
+        1000));
+
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":78,\"total_audio_bytes\":50}\n"));
+
+    waitThread.join();
+
+    EXPECT_EQ(waitResult, E_FAIL);
+    EXPECT_TRUE(fixture.worker->IsFaulted());
+}
+
 TEST_F(SapiEngineTests, MisalignedCancellationTotalFaultsTheWorker)
 {
     PipeServerWorkerFixture fixture;

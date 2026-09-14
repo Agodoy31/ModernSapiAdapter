@@ -101,6 +101,128 @@ TEST_F(SapiEngineTests, MissingEventNameIsSilentlyIgnored)
     }
 }
 
+TEST_F(SapiEngineTests, UnknownNamedEventWithActiveSpeakIdDoesNotFaultWorker)
+{
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(72));
+
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"custom_unknown_action\",\"speak_id\":72,\"payload\":\"telemetry\"}\n"));
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":72,\"total_audio_bytes\":0}\n"));
+
+    EXPECT_EQ(fixture.worker->WaitUntilFinished(nullptr), S_OK);
+    EXPECT_FALSE(fixture.worker->IsFaulted());
+
+    {
+        std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
+        EXPECT_TRUE(fixture.mockSite->receivedEvents.empty());
+    }
+}
+
+TEST_F(SapiEngineTests, UnknownNamedEventWithStaleSpeakIdIsRejectedByAdmissionWithoutFault)
+{
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(73));
+
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"custom_unknown_action\",\"speak_id\":12,\"payload\":\"stale_telemetry\"}\n"));
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":73,\"total_audio_bytes\":0}\n"));
+
+    EXPECT_EQ(fixture.worker->WaitUntilFinished(nullptr), S_OK);
+    EXPECT_FALSE(fixture.worker->IsFaulted());
+
+    {
+        std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
+        EXPECT_TRUE(fixture.mockSite->receivedEvents.empty());
+    }
+}
+
+TEST_F(SapiEngineTests, ValidBoundaryArrivingWhileIdleIsSuppressedWithoutFault)
+{
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(74));
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":74,\"total_audio_bytes\":0}\n"));
+    ASSERT_EQ(fixture.worker->WaitUntilFinished(nullptr), S_OK);
+
+    {
+        std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
+        fixture.mockSite->receivedEvents.clear();
+    }
+
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"word_boundary\",\"speak_id\":74,\"text_offset\":0,\"text_length\":4,\"audio_offset_ms\":10}\n"));
+
+    ASSERT_TRUE(fixture.worker->Start(75));
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":75,\"total_audio_bytes\":0}\n"));
+    ASSERT_EQ(fixture.worker->WaitUntilFinished(nullptr), S_OK);
+
+    EXPECT_FALSE(fixture.worker->IsFaulted());
+    {
+        std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
+        EXPECT_TRUE(fixture.mockSite->receivedEvents.empty());
+    }
+}
+
+TEST_F(SapiEngineTests, MalformedBoundaryWhileIdleFaultsTheWorker)
+{
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(76));
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":76,\"total_audio_bytes\":0}\n"));
+    ASSERT_EQ(fixture.worker->WaitUntilFinished(nullptr), S_OK);
+
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"word_boundary\",\"speak_id\":76,\"text_offset\":-1,\"text_length\":4,\"audio_offset_ms\":10}\n"));
+
+    EXPECT_TRUE(fixture.WaitForFault(1000));
+    EXPECT_TRUE(fixture.worker->IsFaulted());
+}
+
+TEST_F(SapiEngineTests, LegacyCompletedFollowedByRealTerminalCompletesSuccessfully)
+{
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(77));
+
+    HRESULT waitResult = E_FAIL;
+    std::thread waitThread(
+        [&]
+        {
+            waitResult = fixture.worker->WaitUntilFinished(nullptr);
+        });
+    auto joinWait = wil::scope_exit(
+        [&]
+        {
+            if (waitThread.joinable())
+            {
+                fixture.worker->Stop();
+                waitThread.join();
+            }
+        });
+
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"completed\",\"speak_id\":77}\n"));
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":77,\"total_audio_bytes\":0}\n"));
+
+    waitThread.join();
+
+    EXPECT_EQ(waitResult, S_OK);
+    EXPECT_FALSE(fixture.worker->IsFaulted());
+    {
+        std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
+        EXPECT_TRUE(fixture.mockSite->receivedEvents.empty());
+    }
+}
+
 #if defined(_DEBUG)
 TEST_F(SapiEngineTests, StaleSynthesisCompleteForDifferentSpeakIdDoesNotFaultIdleWorker)
 {

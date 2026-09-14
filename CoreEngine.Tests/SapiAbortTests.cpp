@@ -57,7 +57,15 @@ TEST_F(SapiEngineTests, BoundaryDuringCancellationIsSuppressedWithoutFault)
         {
             cancellationResult = fixture.worker->CancelAndDrain();
         });
-    ThreadJoinGuard cancellationJoin(cancellationThread);
+    auto joinCancellation = wil::scope_exit(
+        [&]
+        {
+            if (cancellationThread.joinable())
+            {
+                fixture.worker->Stop();
+                cancellationThread.join();
+            }
+        });
 
     std::string cancellationRequest;
     ASSERT_TRUE(fixture.server.ReadControl(cancellationRequest));
@@ -69,7 +77,8 @@ TEST_F(SapiEngineTests, BoundaryDuringCancellationIsSuppressedWithoutFault)
     ASSERT_TRUE(fixture.server.WriteControl(
         "{\"event\":\"synthesis_cancelled\",\"speak_id\":57,\"audio_bytes_written\":0}\n"));
 
-    EXPECT_TRUE(cancellationJoin.Join(2000));
+    cancellationThread.join();
+
     EXPECT_EQ(cancellationResult, S_OK);
     EXPECT_FALSE(fixture.worker->IsFaulted());
 
@@ -77,6 +86,81 @@ TEST_F(SapiEngineTests, BoundaryDuringCancellationIsSuppressedWithoutFault)
         std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
         EXPECT_TRUE(fixture.mockSite->receivedEvents.empty());
     }
+}
+
+TEST_F(SapiEngineTests, MalformedBoundaryWhileCancellingFaultsTheWorker)
+{
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(70));
+
+    HRESULT cancellationResult = S_OK;
+    std::thread cancellationThread(
+        [&]
+        {
+            cancellationResult = fixture.worker->CancelAndDrain();
+        });
+    auto joinCancellation = wil::scope_exit(
+        [&]
+        {
+            if (cancellationThread.joinable())
+            {
+                fixture.worker->Stop();
+                cancellationThread.join();
+            }
+        });
+
+    std::string cancellationRequest;
+    ASSERT_TRUE(fixture.server.ReadControl(cancellationRequest));
+    ASSERT_NE(cancellationRequest.find("\"command\":\"cancel\""), std::string::npos);
+
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"word_boundary\",\"speak_id\":70,\"text_offset\":-1,\"text_length\":4,\"audio_offset_ms\":10}\n"));
+
+    cancellationThread.join();
+
+    EXPECT_EQ(cancellationResult, E_FAIL);
+    EXPECT_TRUE(fixture.worker->IsFaulted());
+}
+
+TEST_F(SapiEngineTests, ValidSynthesisCancelledWhileSpeakingCompletesWithoutFault)
+{
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(71));
+
+    HRESULT waitResult = E_FAIL;
+    std::thread waitThread(
+        [&]
+        {
+            waitResult = fixture.worker->WaitUntilFinished(fixture.mockSite.get());
+        });
+    auto joinWait = wil::scope_exit(
+        [&]
+        {
+            if (waitThread.joinable())
+            {
+                fixture.worker->Stop();
+                waitThread.join();
+            }
+        });
+
+    const std::vector<uint8_t> audio(40, 0x22);
+    ASSERT_TRUE(fixture.server.WriteAudio(audio));
+    EXPECT_TRUE(WaitForCondition(
+        [&]
+        {
+            return fixture.mockSite->totalBytesWritten.load() >= 40;
+        },
+        1000));
+
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"synthesis_cancelled\",\"speak_id\":71,\"audio_bytes_written\":40}\n"));
+
+    waitThread.join();
+
+    EXPECT_EQ(waitResult, S_OK);
+    EXPECT_FALSE(fixture.worker->IsFaulted());
 }
 
 #if defined(_DEBUG)
