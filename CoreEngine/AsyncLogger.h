@@ -43,6 +43,12 @@ private:
     [[nodiscard]] bool StartLocked() noexcept;
     void WorkerThread() noexcept;
     void CleanupFileStreamNoexcept(bool flushBeforeClose) noexcept;
+    void DeliverMessageNoexcept(
+        const std::wstring& message
+#if defined(COREENGINE_TESTING)
+        , const WriteCallback& writeCallback
+#endif
+    ) noexcept;
 
     std::queue<std::wstring> m_queue;
     std::mutex m_mutex;

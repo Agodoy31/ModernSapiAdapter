@@ -175,6 +175,33 @@ void AsyncLogger::Log(const std::wstring& message) noexcept
     }
 }
 
+void AsyncLogger::DeliverMessageNoexcept(
+    const std::wstring& message
+#if defined(COREENGINE_TESTING)
+    , const WriteCallback& writeCallback
+#endif
+) noexcept
+{
+    try
+    {
+#if defined(COREENGINE_TESTING)
+        if (writeCallback)
+        {
+            writeCallback(message);
+            return;
+        }
+#endif
+        if (m_file.is_open())
+        {
+            m_file << message << L'\n';
+            m_file.flush();
+        }
+    }
+    catch (...)
+    {
+    }
+}
+
 void AsyncLogger::WorkerThread() noexcept
 {
     try
@@ -182,9 +209,13 @@ void AsyncLogger::WorkerThread() noexcept
         for (;;)
         {
             std::wstring message;
+#if defined(COREENGINE_TESTING)
+            WriteCallback writeCallback;
+#endif
             {
                 std::unique_lock lock(m_mutex);
-                m_cv.wait(lock, [this] {
+                m_cv.wait(lock, [this]
+                {
                     return m_stopRequested || !m_queue.empty();
                 });
 
@@ -199,31 +230,17 @@ void AsyncLogger::WorkerThread() noexcept
 
                 message = std::move(m_queue.front());
                 m_queue.pop();
+#if defined(COREENGINE_TESTING)
+                writeCallback = m_writeCallback;
+#endif
             }
 
-            try
-            {
+            DeliverMessageNoexcept(
+                message
 #if defined(COREENGINE_TESTING)
-                WriteCallback writeCallback;
-                {
-                    std::lock_guard lock(m_mutex);
-                    writeCallback = m_writeCallback;
-                }
-                if (writeCallback)
-                {
-                    writeCallback(message);
-                }
-                else
+                , writeCallback
 #endif
-                if (m_file.is_open())
-                {
-                    m_file << message << L'\n';
-                    m_file.flush();
-                }
-            }
-            catch (...)
-            {
-            }
+            );
         }
     }
     catch (...)
@@ -257,11 +274,12 @@ void AsyncLogger::WorkerThread() noexcept
                 m_admission = Admission::Open;
             }
         }
+        m_cv.notify_all();
     }
     catch (...)
     {
+        m_cv.notify_all();
     }
-    m_cv.notify_all();
 }
 
 bool AsyncLogger::Shutdown() noexcept
