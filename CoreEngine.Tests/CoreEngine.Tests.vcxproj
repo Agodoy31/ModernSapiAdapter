@@ -120,6 +120,7 @@
     <ClInclude Include="MockSpObjectToken.h" />
     <ClInclude Include="ControlPipeTestServer.h" />
     <ClInclude Include="CoreEngineDllFixture.h" />
+    <ClInclude Include="..\CoreEngine\SapiFragmentSerializer.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DllEntryAdmissionTests.cpp" />
@@ -147,6 +148,10 @@
     <ClCompile Include="ScopedOverlappedTests.cpp" />
 
     <ClCompile Include="..\CoreEngine\SapiEngine.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
+    </ClCompile>
+    <ClCompile Include="..\CoreEngine\SapiFragmentSerializer.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <ProgramDataBaseFileName>$(IntDir)vc145_core.pdb</ProgramDataBaseFileName>
     </ClCompile>

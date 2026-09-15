@@ -2,6 +2,7 @@
 #include "SapiEngine.h"
 #include "AudioFormatUtils.h"
 #include "JsonValue.h"
+#include "SapiFragmentSerializer.h"
 #include "StringUtils.h"
 
 CSapiEngine::CSapiEngine() = default;
@@ -204,7 +205,7 @@ IFACEMETHODIMP CSapiEngine::Speak(DWORD /*dwSpeakFlags*/,
         }
     }
 
-    speakReq["fragments"] = SerializeFragmentsToJson(pTextFragList);
+    speakReq["fragments"] = SapiFragmentSerializer::Serialize(pTextFragList);
 
     if (!worker->Start(speakId))
     {
@@ -554,71 +555,3 @@ void CSapiEngine::RetireFaultedSessionLocked()
     m_pWorker.reset();
     m_pClient.reset();
 }
-
-std::string CSapiEngine::GetFragmentUtf8Text(const SPVTEXTFRAG* fragment)
-{
-    if (!fragment || !fragment->pTextStart || fragment->ulTextLen == 0)
-    {
-        return std::string{};
-    }
-
-    return StringUtils::WideToUtf8(fragment->pTextStart, fragment->ulTextLen);
-}
-
-nlohmann::json CSapiEngine::SerializeFragmentsToJson(const SPVTEXTFRAG* pFragList)
-{
-    nlohmann::json fragments = nlohmann::json::array();
-    const SPVTEXTFRAG* pFrag = pFragList;
-    while (pFrag)
-    {
-        nlohmann::json fragJson;
-
-        switch (pFrag->State.eAction)
-        {
-        case SPVA_Bookmark:
-        {
-            const std::string bookmarkText = GetFragmentUtf8Text(pFrag);
-            if (!bookmarkText.empty())
-            {
-                fragJson["bookmark"] = bookmarkText;
-            }
-            break;
-        }
-
-        case SPVA_Silence:
-        {
-            fragJson["silence_ms"] = pFrag->State.SilenceMSecs;
-            break;
-        }
-
-        case SPVA_Speak:
-        case SPVA_Pronounce:
-        case SPVA_SpellOut:
-        case SPVA_Section:
-        case SPVA_ParseUnknownTag:
-        {
-            const std::string speechText = GetFragmentUtf8Text(pFrag);
-            if (!speechText.empty())
-            {
-                fragJson["text"] = speechText;
-                fragJson["source_offset"] = pFrag->ulTextSrcOffset;
-            }
-            fragJson["volume"] = pFrag->State.Volume;
-            fragJson["pitch"] = pFrag->State.PitchAdj.MiddleAdj;
-            fragJson["rate"] = pFrag->State.RateAdj;
-            break;
-        }
-
-        default:
-        {
-            break;
-        }
-        }
-
-        fragments.push_back(fragJson);
-        pFrag = pFrag->pNext;
-    }
-
-    return fragments;
-}
-

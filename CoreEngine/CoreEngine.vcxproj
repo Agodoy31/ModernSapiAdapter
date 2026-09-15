@@ -176,6 +176,7 @@
     <ClInclude Include="PcmFrameAssembler.h" />
     <ClInclude Include="ProviderSessionConfig.h" />
     <ClInclude Include="SapiEngine.h" />
+    <ClInclude Include="SapiFragmentSerializer.h" />
     <ClInclude Include="SpeechWorker.h" />
     <ClInclude Include="SpeechWorkerTestHooks.h" />
     <ClInclude Include="SpeechEventTypes.h" />
@@ -195,6 +196,7 @@
     <ClCompile Include="PipeSecurityUtils.cpp" />
     <ClCompile Include="PcmFrameAssembler.cpp" />
     <ClCompile Include="SapiEngine.cpp" />
+    <ClCompile Include="SapiFragmentSerializer.cpp" />
     <ClCompile Include="SpeechWorker.cpp" />
     <ClCompile Include="StringUtils.cpp" />
     <ClCompile Include="pch.cpp">

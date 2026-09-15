@@ -1,10 +1,10 @@
 #include "pch.h"
 #include <gtest/gtest.h>
-#include "../CoreEngine/SapiEngine.h"
+#include "../CoreEngine/SapiFragmentSerializer.h"
 
 TEST(SapiFragmentSerializationTests, NullFragmentListReturnsEmptyJsonArray)
 {
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(nullptr);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(nullptr);
     ASSERT_TRUE(result.is_array());
     EXPECT_TRUE(result.empty());
 }
@@ -18,7 +18,7 @@ TEST(SapiFragmentSerializationTests, BookmarkFragmentSerializesCorrectly)
     frag.ulTextLen = static_cast<ULONG>(wcslen(bookmarkText));
     frag.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 1u);
     ASSERT_TRUE(result[0].contains("bookmark"));
@@ -32,7 +32,7 @@ TEST(SapiFragmentSerializationTests, SilenceFragmentSerializesCorrectly)
     frag.State.SilenceMSecs = 500;
     frag.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 1u);
     ASSERT_TRUE(result[0].contains("silence_ms"));
@@ -52,7 +52,7 @@ TEST(SapiFragmentSerializationTests, SpeakTextFragmentSerializesOffsetsAndProsod
     frag.State.RateAdj = 2;
     frag.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 1u);
     EXPECT_EQ(result[0]["text"], "Hello world");
@@ -86,7 +86,7 @@ TEST(SapiFragmentSerializationTests, MultipleLinkedFragmentsPreserveSequence)
     frag2.pNext = &frag3;
     frag3.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag1);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag1);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 3u);
 
@@ -106,7 +106,7 @@ TEST(SapiFragmentSerializationTests, NonAsciiTextFragmentSerializesCorrectly)
     frag.State.Volume = 100;
     frag.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 1u);
     EXPECT_EQ(result[0]["text"].get<std::string>(), "\xE3\x81\x93\xE3\x82\x93\xE3\x81\xAB\xE3\x81\xA1\xE3\x81\xAF\xE4\xB8\x96\xE7\x95\x8C \xF0\x9F\x98\x80 caf\xC3\xA9");
@@ -123,7 +123,7 @@ TEST(SapiFragmentSerializationTests, ExplicitLengthFragmentWithEmbeddedNullSeria
     frag.State.Volume = 100;
     frag.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 1u);
     EXPECT_EQ(result[0]["text"], std::string("Hello\0World", 11));
@@ -137,7 +137,7 @@ TEST(SapiFragmentSerializationTests, NullTextPointerBookmarkSerializesToNull)
     frag.ulTextLen = 10;
     frag.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 1u);
     EXPECT_TRUE(result[0].is_null());
@@ -155,7 +155,7 @@ TEST(SapiFragmentSerializationTests, NullTextPointerSpeakSerializesProsodyWithou
     frag.State.RateAdj = 3;
     frag.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 1u);
     EXPECT_FALSE(result[0].contains("text"));
@@ -174,7 +174,7 @@ TEST(SapiFragmentSerializationTests, ZeroTextLengthBookmarkSerializesToNull)
     frag.ulTextLen = 0;
     frag.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 1u);
     EXPECT_TRUE(result[0].is_null());
@@ -193,7 +193,7 @@ TEST(SapiFragmentSerializationTests, ZeroTextLengthSpeakSerializesProsodyWithout
     frag.State.RateAdj = -1;
     frag.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 1u);
     EXPECT_FALSE(result[0].contains("text"));
@@ -216,7 +216,7 @@ TEST(SapiFragmentSerializationTests, PronounceActionSerializesTextOffsetsAndPros
     frag.State.RateAdj = 1;
     frag.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 1u);
     EXPECT_EQ(result[0]["text"], "PronounceMe");
@@ -239,7 +239,7 @@ TEST(SapiFragmentSerializationTests, SpellOutActionSerializesTextOffsetsAndProso
     frag.State.RateAdj = -2;
     frag.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 1u);
     EXPECT_EQ(result[0]["text"], "SpellOutMe");
@@ -262,7 +262,7 @@ TEST(SapiFragmentSerializationTests, SectionActionSerializesTextOffsetsAndProsod
     frag.State.RateAdj = 0;
     frag.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 1u);
     EXPECT_EQ(result[0]["text"], "SectionHeading");
@@ -285,7 +285,7 @@ TEST(SapiFragmentSerializationTests, ParseUnknownTagActionSerializesTextOffsetsA
     frag.State.RateAdj = 2;
     frag.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 1u);
     EXPECT_EQ(result[0]["text"], "<custom-tag>");
@@ -305,7 +305,7 @@ TEST(SapiFragmentSerializationTests, UnsupportedActionSerializesToNull)
     frag.ulTextSrcOffset = 50;
     frag.pNext = nullptr;
 
-    nlohmann::json result = CSapiEngine::SerializeFragmentsToJson(&frag);
+    nlohmann::json result = SapiFragmentSerializer::Serialize(&frag);
     ASSERT_TRUE(result.is_array());
     ASSERT_EQ(result.size(), 1u);
     EXPECT_TRUE(result[0].is_null());
