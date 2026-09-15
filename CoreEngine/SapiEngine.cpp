@@ -283,19 +283,6 @@ void CSapiEngine::FailNextSpeakControlSendForTest()
 }
 #endif
 
-uint64_t CSapiEngine::AudioOffsetMsToBytes(uint32_t audioMs) const
-{
-    if (m_config.audioFormat.nSamplesPerSec == 0 || m_config.audioFormat.nBlockAlign == 0)
-    {
-        return 0;
-    }
-
-    const uint64_t frames = (static_cast<uint64_t>(audioMs) * m_config.audioFormat.nSamplesPerSec) / 1000;
-    return frames * m_config.audioFormat.nBlockAlign;
-}
-
-
-
 void CSapiEngine::DispatchBoundaryEvent(ISpTTSEngineSite* site, const ProviderControlEvent& event, SPEVENTENUM eventId)
 {
     if (!site || !event.hasValidSpeechOffsets)
@@ -306,7 +293,9 @@ void CSapiEngine::DispatchBoundaryEvent(ISpTTSEngineSite* site, const ProviderCo
     SPEVENT spEvent = {};
     spEvent.eEventId = eventId;
     spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
-    spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(event.speechOffsets.audioOffsetMs);
+    spEvent.ullAudioStreamOffset = AudioFormatUtils::AudioOffsetMillisecondsToBytes(
+        event.speechOffsets.audioOffsetMs,
+        m_config.audioFormat);
     spEvent.wParam = static_cast<WPARAM>(event.speechOffsets.textLength);
     spEvent.lParam = static_cast<LPARAM>(event.speechOffsets.textOffset);
 
@@ -322,7 +311,9 @@ void CSapiEngine::DispatchBookmarkEvent(ISpTTSEngineSite* site, const ProviderCo
 
     SPEVENT spEvent = {};
     spEvent.eEventId = SPEI_TTS_BOOKMARK;
-    spEvent.ullAudioStreamOffset = AudioOffsetMsToBytes(event.speechOffsets.audioOffsetMs);
+    spEvent.ullAudioStreamOffset = AudioFormatUtils::AudioOffsetMillisecondsToBytes(
+        event.speechOffsets.audioOffsetMs,
+        m_config.audioFormat);
     spEvent.elParamType = SPET_LPARAM_IS_UNDEFINED;
 
     if (!event.bookmarkName.empty())

@@ -53,3 +53,73 @@ TEST(AudioFormatUtilsTests, WaveFormatExToJsonSerializesCorrectly)
     EXPECT_EQ(json["channels"], 2u);
     EXPECT_EQ(json["encoding"], "pcm");
 }
+
+TEST(AudioFormatUtilsTests, AudioOffsetMillisecondsToBytesReturnsZeroWhenSampleRateIsZero)
+{
+    WAVEFORMATEX format = {};
+    format.wFormatTag = WAVE_FORMAT_PCM;
+    format.nSamplesPerSec = 0;
+    format.nBlockAlign = 2;
+
+    EXPECT_EQ(AudioFormatUtils::AudioOffsetMillisecondsToBytes(100, format), 0u);
+}
+
+TEST(AudioFormatUtilsTests, AudioOffsetMillisecondsToBytesReturnsZeroWhenBlockAlignIsZero)
+{
+    WAVEFORMATEX format = {};
+    format.wFormatTag = WAVE_FORMAT_PCM;
+    format.nSamplesPerSec = 24000;
+    format.nBlockAlign = 0;
+
+    EXPECT_EQ(AudioFormatUtils::AudioOffsetMillisecondsToBytes(100, format), 0u);
+}
+
+TEST(AudioFormatUtilsTests, AudioOffsetMillisecondsToBytesReturnsZeroForZeroMilliseconds)
+{
+    WAVEFORMATEX format = {};
+    format.wFormatTag = WAVE_FORMAT_PCM;
+    format.nSamplesPerSec = 24000;
+    format.nBlockAlign = 2;
+
+    EXPECT_EQ(AudioFormatUtils::AudioOffsetMillisecondsToBytes(0, format), 0u);
+}
+
+TEST(AudioFormatUtilsTests, AudioOffsetMillisecondsToBytesConvertsStandardOffsetCorrectly)
+{
+    WAVEFORMATEX format = {};
+    format.wFormatTag = WAVE_FORMAT_PCM;
+    format.nSamplesPerSec = 24000;
+    format.nBlockAlign = 2;
+
+    EXPECT_EQ(AudioFormatUtils::AudioOffsetMillisecondsToBytes(100, format), 4800u);
+}
+
+TEST(AudioFormatUtilsTests, AudioOffsetMillisecondsToBytesTruncatesToCompletePcmFrames)
+{
+    WAVEFORMATEX format = {};
+    format.wFormatTag = WAVE_FORMAT_PCM;
+    format.nSamplesPerSec = 44100;
+    format.nBlockAlign = 2;
+
+    EXPECT_EQ(AudioFormatUtils::AudioOffsetMillisecondsToBytes(1, format), 88u);
+}
+
+TEST(AudioFormatUtilsTests, AudioOffsetMillisecondsToBytesHandlesMultiChannelBlockAlign)
+{
+    WAVEFORMATEX format = {};
+    format.wFormatTag = WAVE_FORMAT_PCM;
+    format.nSamplesPerSec = 48000;
+    format.nBlockAlign = 4;
+
+    EXPECT_EQ(AudioFormatUtils::AudioOffsetMillisecondsToBytes(25, format), 4800u);
+}
+
+TEST(AudioFormatUtilsTests, AudioOffsetMillisecondsToBytesHandlesLongAudioOffsetsWithoutOverflow)
+{
+    WAVEFORMATEX format = {};
+    format.wFormatTag = WAVE_FORMAT_PCM;
+    format.nSamplesPerSec = 24000;
+    format.nBlockAlign = 2;
+
+    EXPECT_EQ(AudioFormatUtils::AudioOffsetMillisecondsToBytes(90000, format), 4320000u);
+}

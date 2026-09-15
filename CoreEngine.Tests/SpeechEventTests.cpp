@@ -494,14 +494,14 @@ TEST_F(SapiEngineTests, RealControlPipeBoundaryAndBookmarkEndToEnd)
     const SPEVENT& ev1 = fixture.mockSite->receivedEvents[0];
     EXPECT_EQ(ev1.eEventId, SPEI_WORD_BOUNDARY);
     EXPECT_EQ(ev1.elParamType, SPET_LPARAM_IS_UNDEFINED);
-    EXPECT_EQ(ev1.ullAudioStreamOffset, fixture.engine->AudioOffsetMsToBytes(100));
+    EXPECT_EQ(ev1.ullAudioStreamOffset, 4800u);
     EXPECT_EQ(ev1.wParam, 5u);
     EXPECT_EQ(ev1.lParam, 10);
 
     const SPEVENT& ev2 = fixture.mockSite->receivedEvents[1];
     EXPECT_EQ(ev2.eEventId, SPEI_TTS_BOOKMARK);
     EXPECT_EQ(ev2.elParamType, SPET_LPARAM_IS_STRING);
-    EXPECT_EQ(ev2.ullAudioStreamOffset, fixture.engine->AudioOffsetMsToBytes(200));
+    EXPECT_EQ(ev2.ullAudioStreamOffset, 9600u);
     EXPECT_EQ(ev2.wParam, 42u);
     ASSERT_NE(ev2.lParam, 0);
     EXPECT_STREQ(reinterpret_cast<const wchar_t*>(ev2.lParam), L"42_\u30D6\u30C3\u30AF\u30DE\u30FC\u30AF_\xD83D\xDE00");

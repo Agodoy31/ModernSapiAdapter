@@ -73,4 +73,18 @@ nlohmann::json WaveFormatExToJson(
     };
 }
 
+uint64_t AudioOffsetMillisecondsToBytes(
+    const uint32_t audioOffsetMs,
+    const WAVEFORMATEX& format) noexcept
+{
+    if (format.nSamplesPerSec == 0 || format.nBlockAlign == 0)
+    {
+        return 0;
+    }
+
+    const uint64_t frames =
+        (static_cast<uint64_t>(audioOffsetMs) * format.nSamplesPerSec) / 1000;
+    return frames * format.nBlockAlign;
+}
+
 } // namespace AudioFormatUtils

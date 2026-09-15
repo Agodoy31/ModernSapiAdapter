@@ -50,7 +50,6 @@ class CSapiEngine : public winrt::implements<CSapiEngine, ISpTTSEngine, ISpObjec
     friend class SapiEngineTests_EventAfterReplacementSitePublishedIsDropped_Test;
     friend class SapiEngineTests_EventWithCapturedOldSiteCompletesOnlyAgainstOldSite_Test;
     friend class SapiEngineTests_AddEventsBlockingDoesNotDelayWorkerFaultPublication_Test;
-    friend class SapiEngineTests_RealControlPipeBoundaryAndBookmarkEndToEnd_Test;
     friend class SapiEngineTests_RealControlPipeLogWithFriendlyTextEndToEnd_Test;
 public:
     /**
@@ -141,7 +140,6 @@ private:
     ProviderSessionConfig m_config;
     std::atomic<uint64_t> m_speakIdCounter{0};
 
-    uint64_t AudioOffsetMsToBytes(uint32_t audioMs) const;
     HRESULT LoadProviderFromToken(ISpObjectToken* pToken);
     HRESULT CreateProviderSessionLocked();
     void RetireFaultedSessionLocked();

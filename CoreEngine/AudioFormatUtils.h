@@ -28,4 +28,14 @@ namespace AudioFormatUtils
      */
     [[nodiscard]] nlohmann::json WaveFormatExToJson(
         const WAVEFORMATEX& format);
+
+    /**
+     * @brief Converts an audio offset in milliseconds to a byte offset aligned to PCM frame boundaries.
+     * @param audioOffsetMs Audio offset in milliseconds.
+     * @param format WAVEFORMATEX structure describing the PCM audio format.
+     * @return Byte offset corresponding to the millisecond offset.
+     */
+    [[nodiscard]] uint64_t AudioOffsetMillisecondsToBytes(
+        uint32_t audioOffsetMs,
+        const WAVEFORMATEX& format) noexcept;
 }
