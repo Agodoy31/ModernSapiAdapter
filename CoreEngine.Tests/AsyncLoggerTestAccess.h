@@ -23,6 +23,11 @@ class AsyncLoggerTestAccess final
         return logger.WaitForWorkerStoppedForTesting(timeoutMs);
     }
 
+    [[nodiscard]] static bool WaitForAlreadyDrainingWaiter(AsyncLogger &logger, DWORD timeoutMs) noexcept
+    {
+        return logger.WaitForAlreadyDrainingWaiterForTesting(timeoutMs);
+    }
+
     static void SetLogFilePath(const std::wstring &path)
     {
         AsyncLogger::SetLogFilePathForTesting(path);

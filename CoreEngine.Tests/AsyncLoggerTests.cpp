@@ -72,24 +72,37 @@ namespace
 struct ThrowingCopyFunctor
 {
     std::shared_ptr<std::atomic_bool> shouldThrow;
+    HANDLE copyAttemptedEvent = nullptr;
     std::shared_ptr<std::atomic_bool> copyAttempted;
     std::function<void(const std::wstring &)> targetCallback;
 
     ThrowingCopyFunctor(std::shared_ptr<std::atomic_bool> st,
+                        HANDLE caEvent,
                         std::shared_ptr<std::atomic_bool> ca,
                         std::function<void(const std::wstring &)> cb)
-        : shouldThrow(std::move(st)), copyAttempted(std::move(ca)), targetCallback(std::move(cb))
+        : shouldThrow(std::move(st)),
+          copyAttemptedEvent(caEvent),
+          copyAttempted(std::move(ca)),
+          targetCallback(std::move(cb))
     {
     }
 
     ThrowingCopyFunctor(const ThrowingCopyFunctor &other)
-        : shouldThrow(other.shouldThrow), copyAttempted(other.copyAttempted), targetCallback(other.targetCallback)
+        : shouldThrow(other.shouldThrow),
+          copyAttemptedEvent(other.copyAttemptedEvent),
+          copyAttempted(other.copyAttempted),
+          targetCallback(other.targetCallback)
     {
+        const bool willThrow = shouldThrow && shouldThrow->load(std::memory_order_acquire);
         if (copyAttempted)
         {
             copyAttempted->store(true, std::memory_order_release);
         }
-        if (shouldThrow && shouldThrow->load(std::memory_order_acquire))
+        if (copyAttemptedEvent != nullptr)
+        {
+            SetEvent(copyAttemptedEvent);
+        }
+        if (willThrow)
         {
             throw std::runtime_error("Simulated throwing functor copy");
         }
@@ -670,6 +683,8 @@ TEST_F(AsyncLoggerTests, ThrowingCallbackCopyDiscardsMessageWithoutTerminatingWo
 
     auto shouldThrow = std::make_shared<std::atomic_bool>(true);
     auto copyAttempted = std::make_shared<std::atomic_bool>(false);
+    wil::unique_event copyAttemptedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    ASSERT_TRUE(copyAttemptedEvent);
 
     std::mutex deliveryMutex;
     std::vector<std::wstring> deliveredMessages;
@@ -681,6 +696,10 @@ TEST_F(AsyncLoggerTests, ThrowingCallbackCopyDiscardsMessageWithoutTerminatingWo
             {
                 shouldThrow->store(false, std::memory_order_release);
             }
+            if (copyAttemptedEvent)
+            {
+                SetEvent(copyAttemptedEvent.get());
+            }
             AsyncLoggerTestAccess::SetWriteCallback(*logger, {});
             (void)logger->Shutdown();
         });
@@ -689,6 +708,7 @@ TEST_F(AsyncLoggerTests, ThrowingCallbackCopyDiscardsMessageWithoutTerminatingWo
         *logger,
         ThrowingCopyFunctor(
             shouldThrow,
+            copyAttemptedEvent.get(),
             copyAttempted,
             [&](const std::wstring &message)
             {
@@ -698,11 +718,7 @@ TEST_F(AsyncLoggerTests, ThrowingCallbackCopyDiscardsMessageWithoutTerminatingWo
 
     logger->Log(throwingMarker);
 
-    const ULONGLONG startTick = GetTickCount64();
-    while (!copyAttempted->load(std::memory_order_acquire) && GetTickCount64() - startTick < 2000)
-    {
-        Sleep(5);
-    }
+    ASSERT_EQ(WaitForSingleObject(copyAttemptedEvent.get(), 2000), WAIT_OBJECT_0);
     ASSERT_TRUE(copyAttempted->load(std::memory_order_acquire));
 
     shouldThrow->store(false, std::memory_order_release);
@@ -849,26 +865,27 @@ TEST_F(AsyncLoggerTests, RepeatedQuiescenceWhileGenuinelyDrainingWaitsAndStopsWo
 
     EXPECT_FALSE(logger->BeginUnloadQuiescence(0));
 
-    std::atomic_bool secondCallStarted{false};
     std::atomic_bool secondCallFinished{false};
     bool secondCallResult = false;
 
     std::thread secondCaller(
         [&]
         {
-            secondCallStarted.store(true, std::memory_order_release);
             secondCallResult = logger->BeginUnloadQuiescence(3000);
             secondCallFinished.store(true, std::memory_order_release);
         });
 
-    const ULONGLONG startWait = GetTickCount64();
-    while (!secondCallStarted.load(std::memory_order_acquire) && GetTickCount64() - startWait < 1000)
-    {
-        Sleep(5);
-    }
-    ASSERT_TRUE(secondCallStarted.load(std::memory_order_acquire));
+    auto secondCallerGuard = wil::scope_exit(
+        [&]
+        {
+            SetEvent(releaseWrite.get());
+            if (secondCaller.joinable())
+            {
+                secondCaller.join();
+            }
+        });
 
-    Sleep(50);
+    ASSERT_TRUE(AsyncLoggerTestAccess::WaitForAlreadyDrainingWaiter(*logger, 2000));
     EXPECT_FALSE(secondCallFinished.load(std::memory_order_acquire));
 
     ASSERT_TRUE(SetEvent(releaseWrite.get()));

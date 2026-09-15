@@ -317,6 +317,10 @@ bool AsyncLogger::BeginUnloadQuiescence(const DWORD timeoutMs) noexcept
         return false;
     }
 
+#if defined(COREENGINE_TESTING)
+    const bool wasAlreadyDraining = (m_state == State::DrainingForUnload);
+#endif
+
     if (m_state == State::Running)
     {
         m_state = State::DrainingForUnload;
@@ -325,6 +329,23 @@ bool AsyncLogger::BeginUnloadQuiescence(const DWORD timeoutMs) noexcept
         m_cv.notify_all();
         lock.lock();
     }
+
+#if defined(COREENGINE_TESTING)
+    if (wasAlreadyDraining)
+    {
+        m_alreadyDrainingWaitersForTesting.fetch_add(1, std::memory_order_acq_rel);
+        m_cv.notify_all();
+    }
+    auto alreadyDrainingGuard = wil::scope_exit(
+        [this, wasAlreadyDraining]
+        {
+            if (wasAlreadyDraining)
+            {
+                m_alreadyDrainingWaitersForTesting.fetch_sub(1, std::memory_order_acq_rel);
+                m_cv.notify_all();
+            }
+        });
+#endif
 
     const auto stopped = [this] { return m_state == State::Stopped || m_state == State::StopFailed; };
     if (!stopped() && !m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), stopped))
@@ -379,8 +400,18 @@ void AsyncLogger::SetWriteCallbackForTesting(WriteCallback callback) noexcept
 bool AsyncLogger::WaitForWorkerStoppedForTesting(const DWORD timeoutMs) noexcept
 {
     std::unique_lock lock(m_mutex);
-    return m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
+    return m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this]
+    {
         return m_state == State::Stopped;
+    });
+}
+
+bool AsyncLogger::WaitForAlreadyDrainingWaiterForTesting(const DWORD timeoutMs) noexcept
+{
+    std::unique_lock lock(m_mutex);
+    return m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this]
+    {
+        return m_alreadyDrainingWaitersForTesting.load(std::memory_order_acquire) > 0;
     });
 }
 #endif

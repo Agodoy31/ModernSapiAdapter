@@ -17,6 +17,7 @@ public:
     void SetWriteCallbackForTesting(WriteCallback callback) noexcept;
     [[nodiscard]] bool WaitForWorkerStoppedForTesting(DWORD timeoutMs) noexcept;
     static void SetLogFilePathForTesting(const std::wstring& path);
+    [[nodiscard]] bool WaitForAlreadyDrainingWaiterForTesting(DWORD timeoutMs) noexcept;
 #endif
 
     AsyncLogger(const AsyncLogger&) = delete;
@@ -61,6 +62,7 @@ private:
     std::wofstream m_file;
 #if defined(COREENGINE_TESTING)
     WriteCallback m_writeCallback;
+    std::atomic_size_t m_alreadyDrainingWaitersForTesting{0};
 #endif
 };
 
