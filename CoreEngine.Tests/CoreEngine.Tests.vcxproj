@@ -128,7 +128,9 @@
     <ClCompile Include="ProviderSessionTests.cpp" />
     <ClCompile Include="ControlStreamTests.cpp" />
     <ClCompile Include="PcmFrameAssemblerTests.cpp" />
-    <ClCompile Include="AudioStreamingTests.cpp" />
+    <ClCompile Include="AudioTerminalBoundaryTests.cpp" />
+    <ClCompile Include="AudioFrameDeliveryTests.cpp" />
+    <ClCompile Include="SapiWriteConcurrencyTests.cpp" />
     <ClCompile Include="SapiAbortTests.cpp" />
     <ClCompile Include="WriteRejectionCancellationTests.cpp" />
     <ClCompile Include="CancellationTimeoutTests.cpp" />
