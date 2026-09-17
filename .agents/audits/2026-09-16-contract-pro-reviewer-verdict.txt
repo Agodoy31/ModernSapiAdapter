@@ -1,0 +1,49 @@
+# Contract Completeness and Test Reviewer Verdict - Phase A
+
+**Date:** 2026-09-16
+**Reviewer:** Independent Contract Completeness and Test Reviewer (Gemini Pro)
+**Scope:** Phase A (Request-State Policy Design) of the SpeechWorker incremental decomposition
+
+## Review Findings
+
+1. **Pure policy contract:**
+   - All proposed decision functions in `SpeechStatePolicy.h` are marked `noexcept` and are bounded, stateless, and allocation-free.
+   - The inputs are passed by value or `const` reference (immutable).
+   - There are zero out-parameters; all decisions are returned as owned, strongly-typed structs (e.g., `StartDecision`, `TerminalBoundaryDecision`).
+   - The returned structs retain zero pointers or references to caller state.
+   - **Status: Pass**
+
+2. **Contract completeness:**
+   - Section 3 of the Request-State Policy Design Specification (`2026-09-16-speechworker-phase-a-request-policy-design.md`) details the contract for every proposed decision function.
+   - It explicitly defines the inputs, outputs, preconditions, caller-applied field mutations, assembler actions, notification requirements, post-unlock actions, and exactly-once rules for every policy decision.
+   - **Status: Pass**
+
+3. **Zero production edits:**
+   - A `git status` check confirms the working tree is clean on `codex/phase7a-speech-state-policy-design`.
+   - Zero production or test code files in `CoreEngine/` or `CoreEngine.Tests/` have been modified during this planning phase.
+   - **Status: Pass**
+
+4. **Test plan rigor:**
+   - The implementation plan lists the exact files to be created and modified, and the signatures to be implemented.
+   - Task 1 explicitly enumerates testing every policy path and branch directly in `CoreEngine.Tests/SpeechStatePolicyTests.cpp`.
+   - The required real-pipe and callback-boundary integration tests (`SpeakWaitsForSynthesisCompleteByteBoundary`, `RealControlPipeBoundaryAndBookmarkEndToEnd`, `OutputSiteAbortCancelsTheActiveRequest`, `AddEventsBlockingDoesNotDelayWorkerFaultPublication`) are explicitly enumerated.
+   - **Status: Pass**
+
+5. **Verification harness & constraints:**
+   - The 30-second watchdog command is provided in a PowerShell block.
+   - The `MockProvider` quiescence mechanism is explicitly documented with a PowerShell command.
+   - The pre-change baseline test count (193 tests in Debug x64) is stated.
+   - Immutable evidence paths (`.agents/sdd/phase7a/`) are documented.
+   - The ARM64 dependency exception is explicitly noted, and x86 compilation is strictly prohibited.
+   - **Status: Pass**
+
+6. **Formatting & hygiene:**
+   - Strict Allman formatting is explicitly required in the constraints and task steps.
+   - Cleanliness via `git diff --check` with zero whitespace or formatting issues is a mandatory verification step in the plan.
+   - **Status: Pass**
+
+## Verdict
+
+The Phase A Request-State Policy Design package meets all architectural, contract, and test planning criteria.
+
+**VERDICT: APPROVED**
