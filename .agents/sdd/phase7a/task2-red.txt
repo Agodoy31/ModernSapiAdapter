@@ -1,0 +1,55 @@
+SpeechStatePolicyTests.obj : error LNK2019: unresolved external symbol "struct SpeechStatePolicy::StartDecision
+__cdecl SpeechStatePolicy::EvaluateStart(struct RequestContext const &,unsigned __int64,unsigned __int64)"
+(?EvaluateStart@SpeechStatePolicy@@YA?AUStartDecision@1@AEBURequestContext@@_K1@Z) referenced in function "private:
+virtual void __cdecl SpeechStatePolicyTests_StartAcceptsOnlyQuiescentNonFaultPendingState_Test::TestBody(void)"
+(?TestBody@SpeechStatePolicyTests_StartAcceptsOnlyQuiescentNonFaultPendingState_Test@@EEAAXXZ)
+[D:\Projects\ModernSapiAdapter\.worktrees\phase7a-speech-state-policy\CoreEngine.Tests\CoreEngine.Tests.vcxproj]
+SpeechStatePolicyTests.obj : error LNK2019: unresolved external symbol "struct
+SpeechStatePolicy::UpstreamTerminalDecision __cdecl SpeechStatePolicy::EvaluateUpstreamTerminal(struct RequestContext
+const &,enum SpeechStatePolicy::UpstreamTerminalKind,unsigned __int64,bool,bool)" (?EvaluateUpstreamTerminal@SpeechStat
+ePolicy@@YA?AUUpstreamTerminalDecision@1@AEBURequestContext@@W4UpstreamTerminalKind@1@_K_N3@Z) referenced in function
+"private: virtual void __cdecl
+SpeechStatePolicyTests_UpstreamCompleteAppliesValidatedTerminalFact_Test::TestBody(void)"
+(?TestBody@SpeechStatePolicyTests_UpstreamCompleteAppliesValidatedTerminalFact_Test@@EEAAXXZ)
+[D:\Projects\ModernSapiAdapter\.worktrees\phase7a-speech-state-policy\CoreEngine.Tests\CoreEngine.Tests.vcxproj]
+SpeechStatePolicyTests.obj : error LNK2019: unresolved external symbol "struct
+SpeechStatePolicy::RequestFailureDecision __cdecl SpeechStatePolicy::EvaluateUtteranceFailure(struct RequestContext
+const &)" (?EvaluateUtteranceFailure@SpeechStatePolicy@@YA?AURequestFailureDecision@1@AEBURequestContext@@@Z)
+referenced in function "private: virtual void __cdecl
+SpeechStatePolicyTests_UtteranceFailureCapturesCurrentRawByteBoundary_Test::TestBody(void)"
+(?TestBody@SpeechStatePolicyTests_UtteranceFailureCapturesCurrentRawByteBoundary_Test@@EEAAXXZ)
+[D:\Projects\ModernSapiAdapter\.worktrees\phase7a-speech-state-policy\CoreEngine.Tests\CoreEngine.Tests.vcxproj]
+SpeechStatePolicyTests.obj : error LNK2019: unresolved external symbol "struct
+SpeechStatePolicy::TerminalBoundaryDecision __cdecl SpeechStatePolicy::EvaluateTerminalBoundary(struct RequestContext
+const &,struct SpeechStatePolicy::TerminalBoundaryFacts const &)" (?EvaluateTerminalBoundary@SpeechStatePolicy@@YA?AUTe
+rminalBoundaryDecision@1@AEBURequestContext@@AEBUTerminalBoundaryFacts@1@@Z) referenced in function "private: virtual
+void __cdecl SpeechStatePolicyTests_FailedUpstreamTakesBoundaryPrecedence_Test::TestBody(void)"
+(?TestBody@SpeechStatePolicyTests_FailedUpstreamTakesBoundaryPrecedence_Test@@EEAAXXZ)
+[D:\Projects\ModernSapiAdapter\.worktrees\phase7a-speech-state-policy\CoreEngine.Tests\CoreEngine.Tests.vcxproj]
+SpeechStatePolicyTests.obj : error LNK2019: unresolved external symbol "struct
+SpeechStatePolicy::BeginCancellationDecision __cdecl SpeechStatePolicy::EvaluateBeginCancellation(struct
+RequestContext const &,unsigned __int64)"
+(?EvaluateBeginCancellation@SpeechStatePolicy@@YA?AUBeginCancellationDecision@1@AEBURequestContext@@_K@Z) referenced
+in function "private: virtual void __cdecl
+SpeechStatePolicyTests_CancellationFromActiveSpeakingTransitions_Test::TestBody(void)"
+(?TestBody@SpeechStatePolicyTests_CancellationFromActiveSpeakingTransitions_Test@@EEAAXXZ)
+[D:\Projects\ModernSapiAdapter\.worktrees\phase7a-speech-state-policy\CoreEngine.Tests\CoreEngine.Tests.vcxproj]
+SpeechStatePolicyTests.obj : error LNK2019: unresolved external symbol "struct SpeechStatePolicy::StopDecision __cdecl
+SpeechStatePolicy::EvaluateStop(struct RequestContext const &)"
+(?EvaluateStop@SpeechStatePolicy@@YA?AUStopDecision@1@AEBURequestContext@@@Z) referenced in function "private: virtual
+void __cdecl SpeechStatePolicyTests_StopActiveRequestCapturesSpeakId_Test::TestBody(void)"
+(?TestBody@SpeechStatePolicyTests_StopActiveRequestCapturesSpeakId_Test@@EEAAXXZ)
+[D:\Projects\ModernSapiAdapter\.worktrees\phase7a-speech-state-policy\CoreEngine.Tests\CoreEngine.Tests.vcxproj]
+SpeechStatePolicyTests.obj : error LNK2019: unresolved external symbol "struct SpeechStatePolicy::TimeoutDecision
+__cdecl SpeechStatePolicy::EvaluateTimeouts(struct RequestContext const &,unsigned __int64,unsigned __int64,unsigned
+__int64)" (?EvaluateTimeouts@SpeechStatePolicy@@YA?AUTimeoutDecision@1@AEBURequestContext@@_K11@Z) referenced in
+function "private: virtual void __cdecl
+SpeechStatePolicyTests_CancellationTimeoutPrecedesInactivityTimeout_Test::TestBody(void)"
+(?TestBody@SpeechStatePolicyTests_CancellationTimeoutPrecedesInactivityTimeout_Test@@EEAAXXZ)
+[D:\Projects\ModernSapiAdapter\.worktrees\phase7a-speech-state-policy\CoreEngine.Tests\CoreEngine.Tests.vcxproj]
+SpeechStatePolicyTests.obj : error LNK2019: unresolved external symbol "bool __cdecl
+SpeechStatePolicy::IsWaitTerminal(struct RequestContext const &,bool)"
+(?IsWaitTerminal@SpeechStatePolicy@@YA_NAEBURequestContext@@_N@Z) referenced in function "private: virtual void
+__cdecl SpeechStatePolicyTests_WaitTerminalRecognizesIdleFaultAndExit_Test::TestBody(void)"
+(?TestBody@SpeechStatePolicyTests_WaitTerminalRecognizesIdleFaultAndExit_Test@@EEAAXXZ)
+[D:\Projects\ModernSapiAdapter\.worktrees\phase7a-speech-state-policy\CoreEngine.Tests\CoreEngine.Tests.vcxproj]

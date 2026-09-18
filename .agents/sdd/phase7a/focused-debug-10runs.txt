@@ -1,0 +1,17 @@
+Focused Filter: SpeechStatePolicyTests.*:SpeechProtocolUtilsTests.RequestContext_TransitionToCancellingPreservesCompletedUpstreamEnum:SapiEngineTests.SpeakWaitsForSynthesisCompleteByteBoundary:SapiEngineTests.TerminalBeforeOverrunAudioForwardsOnlyDeclaredFrames:SapiEngineTests.SynthesisCompleteWaitsForFinalSapiWriteToFinish:SapiEngineTests.OutputSiteAbortCancelsTheActiveRequest:SapiEngineTests.ValidSynthesisCancelledWhileSpeakingCompletesWithoutFault:SapiEngineTests.RejectedAudioWriteDrainsCancellationBeforeNextSpeak:SapiEngineTests.SynthesisCompleteWhileCancellingCompletesPromptly:SapiEngineTests.IgnoredCancellationTimesOutTheEntireTransaction:SapiEngineTests.AddEventsBlockingDoesNotDelayWorkerFaultPublication:SapiEngineTests.SilentActiveRequestTimesOutInsteadOfHoldingSapiForever:SapiEngineTests.StalledTerminalAudioDrainTimesOut:SapiEngineTests.InvalidCancellationBoundaryFaultsTheWorker:SapiEngineTests.MisalignedSynthesisCompleteTotalFaultsTheWorker:SapiEngineTests.DuplicateSynthesisCompleteTotalFaultsTheWorker:SapiEngineTests.TerminalEventDeclaringFewerBytesThanAlreadyReadFaultsTheWorker:SapiEngineTests.RequestErrorFailsUtteranceWithoutKillingProvider:SapiEngineTests.FaultPendingRejectsStartBeforeFaultPublicationCompletes:SapiEngineTests.AudioAfterNormalCompletionFaultsIdleWorker
+Target: bin\CoreEngine.Tests\x64\Debug\CoreEngine.Tests.exe
+Watchdog Timeout: 30000 ms
+Selected Test Count: 53
+
+Run 1/10: exitCode=0, quiesced=True, elapsed=4663ms, 53_passed=True
+Run 2/10: exitCode=0, quiesced=True, elapsed=4621ms, 53_passed=True
+Run 3/10: exitCode=0, quiesced=True, elapsed=4531ms, 53_passed=True
+Run 4/10: exitCode=0, quiesced=True, elapsed=4572ms, 53_passed=True
+Run 5/10: exitCode=0, quiesced=True, elapsed=4578ms, 53_passed=True
+Run 6/10: exitCode=0, quiesced=True, elapsed=4536ms, 53_passed=True
+Run 7/10: exitCode=0, quiesced=True, elapsed=4538ms, 53_passed=True
+Run 8/10: exitCode=0, quiesced=True, elapsed=4544ms, 53_passed=True
+Run 9/10: exitCode=0, quiesced=True, elapsed=4558ms, 53_passed=True
+Run 10/10: exitCode=0, quiesced=True, elapsed=4813ms, 53_passed=True
+
+Result: All 10 focused runs PASSED with verified quiescence!

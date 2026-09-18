@@ -7,4 +7,4 @@ Base: 8dcd328a334a1d96da5e4599647a4f00816adba9
 - [x] Task 2: Add the Pure Policy with TDD
 - [x] Task 3: Rewire Request Admission, Stop, and Cancellation
 - [x] Task 4: Rewire Terminal, Failure, Boundary, and Timeout Lifecycle
-- [ ] Task 5: Whole-Branch Verification and Evidence
+- [x] Task 5: Whole-Branch Verification and Evidence

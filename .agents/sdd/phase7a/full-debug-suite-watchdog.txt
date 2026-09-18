@@ -1,0 +1,9 @@
+Target: bin\CoreEngine.Tests\x64\Debug\CoreEngine.Tests.exe
+Arguments: --gtest_color=no
+Watchdog: 30000 ms limit
+Execution: Invoke-WatchdogTest with finally-enforced Assert-WorktreeMockProviderQuiesced
+
+ExitCode: 0
+Quiesced: True
+Elapsed: 13450 ms
+Result: [  PASSED  ] 228 tests from 13 test cases ran.

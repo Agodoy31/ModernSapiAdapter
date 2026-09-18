@@ -1,0 +1,78 @@
+Running main() from D:\a\_work\1\s\googletest\googletest\src\gtest_main.cc
+Note: Google Test filter = SpeechStatePolicyTests.*
+[==========] Running 34 tests from 1 test case.
+[----------] Global test environment set-up.
+[----------] 34 tests from SpeechStatePolicyTests
+[ RUN      ] SpeechStatePolicyTests.StartAcceptsOnlyQuiescentNonFaultPendingState
+[       OK ] SpeechStatePolicyTests.StartAcceptsOnlyQuiescentNonFaultPendingState (0 ms)
+[ RUN      ] SpeechStatePolicyTests.StartDecisionOwnsAcceptedIdentityWithoutMutatingInput
+[       OK ] SpeechStatePolicyTests.StartDecisionOwnsAcceptedIdentityWithoutMutatingInput (0 ms)
+[ RUN      ] SpeechStatePolicyTests.UpstreamCompleteAppliesValidatedTerminalFact
+[       OK ] SpeechStatePolicyTests.UpstreamCompleteAppliesValidatedTerminalFact (0 ms)
+[ RUN      ] SpeechStatePolicyTests.UpstreamCancelledAppliesValidatedTerminalFact
+[       OK ] SpeechStatePolicyTests.UpstreamCancelledAppliesValidatedTerminalFact (0 ms)
+[ RUN      ] SpeechStatePolicyTests.DuplicateUpstreamTerminalRequestsTwoStageFaultPath
+[       OK ] SpeechStatePolicyTests.DuplicateUpstreamTerminalRequestsTwoStageFaultPath (0 ms)
+[ RUN      ] SpeechStatePolicyTests.InvalidUpstreamTerminalBytesRequestFault
+[       OK ] SpeechStatePolicyTests.InvalidUpstreamTerminalBytesRequestFault (0 ms)
+[ RUN      ] SpeechStatePolicyTests.MisalignedUpstreamTerminalBytesRequestFault
+[       OK ] SpeechStatePolicyTests.MisalignedUpstreamTerminalBytesRequestFault (0 ms)
+[ RUN      ] SpeechStatePolicyTests.DuplicateMalformedTerminalKeepsDuplicateFirstPrecedence
+[       OK ] SpeechStatePolicyTests.DuplicateMalformedTerminalKeepsDuplicateFirstPrecedence (0 ms)
+[ RUN      ] SpeechStatePolicyTests.UtteranceFailureCapturesCurrentRawByteBoundary
+[       OK ] SpeechStatePolicyTests.UtteranceFailureCapturesCurrentRawByteBoundary (0 ms)
+[ RUN      ] SpeechStatePolicyTests.FailedUpstreamTakesBoundaryPrecedence
+[       OK ] SpeechStatePolicyTests.FailedUpstreamTakesBoundaryPrecedence (0 ms)
+[ RUN      ] SpeechStatePolicyTests.UnfinishedUpstreamContinuesDespiteRetainedCompletedEnum
+[       OK ] SpeechStatePolicyTests.UnfinishedUpstreamContinuesDespiteRetainedCompletedEnum (0 ms)
+[ RUN      ] SpeechStatePolicyTests.UnfinishedUpstreamContinuesDespiteRetainedCancelledEnum
+[       OK ] SpeechStatePolicyTests.UnfinishedUpstreamContinuesDespiteRetainedCancelledEnum (0 ms)
+[ RUN      ] SpeechStatePolicyTests.SpeakingReachedResetsOnlySpeakingLifecycle
+[       OK ] SpeechStatePolicyTests.SpeakingReachedResetsOnlySpeakingLifecycle (0 ms)
+[ RUN      ] SpeechStatePolicyTests.CancellationReachedResetsOnlyCancellingLifecycle
+[       OK ] SpeechStatePolicyTests.CancellationReachedResetsOnlyCancellingLifecycle (0 ms)
+[ RUN      ] SpeechStatePolicyTests.SpeakingOverrunRequestsFault
+[       OK ] SpeechStatePolicyTests.SpeakingOverrunRequestsFault (0 ms)
+[ RUN      ] SpeechStatePolicyTests.IrrelevantBoundaryFactsAreIgnoredForCurrentState
+[       OK ] SpeechStatePolicyTests.IrrelevantBoundaryFactsAreIgnoredForCurrentState (0 ms)
+[ RUN      ] SpeechStatePolicyTests.CancellationFromActiveSpeakingTransitions
+[       OK ] SpeechStatePolicyTests.CancellationFromActiveSpeakingTransitions (0 ms)
+[ RUN      ] SpeechStatePolicyTests.CancellationFromCompletedSpeakingRetainsCompletedEnumContract
+[       OK ] SpeechStatePolicyTests.CancellationFromCompletedSpeakingRetainsCompletedEnumContract (0 ms)
+[ RUN      ] SpeechStatePolicyTests.CancellationFromCancelledSpeakingRetainsCancelledEnumContract
+[       OK ] SpeechStatePolicyTests.CancellationFromCancelledSpeakingRetainsCancelledEnumContract (0 ms)
+[ RUN      ] SpeechStatePolicyTests.CancellationAlreadyIdleMapsToAlreadyIdle
+[       OK ] SpeechStatePolicyTests.CancellationAlreadyIdleMapsToAlreadyIdle (0 ms)
+[ RUN      ] SpeechStatePolicyTests.CancellationAlreadyDrainingMapsToAlreadyCancelling
+[       OK ] SpeechStatePolicyTests.CancellationAlreadyDrainingMapsToAlreadyCancelling (0 ms)
+[ RUN      ] SpeechStatePolicyTests.CancellationFaultedMapsToFaulted
+[       OK ] SpeechStatePolicyTests.CancellationFaultedMapsToFaulted (0 ms)
+[ RUN      ] SpeechStatePolicyTests.StopActiveRequestCapturesSpeakId
+[       OK ] SpeechStatePolicyTests.StopActiveRequestCapturesSpeakId (0 ms)
+[ RUN      ] SpeechStatePolicyTests.StopIdleDoesNothing
+[       OK ] SpeechStatePolicyTests.StopIdleDoesNothing (0 ms)
+[ RUN      ] SpeechStatePolicyTests.StopFaultedDoesNothing
+[       OK ] SpeechStatePolicyTests.StopFaultedDoesNothing (0 ms)
+[ RUN      ] SpeechStatePolicyTests.CancellationTimeoutPrecedesInactivityTimeout
+[       OK ] SpeechStatePolicyTests.CancellationTimeoutPrecedesInactivityTimeout (0 ms)
+[ RUN      ] SpeechStatePolicyTests.CancellationDeadlineRequiresNonzeroExpiredTick
+[       OK ] SpeechStatePolicyTests.CancellationDeadlineRequiresNonzeroExpiredTick (0 ms)
+[ RUN      ] SpeechStatePolicyTests.ExpiredRetainedCancellationDeadlineWhileIdleDoesNotTimeout
+[       OK ] SpeechStatePolicyTests.ExpiredRetainedCancellationDeadlineWhileIdleDoesNotTimeout (0 ms)
+[ RUN      ] SpeechStatePolicyTests.ActiveSynthesisInactivityExpires
+[       OK ] SpeechStatePolicyTests.ActiveSynthesisInactivityExpires (0 ms)
+[ RUN      ] SpeechStatePolicyTests.TerminalAudioInactivityExpires
+[       OK ] SpeechStatePolicyTests.TerminalAudioInactivityExpires (0 ms)
+[ RUN      ] SpeechStatePolicyTests.ClockRegressionDoesNotExpireInactivity
+[       OK ] SpeechStatePolicyTests.ClockRegressionDoesNotExpireInactivity (0 ms)
+[ RUN      ] SpeechStatePolicyTests.NoEligibleTimeoutReturnsNone
+[       OK ] SpeechStatePolicyTests.NoEligibleTimeoutReturnsNone (0 ms)
+[ RUN      ] SpeechStatePolicyTests.WaitTerminalRecognizesIdleFaultAndExit
+[       OK ] SpeechStatePolicyTests.WaitTerminalRecognizesIdleFaultAndExit (0 ms)
+[ RUN      ] SpeechStatePolicyTests.PolicyDecisionsDoNotMutateInputContext
+[       OK ] SpeechStatePolicyTests.PolicyDecisionsDoNotMutateInputContext (0 ms)
+[----------] 34 tests from SpeechStatePolicyTests (13 ms total)
+
+[----------] Global test environment tear-down
+[==========] 34 tests from 1 test case ran. (26 ms total)
+[  PASSED  ] 34 tests.
