@@ -1,0 +1,11 @@
+=== FULL DEBUG RUN ===
+Executable: D:\Projects\ModernSapiAdapter\.worktrees\phase7b-control-event-policy-plan\bin\CoreEngine.Tests\x64\Debug\CoreEngine.Tests.exe
+Arguments: --gtest_color=no
+TimedOut: False
+ExitCode: 0
+StdOutSummary: [==========] 249 tests from 14 test cases ran. (13265 ms total) [  PASSED  ] 249 tests.
+StdErr: <empty>
+Quiesced: True
+QuiescenceError: None
+ElapsedMs: 13303
+Result: 249/249 tests passed from 14 test cases under 30000 ms watchdog with verified MockProvider quiescence.

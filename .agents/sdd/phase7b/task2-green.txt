@@ -1,0 +1,59 @@
+=== DIRECT POLICY SUITE GREEN RUN ===
+Command: .\bin\CoreEngine.Tests\x64\Debug\CoreEngine.Tests.exe --gtest_filter=ControlEventPolicyTests.* --gtest_color=no
+Watchdog: 30000 ms process watchdog (Wait-Process)
+Elapsed: 109 ms
+ExitCode: 0
+
+Running main() from D:\a\_work\1\s\googletest\googletest\src\gtest_main.cc
+Note: Google Test filter = ControlEventPolicyTests.*
+[==========] Running 20 tests from 1 test case.
+[----------] Global test environment set-up.
+[----------] 20 tests from ControlEventPolicyTests
+[ RUN      ] ControlEventPolicyTests.MatchedWordBoundarySpeakingRefreshesAndAdmits
+[       OK ] ControlEventPolicyTests.MatchedWordBoundarySpeakingRefreshesAndAdmits (0 ms)
+[ RUN      ] ControlEventPolicyTests.SentenceAndBookmarkUseSpeechBoundaryPolicy
+[       OK ] ControlEventPolicyTests.SentenceAndBookmarkUseSpeechBoundaryPolicy (0 ms)
+[ RUN      ] ControlEventPolicyTests.MalformedMatchedBoundaryFaultActionSuppressesProgressAndForwarding
+[       OK ] ControlEventPolicyTests.MalformedMatchedBoundaryFaultActionSuppressesProgressAndForwarding (0 ms)
+[ RUN      ] ControlEventPolicyTests.ValidBoundaryCancellingRefreshesButDoesNotForward
+[       OK ] ControlEventPolicyTests.ValidBoundaryCancellingRefreshesButDoesNotForward (0 ms)
+[ RUN      ] ControlEventPolicyTests.ValidBoundaryIdleNeitherRefreshesNorForwards
+[       OK ] ControlEventPolicyTests.ValidBoundaryIdleNeitherRefreshesNorForwards (0 ms)
+[ RUN      ] ControlEventPolicyTests.ValidBoundaryWithFaultPendingStillRefreshesButDoesNotForward
+[       OK ] ControlEventPolicyTests.ValidBoundaryWithFaultPendingStillRefreshesButDoesNotForward (0 ms)
+[ RUN      ] ControlEventPolicyTests.ValidSynthesisCompleteClassifiesAndRefreshes
+[       OK ] ControlEventPolicyTests.ValidSynthesisCompleteClassifiesAndRefreshes (0 ms)
+[ RUN      ] ControlEventPolicyTests.ValidSynthesisCancelledClassifiesAndRefreshes
+[       OK ] ControlEventPolicyTests.ValidSynthesisCancelledClassifiesAndRefreshes (0 ms)
+[ RUN      ] ControlEventPolicyTests.InvalidTerminalPayloadDoesNotRefreshProgress
+[       OK ] ControlEventPolicyTests.InvalidTerminalPayloadDoesNotRefreshProgress (0 ms)
+[ RUN      ] ControlEventPolicyTests.StaleAdversarialEventsHaveNoActionOrProgressButPreserveHealthyProvisionalAdmission
+[       OK ] ControlEventPolicyTests.StaleAdversarialEventsHaveNoActionOrProgressButPreserveHealthyProvisionalAdmission (0 ms)
+[ RUN      ] ControlEventPolicyTests.FaultedOrFaultPendingContextSuppressesProvisionalAdmission
+[       OK ] ControlEventPolicyTests.FaultedOrFaultPendingContextSuppressesProvisionalAdmission (0 ms)
+[ RUN      ] ControlEventPolicyTests.LegacyCompletedHasDiagnosticActionWithoutProgress
+[       OK ] ControlEventPolicyTests.LegacyCompletedHasDiagnosticActionWithoutProgress (0 ms)
+[ RUN      ] ControlEventPolicyTests.UnknownEventHasDiagnosticActionWithoutProgress
+[       OK ] ControlEventPolicyTests.UnknownEventHasDiagnosticActionWithoutProgress (0 ms)
+[ RUN      ] ControlEventPolicyTests.NonErrorLogSeveritiesRemainInformational
+[       OK ] ControlEventPolicyTests.NonErrorLogSeveritiesRemainInformational (0 ms)
+[ RUN      ] ControlEventPolicyTests.ExactLowercaseErrorClassifiesAsRequestError
+[       OK ] ControlEventPolicyTests.ExactLowercaseErrorClassifiesAsRequestError (0 ms)
+[ RUN      ] ControlEventPolicyTests.ExactLowercaseFatalClassifiesAsFatalAndPreservesHealthyProvisionalAdmission
+[       OK ] ControlEventPolicyTests.ExactLowercaseFatalClassifiesAsFatalAndPreservesHealthyProvisionalAdmission (0 ms)
+[ RUN      ] ControlEventPolicyTests.FinalAdmissionAllowsPreviouslyAdmittedMatchingLogAfterLifecycleOrFaultPendingChange
+[       OK ] ControlEventPolicyTests.FinalAdmissionAllowsPreviouslyAdmittedMatchingLogAfterLifecycleOrFaultPendingChange (0 ms)
+[ RUN      ] ControlEventPolicyTests.FinalAdmissionRequiresSpeakingAndNoFaultPendingForNonLog
+[       OK ] ControlEventPolicyTests.FinalAdmissionRequiresSpeakingAndNoFaultPendingForNonLog (0 ms)
+[ RUN      ] ControlEventPolicyTests.FinalAdmissionRejectsStaleIdentity
+[       OK ] ControlEventPolicyTests.FinalAdmissionRejectsStaleIdentity (0 ms)
+[ RUN      ] ControlEventPolicyTests.PolicyEvaluationDoesNotMutateInputs
+[       OK ] ControlEventPolicyTests.PolicyEvaluationDoesNotMutateInputs (0 ms)
+[----------] 20 tests from ControlEventPolicyTests (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 20 tests from 1 test case ran. (1 ms total)
+[  PASSED  ] 20 tests.
+
+MockProvider Quiescence:
+Get-Process -Name MockProvider -ErrorAction SilentlyContinue -> ExitCode 1 (No active MockProvider process)

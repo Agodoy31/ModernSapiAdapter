@@ -1,0 +1,13 @@
+=== FULL RELEASE RUN ===
+Executable: D:\Projects\ModernSapiAdapter\.worktrees\phase7b-control-event-policy-plan\bin\CoreEngine.Tests\x64\Release\CoreEngine.Tests.exe
+Arguments: --gtest_color=no
+TimedOut: False
+ExitCode: 0
+StdOutSummary: [==========] 203 tests from 13 test cases ran. (11768 ms total) [  PASSED  ] 203 tests.
+Failures: None
+StdErr: <empty>
+Quiesced: True
+QuiescenceError: None
+ElapsedMs: 11845
+Result: 203/203 tests passed from 13 test cases under 30000 ms watchdog with verified MockProvider quiescence.
+(Note: Exactly 203 tests ran in Release because Debug-only test hook tests in DllEntryAdmissionTests are guarded by #if defined(_DEBUG), reducing the test case count to 13).
