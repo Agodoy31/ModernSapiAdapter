@@ -144,6 +144,11 @@
     <ClCompile Include="AsyncLoggerTests.cpp" />
     <ClCompile Include="ProtocolParsingTests.cpp" />
     <ClCompile Include="RequestContextTests.cpp" />
+    <ClCompile Include="SpeechStatePolicyTests.cpp" />
+    <ClCompile Include="..\CoreEngine\SpeechStatePolicy.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ProgramDataBaseFileName>$(IntDir)SpeechStatePolicy.pdb</ProgramDataBaseFileName>
+    </ClCompile>
     <ClCompile Include="SapiFragmentSerializationTests.cpp" />
     <ClCompile Include="ControlStreamBufferTests.cpp" />
     <ClCompile Include="StringUtilsTests.cpp" />
