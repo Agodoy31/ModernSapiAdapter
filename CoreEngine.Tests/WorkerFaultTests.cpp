@@ -155,6 +155,47 @@ TEST_F(SapiEngineTests, LegacyCompletedFollowedByRealTerminalCompletesSuccessful
     }
 }
 
+TEST_F(SapiEngineTests, PunctuationBoundaryWithActiveSpeakIdIsIgnoredWithoutFault)
+{
+    PipeServerWorkerFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+    ASSERT_TRUE(fixture.Start(75));
+
+#if defined(_DEBUG)
+    ClearTestLogs();
+    fixture.worker->PauseNextEventForwardForTest();
+#endif
+
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"punctuation_boundary\",\"speak_id\":75,\"audio_offset_ms\":100,\"text_offset\":5,\"text_length\":1}\n"));
+
+#if defined(_DEBUG)
+    ASSERT_TRUE(fixture.worker->WaitForEventForwardPauseForTest(1000));
+
+    {
+        const auto logs = GetTestLogs();
+        const bool foundDiagnostic = std::any_of(logs.begin(), logs.end(), [](const std::wstring &line)
+        {
+            return line.find(L"Unknown event received") != std::wstring::npos;
+        });
+        EXPECT_TRUE(foundDiagnostic);
+    }
+
+    fixture.worker->ReleaseEventForwardForTest();
+#endif
+
+    ASSERT_TRUE(fixture.server.WriteControl(
+        "{\"event\":\"synthesis_complete\",\"speak_id\":75,\"total_audio_bytes\":0}\n"));
+
+    EXPECT_EQ(fixture.worker->WaitUntilFinished(nullptr), S_OK);
+    EXPECT_FALSE(fixture.worker->IsFaulted());
+
+    {
+        std::lock_guard<std::mutex> lock(fixture.mockSite->eventsMutex);
+        EXPECT_TRUE(fixture.mockSite->receivedEvents.empty());
+    }
+}
+
 #if defined(_DEBUG)
 TEST_F(SapiEngineTests, UnknownNamedEventWithActiveSpeakIdDoesNotFaultWorker)
 {

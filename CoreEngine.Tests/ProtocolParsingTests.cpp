@@ -16,6 +16,9 @@ TEST(SpeechProtocolUtilsTests, ParseProviderEventTypeMapsAllKnownStrings)
     EXPECT_EQ(ParseProviderEventType("synthesis_cancelled"), ProviderEventType::SynthesisCancelled);
     EXPECT_EQ(ParseProviderEventType("log"), ProviderEventType::Log);
     EXPECT_EQ(ParseProviderEventType("completed"), ProviderEventType::LegacyCompleted);
+    EXPECT_EQ(ParseProviderEventType("punctuation_boundary"), ProviderEventType::Unknown);
+    EXPECT_EQ(ParseProviderEventType("viseme"), ProviderEventType::Unknown);
+    EXPECT_EQ(ParseProviderEventType("viseme_reached"), ProviderEventType::Unknown);
     EXPECT_EQ(ParseProviderEventType("unknown_event"), ProviderEventType::Unknown);
     EXPECT_EQ(ParseProviderEventType(""), ProviderEventType::Unknown);
 }
