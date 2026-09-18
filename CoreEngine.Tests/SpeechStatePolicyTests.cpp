@@ -20,15 +20,34 @@ TEST_F(SpeechStatePolicyTests, StartAcceptsOnlyQuiescentNonFaultPendingState)
     RequestContext ctx = CreateIdleContext();
     auto dec = EvaluateStart(ctx, 42, 1);
     EXPECT_EQ(dec.action, StartAction::Accept);
+    EXPECT_EQ(dec.speakId, 42ULL);
+    EXPECT_EQ(dec.generation, 1ULL);
 
     ctx.faultPending = true;
     dec = EvaluateStart(ctx, 42, 1);
     EXPECT_EQ(dec.action, StartAction::Reject);
+    EXPECT_EQ(dec.speakId, 0ULL);
+    EXPECT_EQ(dec.generation, 0ULL);
 
     ctx.faultPending = false;
     ctx.upstreamState = UpstreamState::Active;
     dec = EvaluateStart(ctx, 42, 1);
     EXPECT_EQ(dec.action, StartAction::Reject);
+    EXPECT_EQ(dec.speakId, 0ULL);
+    EXPECT_EQ(dec.generation, 0ULL);
+
+    ctx.upstreamState = UpstreamState::Idle;
+    ctx.downstreamState = DownstreamState::Speaking;
+    dec = EvaluateStart(ctx, 42, 1);
+    EXPECT_EQ(dec.action, StartAction::Reject);
+    EXPECT_EQ(dec.speakId, 0ULL);
+    EXPECT_EQ(dec.generation, 0ULL);
+
+    ctx.downstreamState = DownstreamState::Cancelling;
+    dec = EvaluateStart(ctx, 42, 1);
+    EXPECT_EQ(dec.action, StartAction::Reject);
+    EXPECT_EQ(dec.speakId, 0ULL);
+    EXPECT_EQ(dec.generation, 0ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, StartDecisionOwnsAcceptedIdentityWithoutMutatingInput)
@@ -69,6 +88,7 @@ TEST_F(SpeechStatePolicyTests, DuplicateUpstreamTerminalRequestsTwoStageFaultPat
     auto dec = EvaluateUpstreamTerminal(ctx, UpstreamTerminalKind::Completed, 100, true, true);
     EXPECT_EQ(dec.action, UpstreamTerminalAction::DuplicateFault);
     EXPECT_EQ(dec.targetState, UpstreamState::Faulted);
+    EXPECT_EQ(dec.terminalAudioBytes, 0ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, InvalidUpstreamTerminalBytesRequestFault)
@@ -77,6 +97,7 @@ TEST_F(SpeechStatePolicyTests, InvalidUpstreamTerminalBytesRequestFault)
     auto dec = EvaluateUpstreamTerminal(ctx, UpstreamTerminalKind::Completed, 100, false, true);
     EXPECT_EQ(dec.action, UpstreamTerminalAction::InvalidBytesFault);
     EXPECT_EQ(dec.targetState, UpstreamState::Faulted);
+    EXPECT_EQ(dec.terminalAudioBytes, 0ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, MisalignedUpstreamTerminalBytesRequestFault)
@@ -85,6 +106,7 @@ TEST_F(SpeechStatePolicyTests, MisalignedUpstreamTerminalBytesRequestFault)
     auto dec = EvaluateUpstreamTerminal(ctx, UpstreamTerminalKind::Completed, 101, true, false);
     EXPECT_EQ(dec.action, UpstreamTerminalAction::MisalignedBytesFault);
     EXPECT_EQ(dec.targetState, UpstreamState::Faulted);
+    EXPECT_EQ(dec.terminalAudioBytes, 0ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, DuplicateMalformedTerminalKeepsDuplicateFirstPrecedence)
@@ -93,6 +115,8 @@ TEST_F(SpeechStatePolicyTests, DuplicateMalformedTerminalKeepsDuplicateFirstPrec
     ctx.upstreamFinished = true;
     auto dec = EvaluateUpstreamTerminal(ctx, UpstreamTerminalKind::Completed, 101, false, false);
     EXPECT_EQ(dec.action, UpstreamTerminalAction::DuplicateFault);
+    EXPECT_EQ(dec.targetState, UpstreamState::Faulted);
+    EXPECT_EQ(dec.terminalAudioBytes, 0ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, UtteranceFailureCapturesCurrentRawByteBoundary)
@@ -193,6 +217,8 @@ TEST_F(SpeechStatePolicyTests, CancellationFromCompletedSpeakingRetainsCompleted
     ctx.token.speakId = 42;
     auto dec = EvaluateBeginCancellation(ctx, 1000);
     EXPECT_EQ(dec.action, BeginCancellationAction::TransitionToCancelling);
+    EXPECT_EQ(dec.speakId, 42ULL);
+    EXPECT_EQ(dec.deadlineTick, 1000ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, CancellationFromCancelledSpeakingRetainsCancelledEnumContract)
@@ -203,6 +229,8 @@ TEST_F(SpeechStatePolicyTests, CancellationFromCancelledSpeakingRetainsCancelled
     ctx.token.speakId = 42;
     auto dec = EvaluateBeginCancellation(ctx, 1000);
     EXPECT_EQ(dec.action, BeginCancellationAction::TransitionToCancelling);
+    EXPECT_EQ(dec.speakId, 42ULL);
+    EXPECT_EQ(dec.deadlineTick, 1000ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, CancellationAlreadyIdleMapsToAlreadyIdle)
@@ -210,6 +238,8 @@ TEST_F(SpeechStatePolicyTests, CancellationAlreadyIdleMapsToAlreadyIdle)
     RequestContext ctx = CreateIdleContext();
     auto dec = EvaluateBeginCancellation(ctx, 1000);
     EXPECT_EQ(dec.action, BeginCancellationAction::AlreadyIdle);
+    EXPECT_EQ(dec.speakId, 0ULL);
+    EXPECT_EQ(dec.deadlineTick, 0ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, CancellationAlreadyDrainingMapsToAlreadyCancelling)
@@ -219,6 +249,8 @@ TEST_F(SpeechStatePolicyTests, CancellationAlreadyDrainingMapsToAlreadyCancellin
     ctx.downstreamState = DownstreamState::Cancelling;
     auto dec = EvaluateBeginCancellation(ctx, 1000);
     EXPECT_EQ(dec.action, BeginCancellationAction::AlreadyCancelling);
+    EXPECT_EQ(dec.speakId, 0ULL);
+    EXPECT_EQ(dec.deadlineTick, 0ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, CancellationFaultedMapsToFaulted)
@@ -228,11 +260,15 @@ TEST_F(SpeechStatePolicyTests, CancellationFaultedMapsToFaulted)
     ctx.upstreamState = UpstreamState::Faulted;
     auto dec = EvaluateBeginCancellation(ctx, 1000);
     EXPECT_EQ(dec.action, BeginCancellationAction::Faulted);
+    EXPECT_EQ(dec.speakId, 0ULL);
+    EXPECT_EQ(dec.deadlineTick, 0ULL);
 
     ctx.downstreamState = DownstreamState::Faulted;
     ctx.upstreamState = UpstreamState::Active;
     dec = EvaluateBeginCancellation(ctx, 1000);
     EXPECT_EQ(dec.action, BeginCancellationAction::Faulted);
+    EXPECT_EQ(dec.speakId, 0ULL);
+    EXPECT_EQ(dec.deadlineTick, 0ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, StopActiveRequestCapturesSpeakId)
@@ -251,6 +287,7 @@ TEST_F(SpeechStatePolicyTests, StopIdleDoesNothing)
     RequestContext ctx = CreateIdleContext();
     auto dec = EvaluateStop(ctx);
     EXPECT_EQ(dec.action, StopAction::NoAction);
+    EXPECT_EQ(dec.speakId, 0ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, StopFaultedDoesNothing)
@@ -260,16 +297,19 @@ TEST_F(SpeechStatePolicyTests, StopFaultedDoesNothing)
     ctx.upstreamState = UpstreamState::Faulted;
     auto dec = EvaluateStop(ctx);
     EXPECT_EQ(dec.action, StopAction::NoAction);
+    EXPECT_EQ(dec.speakId, 0ULL);
 
     ctx.downstreamState = DownstreamState::Faulted;
     ctx.upstreamState = UpstreamState::Active;
     dec = EvaluateStop(ctx);
     EXPECT_EQ(dec.action, StopAction::NoAction);
+    EXPECT_EQ(dec.speakId, 0ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, CancellationTimeoutPrecedesInactivityTimeout)
 {
     RequestContext ctx = CreateIdleContext();
+    ctx.upstreamState = UpstreamState::Active;
     ctx.downstreamState = DownstreamState::Cancelling;
     ctx.cancellationDeadlineTick = 1000;
     ctx.token.speakId = 42;
@@ -285,6 +325,7 @@ TEST_F(SpeechStatePolicyTests, CancellationDeadlineRequiresNonzeroExpiredTick)
     ctx.cancellationDeadlineTick = 0;
     auto dec = EvaluateTimeouts(ctx, 1000, 0, 500);
     EXPECT_EQ(dec.condition, TimeoutCondition::None);
+    EXPECT_EQ(dec.speakId, 0ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, ExpiredRetainedCancellationDeadlineWhileIdleDoesNotTimeout)
@@ -293,6 +334,7 @@ TEST_F(SpeechStatePolicyTests, ExpiredRetainedCancellationDeadlineWhileIdleDoesN
     ctx.cancellationDeadlineTick = 100;
     auto dec = EvaluateTimeouts(ctx, 1000, 0, 500);
     EXPECT_EQ(dec.condition, TimeoutCondition::None);
+    EXPECT_EQ(dec.speakId, 0ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, ActiveSynthesisInactivityExpires)
@@ -313,6 +355,7 @@ TEST_F(SpeechStatePolicyTests, TerminalAudioInactivityExpires)
     ctx.token.speakId = 42;
     auto dec = EvaluateTimeouts(ctx, 1000, 500, 500);
     EXPECT_EQ(dec.condition, TimeoutCondition::InactivityTimeout);
+    EXPECT_EQ(dec.speakId, 42ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, ClockRegressionDoesNotExpireInactivity)
@@ -321,6 +364,7 @@ TEST_F(SpeechStatePolicyTests, ClockRegressionDoesNotExpireInactivity)
     ctx.upstreamState = UpstreamState::Active;
     auto dec = EvaluateTimeouts(ctx, 500, 1000, 500);
     EXPECT_EQ(dec.condition, TimeoutCondition::None);
+    EXPECT_EQ(dec.speakId, 0ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, NoEligibleTimeoutReturnsNone)
@@ -329,6 +373,7 @@ TEST_F(SpeechStatePolicyTests, NoEligibleTimeoutReturnsNone)
     ctx.upstreamState = UpstreamState::Active;
     auto dec = EvaluateTimeouts(ctx, 900, 500, 500);
     EXPECT_EQ(dec.condition, TimeoutCondition::None);
+    EXPECT_EQ(dec.speakId, 0ULL);
 }
 
 TEST_F(SpeechStatePolicyTests, WaitTerminalRecognizesIdleFaultAndExit)

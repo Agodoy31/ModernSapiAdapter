@@ -59,10 +59,10 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SpeechWorkerTypes.h">
-      <Filter>Header Files\Speech</Filter>
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SpeechStatePolicy.h">
-      <Filter>Header Files\Speech</Filter>
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SpeechProtocolUtils.h">
       <Filter>Header Files</Filter>
@@ -94,10 +94,10 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="SpeechWorker.cpp">
-      <Filter>Source Files\Speech</Filter>
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="SpeechStatePolicy.cpp">
-      <Filter>Source Files\Speech</Filter>
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="StringUtils.cpp">
       <Filter>Source Files</Filter>

@@ -1,9 +1,11 @@
-Target: bin\CoreEngine.Tests\x64\Debug\CoreEngine.Tests.exe
+=== FULL DEBUG RUN ===
+Executable: D:\Projects\ModernSapiAdapter\.worktrees\phase7a-speech-state-policy\bin\CoreEngine.Tests\x64\Debug\CoreEngine.Tests.exe
 Arguments: --gtest_color=no
-Watchdog: 30000 ms limit
-Execution: Invoke-WatchdogTest with finally-enforced Assert-WorktreeMockProviderQuiesced
-
+TimedOut: False
 ExitCode: 0
+StdOutSummary: [==========] 228 tests from 13 test cases ran. (13440 ms total) [  PASSED  ] 228 tests.
+StdErr: <empty>
 Quiesced: True
-Elapsed: 13450 ms
-Result: [  PASSED  ] 228 tests from 13 test cases ran.
+QuiescenceError: None
+ElapsedMs: 13611
+Result: 228/228 tests passed from 13 test cases under 30000 ms watchdog with verified MockProvider quiescence.
