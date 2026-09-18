@@ -169,7 +169,6 @@ private:
     [[nodiscard]] bool IsSpeakingTerminalReachedLocked() const noexcept;
     [[nodiscard]] bool IsCancellingTerminalReachedLocked() const noexcept;
     [[nodiscard]] bool IsWaitTerminalLocked() const noexcept;
-    [[nodiscard]] bool ShouldForwardEventLocked(uint64_t speakId, bool isLog) const noexcept;
     [[nodiscard]] bool IsAudioDeliveryEligibleLocked(const RequestToken& token) const noexcept;
     /**
      * @brief Mutates active request state to Faulted and notifies waiters while locked.

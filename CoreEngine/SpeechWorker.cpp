@@ -437,10 +437,8 @@ void SpeechWorker::ForwardEventToSapi(const ProviderControlEvent& event)
             return;
         }
 
-        const bool isLog = (event.type == ProviderEventType::Log);
-
         std::lock_guard<std::mutex> requestLock(m_requestMutex);
-        if (!ShouldForwardEventLocked(event.speakId, isLog))
+        if (ControlEventPolicy::EvaluateFinalAdmission(event, m_context) != ControlEventPolicy::FinalAdmission::Allow)
         {
             return;
         }
@@ -628,26 +626,6 @@ bool SpeechWorker::IsCancellingTerminalReachedLocked() const noexcept
 bool SpeechWorker::IsWaitTerminalLocked() const noexcept
 {
     return SpeechStatePolicy::IsWaitTerminal(m_context, m_exit.load());
-}
-
-bool SpeechWorker::ShouldForwardEventLocked(uint64_t speakId, bool isLog) const noexcept
-{
-    if (speakId != m_context.token.speakId)
-    {
-        return false;
-    }
-
-    if (isLog)
-    {
-        return true;
-    }
-
-    if (m_context.faultPending)
-    {
-        return false;
-    }
-
-    return m_context.downstreamState == DownstreamState::Speaking;
 }
 
 void SpeechWorker::TransitionRequestToFaultedLocked() noexcept
