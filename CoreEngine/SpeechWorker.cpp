@@ -520,25 +520,24 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
             lastTerminalWaitLogTick = now;
         }
 #endif
-        if (m_context.IsDrainingCancellation() &&
-            HasCancellationTimedOut(now, m_context.cancellationDeadlineTick))
+        const ULONGLONG lastProgress = m_lastProviderProgressTick.load(std::memory_order_acquire);
+        const bool isAwaitingTerminalAudio = m_context.IsAwaitingTerminalAudio();
+
+        const auto timeoutDecision = SpeechStatePolicy::EvaluateTimeouts(
+            m_context, now, lastProgress, SynthesisInactivityTimeoutMs);
+
+        if (timeoutDecision.condition == SpeechStatePolicy::TimeoutCondition::CancellationTimeout)
         {
-            const uint64_t speakId = m_context.token.speakId;
+            const uint64_t speakId = timeoutDecision.speakId;
             lock.unlock();
             CoreLog(L"[SpeechWorker] Provider did not complete cancellation within %lu ms for speak_id %llu; quarantining session.",
                 CancellationTimeoutMs, speakId);
             EnterFaultedState();
             return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
         }
-
-        const ULONGLONG lastProgress = m_lastProviderProgressTick.load(std::memory_order_acquire);
-        const bool isActivelySynthesizing = m_context.IsActivelySynthesizing();
-        const bool isAwaitingTerminalAudio = m_context.IsAwaitingTerminalAudio();
-
-        if ((isActivelySynthesizing || isAwaitingTerminalAudio) &&
-            HasSynthesisInactivityTimedOut(now, lastProgress, SynthesisInactivityTimeoutMs))
+        else if (timeoutDecision.condition == SpeechStatePolicy::TimeoutCondition::InactivityTimeout)
         {
-            const uint64_t speakId = m_context.token.speakId;
+            const uint64_t speakId = timeoutDecision.speakId;
             lock.unlock();
             CoreLog(L"[SpeechWorker] Provider made no progress for %llu ms during speak_id %llu (awaiting_terminal=%d); quarantining session.",
                 SynthesisInactivityTimeoutMs, speakId, isAwaitingTerminalAudio ? 1 : 0);
@@ -627,9 +626,7 @@ bool SpeechWorker::IsCancellingTerminalReachedLocked() const noexcept
 
 bool SpeechWorker::IsWaitTerminalLocked() const noexcept
 {
-    return m_context.downstreamState == DownstreamState::Idle ||
-           m_context.downstreamState == DownstreamState::Faulted ||
-           m_exit.load();
+    return SpeechStatePolicy::IsWaitTerminal(m_context, m_exit.load());
 }
 
 bool SpeechWorker::ShouldForwardEventLocked(uint64_t speakId, bool isLog) const noexcept
@@ -670,48 +667,38 @@ void SpeechWorker::ResetToIdleLocked() noexcept
 
 bool SpeechWorker::CheckTerminalBoundaryLocked()
 {
-    if (m_context.upstreamState == UpstreamState::Failed)
+    SpeechStatePolicy::TerminalBoundaryFacts facts{};
+    facts.speakingAudioOverrun = HasSpeakingAudioOverrunLocked();
+    facts.speakingTerminalReached = IsSpeakingTerminalReachedLocked();
+    facts.cancellationTerminalReached = IsCancellingTerminalReachedLocked();
+
+    const auto decision = SpeechStatePolicy::EvaluateTerminalBoundary(m_context, facts);
+    switch (decision.action)
     {
+    case SpeechStatePolicy::TerminalBoundaryAction::Continue:
+        return false;
+
+    case SpeechStatePolicy::TerminalBoundaryAction::UtteranceFailedReset:
         ResetToIdleLocked();
         return false;
-    }
 
-    if (!m_context.upstreamFinished)
-    {
-        return false;
-    }
+    case SpeechStatePolicy::TerminalBoundaryAction::OverrunFault:
+        CoreLog(L"[SpeechWorker] Provider audio overrun: raw=%llu delivered=%llu declared=%llu",
+            m_context.rawAudioBytesRead, m_context.deliveredAudioBytes, m_context.upstreamTerminalBytes);
+        return true;
 
-    switch (m_context.downstreamState)
-    {
-    case DownstreamState::Speaking:
-    {
-        if (HasSpeakingAudioOverrunLocked())
-        {
-            CoreLog(L"[SpeechWorker] Provider audio overrun: raw=%llu delivered=%llu declared=%llu",
-                m_context.rawAudioBytesRead, m_context.deliveredAudioBytes, m_context.upstreamTerminalBytes);
-            return true;
-        }
-        else if (IsSpeakingTerminalReachedLocked())
-        {
+    case SpeechStatePolicy::TerminalBoundaryAction::NormalCompleteReset:
 #if defined(_DEBUG)
-            CoreLog(L"[ThreadTrace] speak_id=%llu terminal_boundary_reached tick=%llu declared=%llu raw=%llu delivered=%llu.",
-                m_context.token.speakId, GetTickCount64(), m_context.upstreamTerminalBytes,
-                m_context.rawAudioBytesRead, m_context.deliveredAudioBytes);
+        CoreLog(L"[ThreadTrace] speak_id=%llu terminal_boundary_reached tick=%llu declared=%llu raw=%llu delivered=%llu.",
+            m_context.token.speakId, GetTickCount64(), m_context.upstreamTerminalBytes,
+            m_context.rawAudioBytesRead, m_context.deliveredAudioBytes);
 #endif
-            ResetToIdleLocked();
-            return false;
-        }
-        else
-        {
-            return false;
-        }
-    }
+        ResetToIdleLocked();
+        return false;
 
-    case DownstreamState::Cancelling:
-    {
-        if (IsCancellingTerminalReachedLocked())
-        {
+    case SpeechStatePolicy::TerminalBoundaryAction::CancelDrainReset:
 #if defined(_DEBUG)
+        {
             const ULONGLONG cancellationStartTick = m_context.cancellationDeadlineTick >= CancellationTimeoutMs
                 ? m_context.cancellationDeadlineTick - CancellationTimeoutMs
                 : 0;
@@ -719,18 +706,9 @@ bool SpeechWorker::CheckTerminalBoundaryLocked()
                 m_context.token.speakId, GetTickCount64(),
                 cancellationStartTick == 0 ? 0 : GetTickCount64() - cancellationStartTick,
                 m_context.upstreamTerminalBytes, m_context.rawAudioBytesRead);
+        }
 #endif
-            ResetToIdleLocked();
-            return false;
-        }
-        else
-        {
-            return false;
-        }
-    }
-
-    case DownstreamState::Idle:
-    case DownstreamState::Faulted:
+        ResetToIdleLocked();
         return false;
     }
 
@@ -990,40 +968,51 @@ bool SpeechWorker::HandleTerminalEventLocked(
     bool hasValidTerminalBytes,
     std::string_view eventStr)
 {
-    if (m_context.upstreamFinished)
+    const bool isFrameAligned = (m_frameAssembler.BlockAlign() != 0) &&
+        (terminalAudioBytes % m_frameAssembler.BlockAlign() == 0);
+    const auto kind = (eventType == ProviderEventType::SynthesisComplete)
+        ? SpeechStatePolicy::UpstreamTerminalKind::Completed
+        : SpeechStatePolicy::UpstreamTerminalKind::Cancelled;
+
+    const auto decision = SpeechStatePolicy::EvaluateUpstreamTerminal(
+        m_context,
+        kind,
+        terminalAudioBytes,
+        hasValidTerminalBytes,
+        isFrameAligned);
+
+    switch (decision.action)
     {
+    case SpeechStatePolicy::UpstreamTerminalAction::DuplicateFault:
         CoreLog(L"[SpeechWorker] Duplicate terminal event for speak_id %llu.", eventSpeakId);
         TransitionRequestToFaultedLocked();
         return true;
-    }
 
-    if (!hasValidTerminalBytes)
-    {
+    case SpeechStatePolicy::UpstreamTerminalAction::InvalidBytesFault:
         CoreLog(L"[SpeechWorker] terminal event for speak_id %llu has an invalid audio bytes value.", eventSpeakId);
         TransitionRequestToFaultedLocked();
         return true;
-    }
 
-    if (terminalAudioBytes % m_frameAssembler.BlockAlign() != 0)
-    {
+    case SpeechStatePolicy::UpstreamTerminalAction::MisalignedBytesFault:
         CoreLog(L"[SpeechWorker] terminal event for speak_id %llu is not PCM-frame aligned.", eventSpeakId);
         TransitionRequestToFaultedLocked();
         return true;
+
+    case SpeechStatePolicy::UpstreamTerminalAction::Apply:
+        m_context.upstreamTerminalBytes = decision.terminalAudioBytes;
+        m_context.upstreamFinished = true;
+        m_context.upstreamState = decision.targetState;
+#if defined(_DEBUG)
+        CoreLog(L"[ThreadTrace] speak_id=%llu terminal_received tick=%llu event=%hs declared=%llu raw=%llu delivered=%llu carry=%u downstream=%u.",
+            eventSpeakId, GetTickCount64(), eventStr.data(), m_context.upstreamTerminalBytes,
+            m_context.rawAudioBytesRead, m_context.deliveredAudioBytes,
+            m_frameAssembler.HasCarry() ? 1u : 0u,
+            static_cast<unsigned>(m_context.downstreamState));
+#endif
+        return CheckTerminalBoundaryLocked();
     }
 
-    m_context.upstreamTerminalBytes = terminalAudioBytes;
-    m_context.upstreamFinished = true;
-    m_context.upstreamState = (eventType == ProviderEventType::SynthesisComplete)
-        ? UpstreamState::Completed
-        : UpstreamState::Cancelled;
-#if defined(_DEBUG)
-    CoreLog(L"[ThreadTrace] speak_id=%llu terminal_received tick=%llu event=%hs declared=%llu raw=%llu delivered=%llu carry=%u downstream=%u.",
-        eventSpeakId, GetTickCount64(), eventStr.data(), m_context.upstreamTerminalBytes,
-        m_context.rawAudioBytesRead, m_context.deliveredAudioBytes,
-        m_frameAssembler.HasCarry() ? 1u : 0u,
-        static_cast<unsigned>(m_context.downstreamState));
-#endif
-    return CheckTerminalBoundaryLocked();
+    return false;
 }
 
 bool SpeechWorker::HandleLogEventLocked(
@@ -1046,10 +1035,11 @@ bool SpeechWorker::HandleLogEventLocked(
 
     if (severity == "error")
     {
+        const auto decision = SpeechStatePolicy::EvaluateUtteranceFailure(m_context);
         m_context.upstreamState = UpstreamState::Failed;
         m_context.upstreamFinished = true;
         m_context.completionHr = E_FAIL;
-        m_context.upstreamTerminalBytes = m_context.rawAudioBytesRead;
+        m_context.upstreamTerminalBytes = decision.terminalAudioBytes;
         return CheckTerminalBoundaryLocked();
     }
 
