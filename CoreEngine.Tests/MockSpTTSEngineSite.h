@@ -20,6 +20,7 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
     std::atomic<ULONG> writeCallCount = 0;
     std::atomic<ULONG> bytesAcceptedAfterRejectedWrite = 0;
     std::atomic_bool rejectNextWrite = false;
+    std::atomic_bool zeroByteNextWrite = false;
     std::atomic<DWORD> writeDelayMs = 0;
     std::atomic<DWORD> actions = SPVES_CONTINUE;
     std::function<DWORD()> getActionsCallback;
@@ -132,6 +133,15 @@ struct MockSpTTSEngineSite : winrt::implements<MockSpTTSEngineSite, ISpTTSEngine
                 *pcbWritten = 0;
             }
             return E_FAIL;
+        }
+        if (zeroByteNextWrite.exchange(false))
+        {
+            m_rejectedWriteObserved = true;
+            if (pcbWritten)
+            {
+                *pcbWritten = 0;
+            }
+            return S_OK;
         }
         totalBytesWritten += cb;
         {

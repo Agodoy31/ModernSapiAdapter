@@ -50,6 +50,53 @@ TEST_F(SapiEngineTests, RejectedAudioWriteDrainsCancellationBeforeNextSpeak)
     EXPECT_EQ(fixture.mockSite->totalBytesWritten.load(), 9600u);
 }
 
+TEST_F(SapiEngineTests, SuccessfulZeroByteWriteDrainsCancellationBeforeNextSpeak)
+{
+    EngineInitializedFixture fixture;
+    ASSERT_TRUE(fixture.Initialize());
+
+    wchar_t firstText[] = L"[delay-cancelled-event] zero-byte write remains pending";
+    SPVTEXTFRAG firstFragment = {};
+    firstFragment.pTextStart = firstText;
+    firstFragment.ulTextLen = static_cast<ULONG>(wcslen(firstText));
+
+    fixture.mockSite->zeroByteNextWrite = true;
+    HRESULT firstSpeakResult = E_FAIL;
+    std::atomic_bool firstSpeakReturned = false;
+    std::thread firstSpeakThread(
+        [&]
+        {
+            firstSpeakResult =
+                fixture.engine->Speak(0, fixture.formatId, fixture.pWaveFormat, &firstFragment, fixture.mockSite.get());
+            firstSpeakReturned = true;
+        });
+    ThreadJoinGuard firstSpeakJoin(firstSpeakThread);
+
+    EXPECT_TRUE(WaitForCondition(
+        [&]
+        {
+            return fixture.mockSite->writeCallCount.load() > 0;
+        },
+        1000, 5));
+    ASSERT_EQ(fixture.mockSite->writeCallCount.load(), 1u);
+
+    EXPECT_FALSE(firstSpeakReturned.load());
+
+    EXPECT_TRUE(firstSpeakJoin.Join(2000));
+    EXPECT_EQ(firstSpeakResult, S_OK);
+    EXPECT_EQ(fixture.mockSite->totalBytesWritten.load(), 0u);
+
+    wchar_t secondText[] = L"fresh";
+    SPVTEXTFRAG secondFragment = {};
+    secondFragment.pTextStart = secondText;
+    secondFragment.ulTextLen = static_cast<ULONG>(wcslen(secondText));
+
+    EXPECT_EQ(fixture.engine->Speak(0, fixture.formatId, fixture.pWaveFormat, &secondFragment, fixture.mockSite.get()),
+              S_OK);
+
+    EXPECT_EQ(fixture.mockSite->totalBytesWritten.load(), 9600u);
+}
+
 #if defined(_DEBUG)
 TEST_F(SapiEngineTests, RejectedAudioWriteWithFailedCancellationQuarantinesWorker)
 {
