@@ -64,6 +64,9 @@
     <ClInclude Include="SpeechStatePolicy.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ControlEventPolicy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="SpeechProtocolUtils.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -97,6 +100,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="SpeechStatePolicy.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ControlEventPolicy.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="StringUtils.cpp">
