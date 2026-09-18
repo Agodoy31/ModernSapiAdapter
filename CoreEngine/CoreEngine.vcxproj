@@ -183,6 +183,7 @@
     <ClInclude Include="SpeechWorkerTypes.h" />
     <ClInclude Include="SpeechStatePolicy.h" />
     <ClInclude Include="ControlEventPolicy.h" />
+    <ClInclude Include="PcmDeliveryPolicy.h" />
     <ClInclude Include="SpeechProtocolUtils.h" />
     <ClInclude Include="StringUtils.h" />
     <ClInclude Include="ScopedOverlapped.h" />
@@ -202,6 +203,7 @@
     <ClCompile Include="SpeechWorker.cpp" />
     <ClCompile Include="SpeechStatePolicy.cpp" />
     <ClCompile Include="ControlEventPolicy.cpp" />
+    <ClCompile Include="PcmDeliveryPolicy.cpp" />
     <ClCompile Include="StringUtils.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>

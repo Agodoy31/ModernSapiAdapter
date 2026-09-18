@@ -154,6 +154,11 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <ProgramDataBaseFileName>$(IntDir)ControlEventPolicy.pdb</ProgramDataBaseFileName>
     </ClCompile>
+    <ClCompile Include="PcmDeliveryPolicyTests.cpp" />
+    <ClCompile Include="..\CoreEngine\PcmDeliveryPolicy.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ProgramDataBaseFileName>$(IntDir)PcmDeliveryPolicy.pdb</ProgramDataBaseFileName>
+    </ClCompile>
     <ClCompile Include="SapiFragmentSerializationTests.cpp" />
     <ClCompile Include="ControlStreamBufferTests.cpp" />
     <ClCompile Include="StringUtilsTests.cpp" />
