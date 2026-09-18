@@ -26,16 +26,16 @@ The following table catalogues every piece of state within `SpeechWorker` involv
 
 | Variable | Type | Invariant / Range | Access Discipline | Primary Thread(s) | Lifecycle Role |
 |---|---|---|---|---|---|
-| `m_context.token` | `RequestToken` (`speakId`, `generation`) | Valid iff `speakId != 0 && generation != 0`. Zeroed when idle. | Protected by `m_requestMutex`. | SAPI caller, Audio worker, Control worker | Identifies active request and guards against ABA recycling across restarts. |
+| `m_context.token` | `RequestToken` (`speakId`, `generation`) | Valid iff `speakId != 0 && generation != 0`. `Reset()` clears only `speakId`; `generation` and the complete token remain retained after `ResetToIdleLocked()`. | Protected by `m_requestMutex`. | SAPI caller, Audio worker, Control worker | Identifies active request and guards against ABA recycling across restarts. |
 | `m_context.upstreamState` | `UpstreamState` enum | `Idle`, `Active`, `Completed`, `Cancelled`, `Failed`, `Faulted`. | Protected by `m_requestMutex`. | SAPI caller, Control worker, Audio worker | Tracks provider-side synthesis lifecycle. |
 | `m_context.downstreamState` | `DownstreamState` enum | `Idle`, `Speaking`, `Cancelling`, `Faulted`. | Protected by `m_requestMutex`. | SAPI caller, Audio worker, Control worker | Tracks SAPI-side audio delivery lifecycle. |
 | `m_context.rawAudioBytesRead` | `uint64_t` | Monotonically increases during request. Reset to 0 on new request. | Protected by `m_requestMutex`. | Audio worker, SAPI caller (audit/cancel) | Total raw PCM bytes read from audio pipe for this request. |
-| `m_context.deliveredAudioBytes`| `uint64_t` | Monotonically increases during `Speaking`. Never exceeds `upstreamTerminalBytes` without fault. | Protected by `m_requestMutex`. | Audio worker | Total PCM bytes delivered to `pOutputSite->Write()`. |
-| `m_context.upstreamTerminalBytes` | `uint64_t` | Frame-aligned (`% blockAlign == 0`). Set upon terminal event or error log. | Protected by `m_requestMutex`. | Control worker, Audio worker | Exact declared terminal byte boundary from provider. |
-| `m_context.upstreamFinished` | `bool` | True iff provider emitted `synthesis_complete`, `synthesis_cancelled`, or `severity="error"` log. | Protected by `m_requestMutex`. | Control worker, Audio worker | Signals provider has completed/terminated its upstream transmission. |
+| `m_context.deliveredAudioBytes`| `uint64_t` | Monotonically increases during `Speaking`. Before a terminal declaration it normally exceeds the still-zero `upstreamTerminalBytes`. After a terminal byte count is accepted, any excess is detected as an overrun during boundary evaluation. | Protected by `m_requestMutex`. | Audio worker | Total PCM bytes delivered to `pOutputSite->Write()`. |
+| `m_context.upstreamTerminalBytes` | `uint64_t` | Provider terminal values are frame-aligned before acceptance. Error-log handling copies `rawAudioBytesRead` and immediately resets lifecycle enums without clearing this field. | Protected by `m_requestMutex`. | Control worker, Audio worker | Exact declared terminal byte boundary from provider, or retained diagnostic residue after reset. |
+| `m_context.upstreamFinished` | `bool` | Set by terminal events and request-error logs. `ResetToIdleLocked()` does not clear it; `Start()` and cancellation explicitly reset it. | Protected by `m_requestMutex`. | Control worker, Audio worker | Signals upstream termination while a request is active and remains retained diagnostic state while idle. |
 | `m_context.faultPending` | `bool` | True when protocol/boundary error detected but session quarantine publication incomplete. | Protected by `m_requestMutex`. | Audio worker, Control worker, SAPI caller | Inhibits new request admission and SAPI event forwarding. |
-| `m_context.cancellationDeadlineTick` | `ULONGLONG` | Monotonic tick (`GetTickCount64() + CancellationTimeoutMs`). 0 when not cancelling. | Protected by `m_requestMutex`. | SAPI caller, Audio worker | Absolute deadline for provider cancellation acknowledgement and PCM drain. |
-| `m_context.completionHr` | `HRESULT` | `S_OK`, `E_FAIL`, `E_ABORT`, or Win32 error code. | Protected by `m_requestMutex`. | SAPI caller, Control worker, Audio worker | Terminal HRESULT returned by `WaitUntilFinished` / `CancelAndDrain`. |
+| `m_context.cancellationDeadlineTick` | `ULONGLONG` | Monotonic tick (`GetTickCount64() + CancellationTimeoutMs`) while cancelling. Retained after `ResetToIdleLocked()` and cleared by the next full `RequestContext::Reset()`. | Protected by `m_requestMutex`. | SAPI caller, Audio worker | Absolute deadline for provider cancellation acknowledgement and PCM drain. |
+| `m_context.completionHr` | `HRESULT` | `S_OK`, `E_FAIL`, `E_ABORT`, or Win32 error code. Retained after `ResetToIdleLocked()` so the waiter can observe the completed request result. | Protected by `m_requestMutex`. | SAPI caller, Control worker, Audio worker | Terminal HRESULT returned by `WaitUntilFinished` / `CancelAndDrain`. |
 | `m_frameAssembler` | `PcmFrameAssembler` | Holds partial PCM frames (`< blockAlign`). Reset on request transitions. | Protected by `m_requestMutex`. | Audio worker, SAPI caller (`Start`, `Stop`, `Cancel`) | Assembles complete PCM frames across arbitrary pipe read boundaries. |
 | `m_generationCounter` | `uint64_t` | Monotonically increments on every successful `Start()`. Never wraps practically. | Protected by `m_requestMutex`. | SAPI caller (`Start()`) | Allocates unique generation tokens to prevent ABA request confusion. |
 | `m_lastProviderProgressTick` | `std::atomic<ULONGLONG>` | Monotonic tick of last valid audio or control progress. | Atomic (release store, acquire load). | Audio worker, Control worker, SAPI caller | Inactivity watchdog clock; prevents SAPI caller hangs on silent provider stall. |
@@ -235,30 +235,47 @@ Every read and write site of request lifecycle state is mapped below:
     - Returns `false`.
   - Other severities (info, warn): returns `false`.
 
+### 3.13 Debug-only test-hook state that Phase A must preserve
+
+The following `_DEBUG` state is not production policy input, but its placement relative to request-state mutation is observable by the concurrency tests and therefore part of the extraction contract:
+
+| Hook state | Production boundary observed | Required Phase A placement |
+|---|---|---|
+| `pauseNextAbortTransition`, `abortTransitionPaused`, `wasCancellingAtAbortUnlock` and `abortTransitionChanged` | The request has transitioned to `Cancelling` under `m_requestMutex`, then the request lock is released before cancellation IPC. | Keep the pause after the locked transition has been applied and after `m_requestMutex` is released. Do not move it into policy code. |
+| `pauseNextEventForward`, `eventForwardPaused` and `eventForwardChanged` | Event admission has been serialized against fault publication before the final SAPI callback. | Keep it in `ForwardEventToSapi`; Phase A does not own event admission or callback timing. |
+| `pauseNextFaultPublication`, `faultPublicationPaused` and `faultPublicationChanged` | The first fault transition is visible and `m_faultPublicationStarted` has won its compare/exchange, but `m_faultVisible` has not yet been published. | Keep it between the two existing fault-publication phases. Phase A decisions must not absorb this pause. |
+| `failNextFrameAssembly` | The audio thread is about to call `PcmFrameAssembler::Process`. | Keep it in the audio-ingest path. Phase A does not own framing or exception injection. |
+| `audioApartmentActive` | COM apartment lifetime of the audio worker thread. | Keep it in `AudioThreadProc`; Phase A has no thread or apartment ownership. |
+| Static control-thread creation and entry failure injectors | Worker startup rollback and control-thread exception containment. | Keep them in thread startup/entry code; Phase A does not change worker construction or rollback. |
+
+No Phase A policy function reads or writes these hooks. Any implementation that moves a hook across its observed mutation, unlock, callback, or fault-publication boundary is a behavior change and must stop for a separate review.
+
 ---
 
-## 4. Allowed Composite-State Matrix
+## 4. Observed Composite-State Matrix
 
-The composite request state is defined by the 4-tuple:
-`C = (UpstreamState, DownstreamState, upstreamFinished, faultPending)`
+The lifecycle decision tuple is `C = (UpstreamState, DownstreamState, upstreamFinished, faultPending)`. It is not the complete stored state: token fields, byte counters, terminal bytes, cancellation deadline, and `completionHr` can intentionally remain populated after lifecycle enums return to Idle. The matrix records states the current implementation can actually expose under `m_requestMutex`; it does not normalize residual fields.
 
 | State ID | `UpstreamState` | `DownstreamState` | `upstreamFinished` | `faultPending` | Classification | Invariant & Meaning |
 |---|---|---|---|---|---|---|
-| **S0** | `Idle` | `Idle` | `false` | `false` | **Legal (Quiescent)** | Normal idle state between synthesis requests. `token` is zeroed or unassigned. Assembler carry is empty. |
-| **S1** | `Active` | `Speaking` | `false` | `false` | **Legal (Synthesizing)** | Normal synthesis underway. Audio is framed and delivered to SAPI. Progress clock advances. |
-| **S2** | `Completed` | `Speaking` | `true` | `false` | **Legal (Awaiting Terminal Audio)** | Provider finished synthesis (`synthesis_complete`). Worker is framing and delivering remaining declared PCM frames. |
-| **S3** | `Active` | `Cancelling` | `false` | `false` | **Legal (Draining Cancel)** | Cancellation requested by SAPI or write rejection; cancel message sent to provider; awaiting `synthesis_cancelled`. Audio is discarded. |
-| **S4** | `Cancelled` | `Cancelling` | `true` | `false` | **Legal (Draining Cancel with Boundary)** | Provider acknowledged cancel with `synthesis_cancelled` declaring byte boundary; worker discarding remaining audio until `rawAudioBytesRead >= upstreamTerminalBytes`. |
-| **S5** | `Completed` | `Cancelling` | `true` | `false` | **Legal (Cancel Racing Complete)** | Provider sent `synthesis_complete` before receiving or processing cancel; worker discards remaining audio until declared terminal reached. |
-| **S6** | `Failed` | `Speaking` / `Cancelling` | `true` | `false` | **Transient (Utterance Error)** | Utterance error log received. Immediately transitions to `S0` via `ResetToIdleLocked()`. |
-| **S7** | Any | Any | Any | `true` | **Transient (Fault Pending)** | Protocol error, audio overrun, or invalid boundary detected. Awaiting execution of `EnterFaultedState()`. Start and event forward are inhibited. |
-| **S8** | `Faulted` | `Faulted` | Any | `false` | **Legal (Session Faulted / Quarantined)** | Fatal session error. All subsequent requests rejected. Worker threads drain/exit. |
-| **U1** | `Idle` | `Speaking` | Any | Any | **Illegal (Unreachable)** | Cannot speak without active upstream session. |
-| **U2** | `Idle` | `Cancelling` | Any | Any | **Illegal (Unreachable)** | Cannot drain cancellation when idle. |
-| **U3** | `Active` | `Idle` | Any | Any | **Illegal (Unreachable)** | Active upstream must correspond to downstream speaking or cancelling. |
-| **U4** | `Completed` | `Idle` | `false` | Any | **Illegal (Unreachable)** | Completed upstream requires `upstreamFinished == true`. |
-| **U5** | `Cancelled` | `Speaking` | Any | Any | **Illegal (Unreachable)** | Cannot deliver audio to SAPI when upstream is cancelled. |
-| **U6** | `Completed` / `Cancelled` | `Speaking` / `Cancelling` | `false` | `false` | **Illegal (Unreachable)** | Terminal upstream states require `upstreamFinished == true`. |
+| **S0a** | `Idle` | `Idle` | `false` | `false` | **Legal (fresh/quiescent)** | Initial state or a newly accepted request before state publication. `Start()` performs a full `RequestContext::Reset()` before entering S1. |
+| **S0b** | `Idle` | `Idle` | `true` or `false` | `false` | **Legal (completed residue)** | `ResetToIdleLocked()` changes only lifecycle enums and resets the assembler. Token generation, counters, terminal fields, deadline, and `completionHr` remain available to the waiting caller until the next `Start()`. |
+| **S1** | `Active` | `Speaking` | `false` | `false` | **Legal (synthesizing)** | Normal synthesis underway. Audio is framed and delivered to SAPI. |
+| **S2** | `Completed` | `Speaking` | `true` | `false` | **Legal (awaiting terminal audio)** | Normal completion arrived before all declared PCM was read and delivered. |
+| **S3a** | `Active` | `Cancelling` | `false` | `false` | **Legal (draining cancel)** | Cancellation began while synthesis was active. |
+| **S3b** | `Completed` | `Cancelling` | `false` | `false` | **Legal (cancel after completion declaration)** | Cancellation began while S2 was waiting for terminal PCM. `TransitionToCancelling()` clears `upstreamFinished` and terminal bytes but intentionally retains `upstreamState == Completed`. |
+| **S3c** | `Cancelled` | `Cancelling` | `false` | `false` | **Representable retained state** | A repeated cancellation transition after a previously observed cancelled lifecycle can retain the enum while clearing `upstreamFinished`; callers must not assume terminal enums imply `upstreamFinished` during cancellation. |
+| **S4** | `Cancelled` | `Cancelling` | `true` | `false` | **Legal (cancel boundary received)** | Provider acknowledged cancellation; audio is discarded until `rawAudioBytesRead >= upstreamTerminalBytes`. |
+| **S5** | `Completed` | `Cancelling` | `true` | `false` | **Legal (completion raced cancellation)** | Provider completed before processing cancel; remaining declared audio is discarded. |
+| **S6** | `Cancelled` | `Speaking` | `true` | `false` | **Protocol-unexpected but representable** | Current code accepts a matching `synthesis_cancelled` even while Speaking. It either resets immediately or waits for its declared byte boundary. Phase A preserves this baseline; Phase B may later classify whether it should fault. |
+| **S7** | `Failed` | `Speaking` or `Cancelling` | `true` | `false` | **Transient (utterance error)** | A classified request error is applied and immediately evaluated into S0b. |
+| **S8** | Any | Any | Any | `true` | **Transient (fault pending)** | A protocol/boundary error has been detected but fault publication is not complete. Start and event forwarding are inhibited. |
+| **S9** | `Faulted` | `Faulted` | Any | `true` then `false` | **Legal (session quarantine)** | `EnterFaultedState()` first publishes faulted lifecycle state with `faultPending=true`, then serializes callback admission, sets `m_faultVisible`, and clears `faultPending`. |
+| **U1** | `Idle` | `Speaking` or `Cancelling` | Any | `false` | **Not produced by current transitions** | No current transition assigns an active downstream state while leaving upstream Idle. |
+| **U2** | `Active` | `Idle` | Any | `false` | **Not produced by current transitions** | Active synthesis is paired with Speaking or Cancelling. |
+| **U3** | Any non-faulted upstream | `Faulted` | Any | `false` | **Not produced by current transitions** | Fault publication assigns both lifecycle enums together. |
+
+`upstreamFinished == false` is therefore not a universal proof that `upstreamState == Active`; cancellation deliberately clears the flag without normalizing the retained upstream enum. Phase A tests must cover S3b explicitly.
 
 ---
 
@@ -268,21 +285,22 @@ This table maps every state transition, its precondition, atomic effects, notifi
 
 | Transition Name | Trigger / Input | Precondition | Mutated State Fields | Assembler Action | Notification | Post-Unlock Action | Destination State |
 |---|---|---|---|---|---|---|---|
-| `StartRequest` | `SpeechWorker::Start(speakId)` | `upstreamState == Idle && downstreamState == Idle && !faultPending` | `token.speakId = speakId`, `token.generation = ++m_generationCounter`, `upstreamState = Active`, `downstreamState = Speaking`, audio counters = 0, `upstreamFinished = false`, `faultPending = false`, `completionHr = S_OK` | `Reset()` | None | None | **S1** (`Active`, `Speaking`) |
+| `StartRequest` | `SpeechWorker::Start(speakId)` | `upstreamState == Idle && downstreamState == Idle && !faultPending` | Full `RequestContext::Reset()`, then `token.speakId = speakId`, `token.generation = ++m_generationCounter`, `upstreamState = Active`, `downstreamState = Speaking` | `Reset()` | None | None | **S1** (`Active`, `Speaking`) |
 | `RejectStart` | `SpeechWorker::Start(speakId)` | `upstreamState != Idle || downstreamState != Idle || faultPending` | None | None | None | None | No change |
-| `TerminalComplete` | `synthesis_complete` control event | `token.Matches() && !upstreamFinished && hasValidTerminalBytes && (terminalBytes % blockAlign == 0)` | `upstreamTerminalBytes = terminalBytes`, `upstreamFinished = true`, `upstreamState = Completed` | None | Evaluates boundary; if reached, notifies `m_requestChanged` | If boundary reached: None; if overrun: `EnterFaultedState()` | **S2** (if draining), **S0** (if reached), or **S7** (if overrun) |
-| `TerminalCancelled`| `synthesis_cancelled` control event | `token.Matches() && !upstreamFinished && hasValidTerminalBytes && (terminalBytes % blockAlign == 0)` | `upstreamTerminalBytes = terminalBytes`, `upstreamFinished = true`, `upstreamState = Cancelled` | None | Evaluates boundary; if reached, notifies `m_requestChanged` | If boundary reached: None | **S4** (if draining), or **S0** (if reached) |
-| `DuplicateTerminal`| Terminal event with `upstreamFinished == true` | `token.Matches() && upstreamFinished == true` | `upstreamState = Faulted`, `downstreamState = Faulted`, `completionHr = E_FAIL`, `faultPending = true` | None | `m_requestChanged.notify_all()` | `EnterFaultedState()` | **S7** / **S8** |
-| `MisalignedTerminal`| Terminal event with `terminalBytes % blockAlign != 0` | `token.Matches()` | `upstreamState = Faulted`, `downstreamState = Faulted`, `completionHr = E_FAIL`, `faultPending = true` | None | `m_requestChanged.notify_all()` | `EnterFaultedState()` | **S7** / **S8** |
-| `SapiAbortRequested`| SAPI `pOutputSite->GetActions()` includes `SPVES_ABORT` | `downstreamState == Speaking` | `downstreamState = Cancelling`, `upstreamFinished = false`, `upstreamTerminalBytes = 0`, `cancellationDeadlineTick = deadline` | `Reset()` | None | `SendCancellation(speakId, timeout)` outside lock | **S3** (`Active`, `Cancelling`) |
-| `WriteRejected` | SAPI `OnAudioData` returns `false` | `token.Matches() && downstreamState == Speaking` | `downstreamState = Cancelling`, `upstreamFinished = false`, `upstreamTerminalBytes = 0`, `cancellationDeadlineTick = deadline` | `Reset()` | None | `SendCancellation(speakId, timeout)` outside lock | **S3** (`Active`, `Cancelling`) |
-| `TerminalAudioDrain`| Ingest / delivery reaches `deliveredAudioBytes == declared && rawAudioBytes == declared && !HasCarry()` | `upstreamFinished && downstreamState == Speaking` | `upstreamState = Idle`, `downstreamState = Idle` | `Reset()` | `m_requestChanged.notify_all()` | None | **S0** (`Idle`, `Idle`) |
-| `CancelDrainComplete`| Ingest reaches `rawAudioBytesRead >= upstreamTerminalBytes` | `upstreamFinished && downstreamState == Cancelling` | `upstreamState = Idle`, `downstreamState = Idle` | `Reset()` | `m_requestChanged.notify_all()` | None | **S0** (`Idle`, `Idle`) |
-| `AudioOverrun` | Ingest / delivery results in `raw > declared || delivered > declared` | `upstreamFinished && downstreamState == Speaking` | `faultPending = true` | None | None | `EnterFaultedState()` | **S7** / **S8** |
-| `UtteranceErrorLog` | `severity == "error"` log event | `token.Matches()` | `upstreamState = Failed`, `upstreamFinished = true`, `completionHr = E_FAIL`, `upstreamTerminalBytes = rawAudioBytesRead` -> immediately `ResetToIdleLocked()` | `Reset()` | `m_requestChanged.notify_all()` | Forward log event outside lock | **S0** (`Idle`, `Idle`) |
-| `FatalLog` | `severity == "fatal"` log event | Any | `faultPending = true` | None | None | `EnterFaultedState()` | **S7** / **S8** |
-| `SessionQuarantine` | Transport failure, pipe crash, or timeout | Any | `upstreamState = Faulted`, `downstreamState = Faulted`, `completionHr = E_FAIL` | `Reset()` | `m_requestChanged.notify_all()` | `m_pClient->Cancel()` | **S8** (`Faulted`, `Faulted`) |
-| `StopRequest` | `SpeechWorker::Stop()` | `downstreamState != Idle && downstreamState != Faulted` | `upstreamState = Idle`, `downstreamState = Idle` | `Reset()` | `m_requestChanged.notify_all()` | `SendCancellation(speakId, timeout)` | **S0** (`Idle`, `Idle`) |
+| `TerminalComplete` | `synthesis_complete` control event | `token.Matches() && !upstreamFinished && hasValidTerminalBytes && (terminalBytes % blockAlign == 0)` | `upstreamTerminalBytes = terminalBytes`, `upstreamFinished = true`, `upstreamState = Completed` | None | Evaluates boundary; if reached, notifies `m_requestChanged` | If boundary reached: None; if overrun: `EnterFaultedState()` | **S2** (if draining), **S0b** (if reached), or **S8/S9** (if overrun) |
+| `TerminalCancelled`| `synthesis_cancelled` control event | `token.Matches() && !upstreamFinished && hasValidTerminalBytes && (terminalBytes % blockAlign == 0)` | `upstreamTerminalBytes = terminalBytes`, `upstreamFinished = true`, `upstreamState = Cancelled` | None | Evaluates boundary; if reached, notifies `m_requestChanged` | If boundary reached: None | **S4** when cancelling, **S6** when still speaking and bytes remain, or **S0b** when reached |
+| `DuplicateTerminal`| Terminal event with `upstreamFinished == true` | `token.Matches() && upstreamFinished == true` | First calls `TransitionRequestToFaultedLocked()`; caller then marks `faultPending` and invokes `EnterFaultedState()`, which repeats the idempotent lifecycle transition before publishing fault visibility | None | One notification at initial transition and one during fault entry, preserving baseline | `EnterFaultedState()` | **S8/S9** |
+| `InvalidTerminalBytes` | First terminal event with missing or nonnumeric byte field | `token.Matches() && !upstreamFinished && !hasValidTerminalBytes` | Same two-stage fault transition as duplicate terminal | None | Same two-stage notification behavior | `EnterFaultedState()` | **S8/S9**. If a terminal is both duplicate and malformed, `DuplicateTerminal` wins by baseline precedence. |
+| `MisalignedTerminal`| Terminal event with `terminalBytes % blockAlign != 0` | `token.Matches()` | Same two-stage fault transition as duplicate terminal | None | Same two-stage notification behavior | `EnterFaultedState()` | **S8/S9** |
+| `SapiAbortRequested`| SAPI `pOutputSite->GetActions()` includes `SPVES_ABORT` | `downstreamState == Speaking` | `downstreamState = Cancelling`, `upstreamFinished = false`, `upstreamTerminalBytes = 0`, `cancellationDeadlineTick = deadline`; retained upstream enum is not normalized | `Reset()` | None | `SendCancellation(speakId, timeout)` outside lock | **S3a**, **S3b**, or **S3c** |
+| `WriteRejected` | SAPI `OnAudioData` returns `false` | `token.Matches() && downstreamState == Speaking` | Same cancellation transition as SAPI abort; retained upstream enum is not normalized | `Reset()` | None | `SendCancellation(speakId, timeout)` outside lock | **S3a**, **S3b**, or **S3c** |
+| `TerminalAudioDrain`| Ingest / delivery reaches `deliveredAudioBytes == declared && rawAudioBytes == declared && !HasCarry()` | `upstreamFinished && downstreamState == Speaking` | Only `upstreamState = Idle`, `downstreamState = Idle`; all other context fields are retained | `Reset()` | `m_requestChanged.notify_all()` | None | **S0b** |
+| `CancelDrainComplete`| Ingest reaches `rawAudioBytesRead >= upstreamTerminalBytes` | `upstreamFinished && downstreamState == Cancelling` | Only `upstreamState = Idle`, `downstreamState = Idle`; all other context fields are retained | `Reset()` | `m_requestChanged.notify_all()` | None | **S0b** |
+| `AudioOverrun` | Ingest / delivery results in `raw > declared || delivered > declared` | `upstreamFinished && downstreamState == Speaking` | `faultPending = true` | None | None | `EnterFaultedState()` | **S8/S9** |
+| `UtteranceErrorLog` | `severity == "error"` log event | `token.Matches()` | `upstreamState = Failed`, `upstreamFinished = true`, `completionHr = E_FAIL`, `upstreamTerminalBytes = rawAudioBytesRead` -> immediately `ResetToIdleLocked()` | `Reset()` | `m_requestChanged.notify_all()` | Forward log event outside lock | **S7** then **S0b** |
+| `FatalLog` | `severity == "fatal"` log event | Any | `faultPending = true` | None | None | `EnterFaultedState()` | **S8/S9** |
+| `SessionQuarantine` | Transport failure, pipe crash, or timeout | Any | `upstreamState = Faulted`, `downstreamState = Faulted`, `completionHr = E_FAIL`; fault publication toggles `faultPending` and publishes `m_faultVisible` | `Reset()` | `m_requestChanged.notify_all()` | `m_pClient->Cancel()` | **S9** |
+| `StopRequest` | `SpeechWorker::Stop()` | `downstreamState != Idle && downstreamState != Faulted` | Only `upstreamState = Idle`, `downstreamState = Idle`; all other context fields are retained | `Reset()` | `m_requestChanged.notify_all()` | `SendCancellation(speakId, timeout)` | **S0b** |
 
 ---
 
@@ -293,10 +311,10 @@ The established lock-ordering discipline is strictly hierarchical. Reverse acqui
 | Lock Name | Native Type | Protected Resources | Acquisition Context | Permitted Nested Locks |
 |---|---|---|---|---|
 | `m_eventForwardMutex` | `std::mutex` | Serializes event callback admission against session fault publication. | Control worker (`ForwardEventToSapi`), Fault publisher (`EnterFaultedState`). | MAY acquire `m_requestMutex` while holding `m_eventForwardMutex`. |
-| `m_requestMutex` | `std::mutex` | `m_context`, `m_frameAssembler`, `m_generationCounter`. | Audio worker, Control worker, SAPI caller. | MUST NOT acquire ANY mutex while holding `m_requestMutex`. |
-| Test Hook Mutexes (`_DEBUG` only) | `std::mutex` (`eventForwardMutex`, `abortTransitionMutex`, `faultPublicationMutex`) | Test pause and synchronization flags. | Test harness and worker threads. | Acquired independently or around test synchronization points. Never held during production lock nesting. |
+| `m_requestMutex` | `std::mutex` | `m_context`, `m_frameAssembler`, `m_generationCounter`. | Audio worker, Control worker, SAPI caller. | MUST NOT acquire another **production** mutex. In Debug builds only, the existing abort-observation hook briefly acquires `m_testHooks.abortTransitionMutex` while `m_requestMutex` remains held so the test can observe the atomic transition boundary. |
+| Test Hook Mutexes (`_DEBUG` only) | `std::mutex` (`eventForwardMutex`, `abortTransitionMutex`, `faultPublicationMutex`) | Test pause and synchronization flags. | Test harness and worker threads. | Normally independent. The one intentional exception is `m_requestMutex` -> debug `abortTransitionMutex` immediately after cancellation state publication. Phase A preserves this debug-only placement and introduces no new nesting. |
 
-**Inviolable Rule:** `m_eventForwardMutex` -> `m_requestMutex` is the ONLY valid production nested order. Reverse acquisition (`m_requestMutex` -> `m_eventForwardMutex`) is strictly prohibited.
+**Inviolable Rule:** `m_eventForwardMutex` -> `m_requestMutex` is the only valid nesting among production locks. Reverse acquisition (`m_requestMutex` -> `m_eventForwardMutex`) is strictly prohibited. The existing Debug-only abort test hook is not a production lock-order alternative and must remain at its characterized boundary.
 
 ---
 
@@ -322,12 +340,15 @@ Every path that waits, polls, or blocks in `SpeechWorker` is inventoried below w
 
 | Path / Method | Waiting / Blocking Mechanism | Bounding Guarantee | Failure / Exit Action |
 |---|---|---|---|
-| `SpeechWorker::~SpeechWorker()` | Sets `m_exit = true`, releases test hooks, calls `m_pClient->Cancel()`, joins `m_audioThread` and `m_controlThread`. | Bounded by pipe I/O cancellation and 250ms read poll timeout. | Guaranteed to join; threads exit immediately upon wake. |
+| `SpeechWorker::~SpeechWorker()` | Sets `m_exit = true`, releases test hooks, calls `m_pClient->Cancel()`, then performs ordinary unbounded `join()` calls. | Pipe-blocked threads are normally released by cancellation or the 250ms read poll. The destructor is **not globally bounded**: an audio worker blocked inside `OnAudioData`/SAPI `Write`, or a control worker blocked inside `OnSpeechEvent`/SAPI `AddEvents`, is not released by pipe cancellation. | Existing baseline liveness debt under `CON-03`. Phase A neither moves nor worsens callback/thread ownership and must not claim to solve this path. Ownership transfer remains blocked until a separate design supplies an enforceable callback/join bound. |
 | Audio pipe read | `m_pClient->ReadAudioChunk` with 250ms poll interval. | Maximum 250ms per loop iteration, or immediate on `m_pClient->Cancel()`. | Exits on `m_exit` or enters fault on I/O failure. |
 | Control pipe read | `m_pClient->ReadControlMessage` with 250ms poll interval. | Maximum 250ms per loop iteration, or immediate on `m_pClient->Cancel()`. | Exits on `m_exit` or enters fault on I/O failure. |
 | `FinishCancellation` Wait | `m_requestChanged.wait_for(lock, remaining, ...)` | Bounded by `CancellationTimeoutMs` (500ms). | If timeout expires, unlocks and calls `EnterFaultedState()`, returning `ERROR_TIMEOUT`. |
-| `WaitUntilFinished` Loop | `m_requestChanged.wait_for(lock, 10ms, ...)` | 10ms poll granularity; bounded by `SynthesisInactivityTimeoutMs` (1500ms) or `CancellationTimeoutMs` (500ms). | On inactivity timeout, unlocks and calls `EnterFaultedState()`, returning `ERROR_TIMEOUT`. |
-| `SendCancellation` IPC | Overlapped pipe write with `sendTimeout` (up to 500ms). | Bounded by remaining cancellation budget. | On write timeout/error, calls `EnterFaultedState()`, returning `ERROR_TIMEOUT` or `E_FAIL`. |
+| `WaitUntilFinished` Loop | `m_requestChanged.wait_for(lock, 10ms, ...)` | The individual condition-variable wait has 10ms poll granularity. Cancellation drain has a 500ms deadline, and 1500ms of no eligible provider progress triggers inactivity quarantine. This is **not** a global completion bound: valid audio/control progress can refresh the inactivity clock indefinitely. | On detected inactivity or cancellation timeout, unlocks and calls `EnterFaultedState()`, returning `ERROR_TIMEOUT`. Otherwise a legitimately long progressive request may remain active without an absolute deadline. |
+| SAPI `GetActions()` | External COM call once per nonterminal wait-loop iteration after releasing `m_requestMutex`. | No CoreEngine-enforced deadline; a blocked SAPI site can block the caller independently of provider progress timers. | Existing baseline liveness debt. Phase A preserves unlock-before-call behavior and does not claim to bound it. |
+| `SendCancellation` IPC | Overlapped pipe write with `sendTimeout` (up to 500ms). | Caller-driven `FinishCancellation` supplies only the remaining transaction budget. `Stop` and write rejection each supply a fresh full `CancellationTimeoutMs`. Every individual send remains bounded by its supplied value. | On write timeout/error, caller-driven cancellation quarantines immediately; `Stop` ignores its send result; write rejection records a delivery fault and quarantines from the audio loop. |
+| SAPI `OnAudioData` / `Write` callback | External COM callback from audio worker. | No CoreEngine-enforced deadline. SAPI may block independently of pipe cancellation. | Existing unbounded callback path; covered by tests that prove request-state locks are not held, not by a completion guarantee. |
+| SAPI `OnSpeechEvent` / `AddEvents` callback | External COM callback from control worker. | No CoreEngine-enforced deadline. SAPI may block independently of pipe cancellation. | Existing unbounded callback path; fault publication must remain independent, but final worker join can still wait for callback return. |
 
 ---
 
@@ -336,6 +357,6 @@ Every path that waits, polls, or blocks in `SpeechWorker` is inventoried below w
 This audit confirms that `SpeechWorker`'s state management consists of pure deterministic decisions combined with mechanical state applications and un-locked side effects.
 
 In Phase A:
-1. All decision logic (boundary checks, overrun checks, legal state combinations, timeout predicates, cancellation eligibility, start eligibility, terminal event validation) can be extracted into a pure, stateless leaf policy (`SpeechStatePolicy`).
+1. Phase A extracts lifecycle decisions only: request admission, already-classified upstream terminal/failure transitions, cancellation eligibility, reset/fault effects, timeout selection, and mapping of a caller-computed terminal-boundary observation. Control-event classification remains in `SpeechWorker` for Phase B. PCM/frame arithmetic, span eligibility, and write-result classification remain in `SpeechWorker` for Phase C.
 2. `SpeechWorker` retains all mutexes, condition variables, threads, IPC calls, COM callbacks, condition variable notifications, and session quarantine operations.
-3. Every policy invocation will occur under continuous hold of `m_requestMutex`, ensuring zero race conditions or state bifurcation.
+3. Every policy invocation and application occurs under one continuous hold of `m_requestMutex`, preventing a stale policy result from being applied to a replaced request. This does not make claims about unrelated external callback liveness.

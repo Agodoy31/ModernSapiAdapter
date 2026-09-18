@@ -1,203 +1,338 @@
-# SpeechWorker Phase A (Request-State Policy) Implementation Plan
+# SpeechWorker Phase A Request-State Policy Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: use `subagent-driven-development` task by task. Each task receives an independent specification review and code-quality review before the next task starts.
 
-**Goal:** Extract deterministic request lifecycle decisions, boundary evaluations, cancellation state transitions, timeout conditions, and error-handling policies from `SpeechWorker` into a pure, stateless Level-0 leaf unit (`SpeechStatePolicy`).
+**Goal:** Extract only request-lifecycle decisions into `SpeechStatePolicy` while preserving every current thread, lock, callback, IPC, timing, residual-state, and fault-publication behavior.
 
-**Architecture:** `SpeechWorker` retains sole ownership of threads, mutexes, condition variables, mutable request context, named pipe I/O, COM callbacks, and session quarantine. `SpeechStatePolicy` is introduced as a `noexcept`, allocation-free, bounded, stateless leaf module. `SpeechWorker` holds `m_requestMutex` continuously across input capture, policy evaluation, token validation, and decision application.
+**Architecture:** `SpeechWorker` remains the state and synchronization owner. A pure Level-0 policy consumes immutable request state and already-classified facts, then returns typed decisions that `SpeechWorker` applies under one continuous `m_requestMutex` hold. Event classification remains Phase B work; PCM/frame and write-result classification remain Phase C work.
 
-**Tech Stack:** C++20, Windows 11 SDK (10.0.26100.0), MSBuild, GoogleTest, WIL (Windows Implementation Libraries), Win32 Named Pipes, SAPI 5.
-
----
+**Tech stack:** C++20, MSVC, Windows 11 SDK 10.0.26100.0, GoogleTest, Win32 named-pipe integration fixtures, SAPI 5, and PowerShell 7 (`pwsh`) for watchdog execution.
 
 ## Global Constraints
 
-- **Platform Target:** Windows 11 exclusively. Strict 64-bit compilation (`x64` locally; `ARM64` exemption documented below). 32-bit (`x86`) is strictly prohibited.
-- **ARM64 Dependency Exception:** The build environment lacks cross-compilation toolchains for ARM64 dependencies; targeted validation executes on x64 (Debug and Release).
-- **Zero Production Concurrency Changes:** No new threads, queues, locks, sleeps, condition variables, polling intervals, or timeouts.
-- **Lock Discipline:** `SpeechWorker` holds `m_requestMutex` continuously across input capture, policy evaluation, token validation, and result application.
-- **Permitted Production Lock Order:** Only `m_eventForwardMutex` followed by `m_requestMutex` is permitted; reverse acquisition is strictly forbidden.
-- **Zero Locked I/O or Callbacks:** No named pipe I/O, COM calls, or external callbacks may occur while holding `m_requestMutex` or `m_eventForwardMutex`.
-- **Pure Policy Contract:** `SpeechStatePolicy` functions accept immutable inputs, use no out-parameters, return owned typed decision structs, are `noexcept`, allocation-free, stateless, and bounded.
-- **Tool Discipline:** File inspection and modifications must use native MCP tools (`view_file`, `write_to_file`, `replace_file_content`). Shell commands (`cat`, `Set-Content`) are prohibited.
-- **Formatting:** Strict Allman bracing on all blocks across modified and new code. Zero trailing whitespace.
+- Risk tier is Tier 3 because concurrent lifecycle and SAPI/IPC coordination are touched.
+- Build only x64 locally. x86 is prohibited. The ARM64 exception record below applies to this phase.
+- Add no thread, queue, callback, mutex, condition variable, sleep, fixed delay, polling interval, timeout, allocation, IPC operation, COM call, or logging call.
+- Preserve the only nested production lock order: `m_eventForwardMutex` then `m_requestMutex`.
+- Hold `m_requestMutex` continuously across fact capture, policy evaluation, current-token validation, and decision application.
+- Preserve `ResetToIdleLocked()` as a partial lifecycle reset. Do not substitute `RequestContext::Reset()`.
+- Preserve debug-hook placement relative to state mutation, unlock, callback, and fault publication.
+- Keep Phase B event classification and Phase C PCM/write classification in `SpeechWorker`.
+- New policy code is `noexcept`, allocation-free, stateless, nonblocking, bounded O(1), and free of I/O, callbacks, logging, locks, waits, clock reads, and notifications.
+- C++ blocks use Allman braces. Headers are self-contained. `pch.h` remains first where the production PCH contract requires it.
+- Use targeted CoreEngine and CoreEngine.Tests builds only.
 
----
+## ARM64 Verification Exception
 
-## Baseline Evidence & Test Inventory
-
-### Pre-Change Baseline Metrics
-- **Configuration:** Debug|x64
-- **Test Executable:** `bin\CoreEngine.Tests\x64\Debug\CoreEngine.Tests.exe`
-- **Total Test Count:** 193 tests across 12 test cases.
-- **Pre-Change Suite Status:** 193 / 193 PASSED (Elapsed: ~15.1 seconds under 30-second watchdog).
-
-### Focused Test Filter
 ```text
---gtest_filter=SpeechStatePolicyTests.*:SpeechProtocolUtilsTests.RequestContext*:AudioTerminalBoundaryTests.*:CancellationTimeoutTests.*:SapiAbortTests.*:WriteRejectionCancellationTests.*:WorkerFaultTests.*:ProtocolFaultTests.*:SpeechEventTests.* --gtest_color=no
+Rule: BTW-01 and ModernSapiAdapter profile 10.1.1 (verify every supported architecture before integration).
+Scope: SpeechWorker Phase A request-state policy extraction.
+Risk tier: Tier 3.
+Reason for exception: The available environment does not contain the ARM64 dependency libraries/toolchain required to link CoreEngine.Tests; the repository owner explicitly directed agents not to attempt ARM64 builds in this environment.
+Risk introduced: A compile or linkage regression specific to ARM64 could remain undetected locally.
+Compensating safeguards: The extracted policy uses fixed-width standard integer types, no architecture intrinsics, no packing change, no ABI export, and no new dependency. Debug and Release x64 builds and complete test suites are mandatory. No ARM64 artifact is shipped from this evidence.
+Evidence reviewed: Existing project support matrix, unavailable ARM64 library state, x64 baseline, and the repository owner's prior explicit instruction.
+Approver: Andres Godoy, repository owner.
+Approval date: 2026-09-16.
+Status: Active for this phase only.
+Expiry or follow-up condition: Re-run the targeted CoreEngine and CoreEngine.Tests ARM64 build before producing or claiming an ARM64 release, or when the missing ARM64 dependencies become available.
 ```
 
-### Required Real-Pipe and Callback-Boundary Tests
-1. `SapiEngineTests.SpeakWaitsForSynthesisCompleteByteBoundary` (exercises real pipe, audio streaming, `OnAudioData`, `Write`).
-2. `SapiEngineTests.RealControlPipeBoundaryAndBookmarkEndToEnd` (exercises real control pipe, JSON parsing, `OnSpeechEvent`, `AddEvents`).
-3. `SapiEngineTests.OutputSiteAbortCancelsTheActiveRequest` (exercises real SAPI abort polling and prompt cancellation).
-4. `SapiEngineTests.AddEventsBlockingDoesNotDelayWorkerFaultPublication` (exercises lock hierarchy `m_eventForwardMutex` then `m_requestMutex` and fault isolation).
+## Files
 
-### 30-Second Watchdog Command
+- Create `CoreEngine/SpeechStatePolicy.h`.
+- Create `CoreEngine/SpeechStatePolicy.cpp`.
+- Create `CoreEngine.Tests/SpeechStatePolicyTests.cpp`.
+- Modify `CoreEngine/SpeechWorker.cpp`.
+- Modify `CoreEngine/SpeechWorker.h` only if obsolete private declarations can be removed after rewiring.
+- Modify `CoreEngine/CoreEngine.vcxproj`.
+- Modify `CoreEngine/CoreEngine.vcxproj.filters`.
+- Modify `CoreEngine.Tests/CoreEngine.Tests.vcxproj`.
+- Write evidence beneath `.agents/sdd/phase7a/`.
+
+## Exact Verification Setup
+
+Run every command from the implementation worktree root. Do not hard-code the planning worktree path.
+
+Launch the verification shell with `pwsh -NoLogo -NoProfile`. Every PowerShell block in this plan requires PowerShell 7 because the watchdog uses `ProcessStartInfo.ArgumentList`; Windows PowerShell 5.1 is unsupported for these commands.
+
 ```powershell
-$sw = [System.Diagnostics.Stopwatch]::StartNew()
-$p = Start-Process -FilePath "D:\Projects\ModernSapiAdapter\.worktrees\phase7a-speech-state-policy-design\bin\CoreEngine.Tests\x64\Debug\CoreEngine.Tests.exe" -ArgumentList "<FILTER>" -PassThru -NoNewWindow
-$exited = $p.WaitForExit(30000)
-$sw.Stop()
-if (-not $exited) { $p.Kill(); Write-Host "TIMEOUT" } else { Write-Host "ExitCode: $($p.ExitCode), ElapsedMs: $($sw.ElapsedMilliseconds)" }
+if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'Phase A verification requires PowerShell 7 (pwsh).' }
+$repoRoot = (Resolve-Path '.').Path
+$repoPrefix = [System.IO.Path]::GetFullPath($repoRoot).TrimEnd([char[]] @('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
+$msbuild = 'C:\Program Files\Microsoft Visual Studio\18\Professional\MSBuild\Current\Bin\MSBuild.exe'
+$debugExe = Join-Path $repoRoot 'bin\CoreEngine.Tests\x64\Debug\CoreEngine.Tests.exe'
+$releaseExe = Join-Path $repoRoot 'bin\CoreEngine.Tests\x64\Release\CoreEngine.Tests.exe'
+$evidence = Join-Path $repoRoot '.agents\sdd\phase7a'
+
+$focusedFilter = 'SpeechStatePolicyTests.*:SpeechProtocolUtilsTests.RequestContext_TransitionToCancellingPreservesCompletedUpstreamEnum:SapiEngineTests.SpeakWaitsForSynthesisCompleteByteBoundary:SapiEngineTests.TerminalBeforeOverrunAudioForwardsOnlyDeclaredFrames:SapiEngineTests.SynthesisCompleteWaitsForFinalSapiWriteToFinish:SapiEngineTests.OutputSiteAbortCancelsTheActiveRequest:SapiEngineTests.ValidSynthesisCancelledWhileSpeakingCompletesWithoutFault:SapiEngineTests.RejectedAudioWriteDrainsCancellationBeforeNextSpeak:SapiEngineTests.SynthesisCompleteWhileCancellingCompletesPromptly:SapiEngineTests.IgnoredCancellationTimesOutTheEntireTransaction:SapiEngineTests.AddEventsBlockingDoesNotDelayWorkerFaultPublication:SapiEngineTests.SilentActiveRequestTimesOutInsteadOfHoldingSapiForever:SapiEngineTests.StalledTerminalAudioDrainTimesOut:SapiEngineTests.InvalidCancellationBoundaryFaultsTheWorker:SapiEngineTests.MisalignedSynthesisCompleteTotalFaultsTheWorker:SapiEngineTests.DuplicateSynthesisCompleteTotalFaultsTheWorker:SapiEngineTests.TerminalEventDeclaringFewerBytesThanAlreadyReadFaultsTheWorker:SapiEngineTests.RequestErrorFailsUtteranceWithoutKillingProvider:SapiEngineTests.FaultPendingRejectsStartBeforeFaultPublicationCompletes:SapiEngineTests.AudioAfterNormalCompletionFaultsIdleWorker'
 ```
 
-### MockProvider Quiescence Verification
-Between test runs, any orphaned or lingering provider processes must be verified quiesced:
+Create `.agents/sdd/phase7a/` and record returned command output with the available native file tools. Do not use shell file-writing commands to create or populate evidence.
+
+Build commands:
+
 ```powershell
-Get-Process -Name "MockProvider" -ErrorAction SilentlyContinue | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue
+& $msbuild (Join-Path $repoRoot 'CoreEngine.Tests\CoreEngine.Tests.vcxproj') /t:Build /p:Configuration=Debug /p:Platform=x64 /m
+if ($LASTEXITCODE -ne 0) { throw "Debug x64 CoreEngine.Tests build failed: $LASTEXITCODE" }
+
+& $msbuild (Join-Path $repoRoot 'CoreEngine.Tests\CoreEngine.Tests.vcxproj') /t:Build /p:Configuration=Release /p:Platform=x64 /m
+if ($LASTEXITCODE -ne 0) { throw "Release x64 CoreEngine.Tests build failed: $LASTEXITCODE" }
 ```
 
-### Immutable Evidence Directory
-All characterization, red/green transcripts, watchdog runs, and final reports must be stored under:
-`.agents/sdd/phase7a/`
+Fail-closed watchdog and quiescence functions. The wrapper captures both streams in memory, emits a structured result for evidence, and executes provider quiescence in `finally` before propagating the test or cleanup failure:
 
----
+```powershell
+function Get-WorktreeMockProviders
+{
+    $ownedProviders = @()
+    foreach ($candidate in @(Get-Process -Name 'MockProvider' -ErrorAction SilentlyContinue))
+    {
+        try { $candidatePath = $candidate.Path }
+        catch { throw "Cannot inspect MockProvider PID $($candidate.Id): $($_.Exception.Message)" }
+        if (-not $candidatePath)
+        {
+            if ($candidate.HasExited) { continue }
+            throw "Cannot resolve executable path for MockProvider PID $($candidate.Id)."
+        }
+        if ([System.IO.Path]::GetFullPath($candidatePath).StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase))
+        {
+            $ownedProviders += $candidate
+        }
+    }
+    return $ownedProviders
+}
 
-## Task Breakdown
+function Assert-WorktreeMockProviderQuiesced
+{
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    do
+    {
+        $ownedProviders = @(Get-WorktreeMockProviders)
+        if ($ownedProviders.Count -eq 0) { return }
+        Start-Sleep -Milliseconds 50
+    }
+    while ([DateTime]::UtcNow -lt $deadline)
 
-### Task 1: Create `SpeechStatePolicy` Leaf Unit and Direct Test Suite
+    $ownedProviders = @(Get-WorktreeMockProviders)
+    if ($ownedProviders.Count -ne 0)
+    {
+        throw "Worktree-owned MockProvider processes failed to quiesce: $($ownedProviders.Id -join ', ')"
+    }
+}
 
-**Files:**
-- Create: `CoreEngine/SpeechStatePolicy.h`
-- Create: `CoreEngine/SpeechStatePolicy.cpp`
-- Create: `CoreEngine.Tests/SpeechStatePolicyTests.cpp`
-- Modify: `CoreEngine/CoreEngine.vcxproj`
-- Modify: `CoreEngine/CoreEngine.vcxproj.filters`
-- Modify: `CoreEngine.Tests/CoreEngine.Tests.vcxproj`
+function Invoke-WatchdogTest
+{
+    param(
+        [Parameter(Mandatory)] [string] $Executable,
+        [Parameter(Mandatory)] [string[]] $Arguments
+    )
 
-**Interfaces:**
-- Consumes: `SpeechWorkerTypes.h` (`RequestContext`, `RequestToken`, `UpstreamState`, `DownstreamState`), `SpeechProtocolUtils.h` (predicates).
-- Produces: Namespace `SpeechStatePolicy` with typed decisions:
-  - `StartDecision EvaluateStart(...)`
-  - `TerminalBoundaryDecision EvaluateTerminalBoundary(...)`
-  - `BeginCancellationDecision EvaluateBeginCancellation(...)`
-  - `StopDecision EvaluateStop(...)`
-  - `TerminalEventDecision EvaluateTerminalEvent(...)`
-  - `LogEventDecision EvaluateLogEvent(...)`
-  - `AudioIngestHeaderDecision EvaluateAudioIngestHeader(...)`
-  - `AudioDeliveryResultDecision EvaluateAudioDeliveryResult(...)`
-  - `TimeoutDecision EvaluateTimeouts(...)`
-  - `bool ShouldForwardEvent(...)`
-  - `bool IsAudioDeliveryEligible(...)`
-  - `bool IsWaitTerminal(...)`
+    $primaryFailure = $null
+    $cleanupFailure = $null
+    $timedOut = $false
+    $exitCode = $null
+    $stdOut = ''
+    $stdErr = ''
+    try
+    {
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $Executable
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        foreach ($argument in $Arguments)
+        {
+            [void] $startInfo.ArgumentList.Add($argument)
+        }
 
-- [ ] **Step 1: Write `SpeechStatePolicy.h`**
-  Declare pure types and functions under `namespace SpeechStatePolicy` as specified in `.agents/specs/2026-09-16-speechworker-phase-a-request-policy-design.md`.
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) { throw "Failed to start $Executable" }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $timedOut = -not $process.WaitForExit(30000)
+        if ($timedOut)
+        {
+            $process.Kill()
+        }
+        $process.WaitForExit()
 
-- [ ] **Step 2: Write failing tests in `CoreEngine.Tests/SpeechStatePolicyTests.cpp`**
-  Cover every policy function:
-  - `EvaluateStart`: Idle vs Active vs Faulted vs FaultPending.
-  - `EvaluateTerminalBoundary`: Normal completion, audio overrun, carry buffer check, cancelling drain, utterance error reset.
-  - `EvaluateBeginCancellation`: Speaking to Cancelling, Already Idle, Already Cancelling, Faulted.
-  - `EvaluateStop`: Speaking/Cancelling to ResetAndCancel, Idle to NoAction.
-  - `EvaluateTerminalEvent`: Duplicate terminal fault, invalid bytes fault, misaligned bytes fault, valid completion, valid cancelled.
-  - `EvaluateLogEvent`: Fatal vs Error vs Info/Warn.
-  - `EvaluateAudioIngestHeader`: Speaking with/without terminal declared remaining, Cancelling, Idle unexpected audio, Faulted.
-  - `EvaluateAudioDeliveryResult`: Token match/mismatch, write accepted vs rejected, cancelling drain.
-  - `EvaluateTimeouts`: Inactivity timeout, cancellation timeout, none.
-  - Query predicates: `ShouldForwardEvent`, `IsAudioDeliveryEligible`, `IsWaitTerminal`.
+        $exitCode = $process.ExitCode
+        $stdOut = $stdoutTask.GetAwaiter().GetResult()
+        $stdErr = $stderrTask.GetAwaiter().GetResult()
 
-- [ ] **Step 3: Register files in project files**
-  Add `SpeechStatePolicy.h` and `SpeechStatePolicy.cpp` to `CoreEngine.vcxproj` and `CoreEngine.vcxproj.filters`. Add `SpeechStatePolicyTests.cpp` to `CoreEngine.Tests.vcxproj`.
+        if ($timedOut)
+        {
+            $primaryFailure = "TIMEOUT after 30000 ms: $Executable $($Arguments -join ' ')"
+        }
+        elseif ($process.ExitCode -ne 0)
+        {
+            $primaryFailure = "Test failure $($process.ExitCode): $Executable $($Arguments -join ' ')"
+        }
+    }
+    catch
+    {
+        $primaryFailure = $_.Exception.Message
+    }
+    finally
+    {
+        try { Assert-WorktreeMockProviderQuiesced }
+        catch { $cleanupFailure = $_.Exception.Message }
+    }
 
-- [ ] **Step 4: Build and capture red transcript**
-  Target MSBuild on `CoreEngine.Tests.vcxproj` (unresolved external symbols expected before implementation). Record in `.agents/sdd/phase7a/red-transcript.txt`.
+    [pscustomobject]@{
+        Executable = $Executable
+        Arguments = $Arguments
+        TimedOut = $timedOut
+        ExitCode = $exitCode
+        StdOut = $stdOut
+        StdErr = $stdErr
+        Quiesced = -not [bool] $cleanupFailure
+        QuiescenceError = $cleanupFailure
+    }
 
-- [ ] **Step 5: Implement `SpeechStatePolicy.cpp`**
-  Implement all functions with strict Allman formatting, `noexcept`, zero heap allocations, zero locks.
+    if ($primaryFailure -and $cleanupFailure)
+    {
+        throw "$primaryFailure; quiescence failure: $cleanupFailure"
+    }
+    if ($primaryFailure) { throw $primaryFailure }
+    if ($cleanupFailure) { throw $cleanupFailure }
+}
+```
 
-- [ ] **Step 6: Build and run `SpeechStatePolicyTests.*`**
-  Verify all new unit tests pass under the 30-second watchdog. Record green transcript in `.agents/sdd/phase7a/task1-green-transcript.txt`.
+Selected-test count gate after the new tests exist:
 
----
+```powershell
+$listOutput = & $debugExe "--gtest_filter=$focusedFilter" --gtest_list_tests
+if ($LASTEXITCODE -ne 0) { throw 'GoogleTest listing failed.' }
+$selectedCount = @($listOutput | Where-Object { $_ -match '^\s{2}\S' }).Count
+if ($selectedCount -ne 53) { throw "Focused filter selected $selectedCount tests; expected 53." }
+$listOutput
+```
 
-### Task 2: Rewire `SpeechWorker` to Delegate State Decisions to `SpeechStatePolicy`
+`Invoke-WatchdogTest` performs the quiescence gate on success, test failure, startup failure, and timeout. `Assert-WorktreeMockProviderQuiesced` may also be invoked directly before the first test run. Copy each returned structured result into the named evidence file using native file tools; do not add shell redirection or shell file-writing commands.
 
-**Files:**
-- Modify: `CoreEngine/SpeechWorker.h`
-- Modify: `CoreEngine/SpeechWorker.cpp`
+## Required New Unit Tests
 
-**Interfaces:**
-- Consumes: `SpeechStatePolicy` functions and decision types.
-- Produces: Behaviorally identical `SpeechWorker` with reduced internal decision branching and formal locked policy boundaries.
+Create these exact tests in suite `SpeechStatePolicyTests`:
 
-- [ ] **Step 1: Rewire `SpeechWorker::Start`**
-  Capture `m_context` under `m_requestMutex`. Call `SpeechStatePolicy::EvaluateStart(m_context, speakId, m_generationCounter + 1)`. If accepted, apply mutations, increment `m_generationCounter`, reset assembler, and update progress tick.
+1. `StartAcceptsOnlyQuiescentNonFaultPendingState`
+2. `StartDecisionOwnsAcceptedIdentityWithoutMutatingInput`
+3. `UpstreamCompleteAppliesValidatedTerminalFact`
+4. `UpstreamCancelledAppliesValidatedTerminalFact`
+5. `DuplicateUpstreamTerminalRequestsTwoStageFaultPath`
+6. `InvalidUpstreamTerminalBytesRequestFault`
+7. `MisalignedUpstreamTerminalBytesRequestFault`
+8. `DuplicateMalformedTerminalKeepsDuplicateFirstPrecedence`
+9. `UtteranceFailureCapturesCurrentRawByteBoundary`
+10. `FailedUpstreamTakesBoundaryPrecedence`
+11. `UnfinishedUpstreamContinuesDespiteRetainedCompletedEnum`
+12. `UnfinishedUpstreamContinuesDespiteRetainedCancelledEnum`
+13. `SpeakingReachedResetsOnlySpeakingLifecycle`
+14. `CancellationReachedResetsOnlyCancellingLifecycle`
+15. `SpeakingOverrunRequestsFault`
+16. `IrrelevantBoundaryFactsAreIgnoredForCurrentState`
+17. `CancellationFromActiveSpeakingTransitions`
+18. `CancellationFromCompletedSpeakingRetainsCompletedEnumContract`
+19. `CancellationFromCancelledSpeakingRetainsCancelledEnumContract`
+20. `CancellationAlreadyIdleMapsToAlreadyIdle`
+21. `CancellationAlreadyDrainingMapsToAlreadyCancelling`
+22. `CancellationFaultedMapsToFaulted`
+23. `StopActiveRequestCapturesSpeakId`
+24. `StopIdleDoesNothing`
+25. `StopFaultedDoesNothing`
+26. `CancellationTimeoutPrecedesInactivityTimeout`
+27. `CancellationDeadlineRequiresNonzeroExpiredTick`
+28. `ExpiredRetainedCancellationDeadlineWhileIdleDoesNotTimeout`
+29. `ActiveSynthesisInactivityExpires`
+30. `TerminalAudioInactivityExpires`
+31. `ClockRegressionDoesNotExpireInactivity`
+32. `NoEligibleTimeoutReturnsNone`
+33. `WaitTerminalRecognizesIdleFaultAndExit`
+34. `PolicyDecisionsDoNotMutateInputContext`
 
-- [ ] **Step 2: Rewire `SpeechWorker::Stop`**
-  Call `SpeechStatePolicy::EvaluateStop(m_context)`. If `ResetAndCancel`, apply reset to idle, reset assembler, notify `m_requestChanged`, unlock, and call `SendCancellation`.
+Tests compare every decision field and use copied `RequestContext` values to prove policy evaluation does not mutate caller state. They do not construct pipes, invoke COM, sleep, or allocate production test hooks.
 
-- [ ] **Step 3: Rewire `SpeechWorker::BeginCancellationLocked`**
-  Call `SpeechStatePolicy::EvaluateBeginCancellation(m_context, cancellationDeadline)`. Apply state transition and assembler reset based on decision struct.
+## Task 1: Characterize Residual Lifecycle State Before Extraction
 
-- [ ] **Step 4: Rewire `SpeechWorker::CheckTerminalBoundaryLocked`**
-  Call `SpeechStatePolicy::EvaluateTerminalBoundary(m_context, m_frameAssembler.HasCarry())`. Apply `ResetToIdleLocked()` or return overrun protocol fault.
+**Files:** modify `CoreEngine.Tests/RequestContextTests.cpp` for direct state characterization and only the cohesive existing SapiEngine test file if an integration assertion is missing. Do not add a production test hook or create a miscellaneous test bucket.
 
-- [ ] **Step 5: Rewire `SpeechWorker::HandleTerminalEventLocked`**
-  Call `SpeechStatePolicy::EvaluateTerminalEvent(m_context, eventType, terminalAudioBytes, hasValidTerminalBytes, m_frameAssembler.BlockAlign())`. On fault, call `TransitionRequestToFaultedLocked()`. On success, apply terminal fields and evaluate terminal boundary.
+- [ ] Add `SpeechProtocolUtilsTests.RequestContext_TransitionToCancellingPreservesCompletedUpstreamEnum`: initialize Completed/Speaking with `upstreamFinished=true`, terminal bytes, token, counters, and completion result; call `TransitionToCancelling`; assert only the documented cancellation fields change and the Completed enum, token, counters, and completion result remain intact.
+- [ ] Keep `SapiEngineTests.RequestErrorFailsUtteranceWithoutKillingProvider` as the end-to-end proof that a request-scoped error survives lifecycle reset long enough for the waiter to observe failure.
+- [ ] Keep `SapiEngineTests.ValidSynthesisCancelledWhileSpeakingCompletesWithoutFault` unchanged as explicit characterization of the protocol-unexpected but currently supported state.
+- [ ] Build Debug x64 with the exact command above.
+- [ ] Run only the new characterization tests under `Invoke-WatchdogTest`; record output in `.agents/sdd/phase7a/task1-characterization`.
+- [ ] Request an independent per-task review and commit the characterization tests separately.
 
-- [ ] **Step 6: Rewire `SpeechWorker::HandleLogEventLocked`**
-  Call `SpeechStatePolicy::EvaluateLogEvent(logSeverity)`. On fatal, return fault. On error, apply failure fields and evaluate terminal boundary.
+## Task 2: Add the Pure Policy with TDD
 
-- [ ] **Step 7: Rewire `SpeechWorker::IngestAudioChunkLocked`**
-  Call `SpeechStatePolicy::EvaluateAudioIngestHeader(m_context, bytesRead)`. Apply progress tick, framing, assembler call, and empty span boundary checks.
+**Files:** create the three policy/test files and update project metadata.
 
-- [ ] **Step 8: Rewire `SpeechWorker::UpdateAfterAudioDeliveryLocked`**
-  Call `SpeechStatePolicy::EvaluateAudioDeliveryResult(m_context, batchToken, writeAccepted, cancellationDeadline)`. Apply delivered bytes, write rejection cancellation transition, or boundary checks.
+- [ ] Write `SpeechStatePolicy.h` exactly as specified in the approved design.
+- [ ] Write all 34 tests listed above before implementation.
+- [ ] Add `SpeechStatePolicyTests.cpp` to `CoreEngine.Tests.vcxproj`, build Debug x64, and capture the expected unresolved `SpeechStatePolicy` linker failures in `.agents/sdd/phase7a/task2-red.txt`. A compile failure caused by a malformed test is not an acceptable red state.
+- [ ] Implement `SpeechStatePolicy.cpp` with `pch.h` first. Do not include `SpeechProtocolUtils.h`.
+- [ ] Add `SpeechStatePolicy.cpp` and `.h` to `CoreEngine.vcxproj` and `.filters`.
+- [ ] Add `..\CoreEngine\SpeechStatePolicy.cpp` to `CoreEngine.Tests.vcxproj` with `<PrecompiledHeader>NotUsing</PrecompiledHeader>` and the same `ProgramDataBaseFileName` convention as the other directly compiled production units.
+- [ ] Build Debug x64 and execute `SpeechStatePolicyTests.*` under `Invoke-WatchdogTest`; capture `.agents/sdd/phase7a/task2-green`.
+- [ ] Run the selected-test count gate and require exactly 53 tests.
+- [ ] Request independent specification and code-quality reviews, fix every P0/P1 issue, and commit Task 2.
 
-- [ ] **Step 9: Rewire query helpers**
-  Update `ShouldForwardEventLocked`, `IsAudioDeliveryEligibleLocked`, and `IsWaitTerminalLocked` to delegate to `SpeechStatePolicy`.
+## Task 3: Rewire Request Admission, Stop, and Cancellation
 
-- [ ] **Step 10: Build and run focused test filter**
-  Build `CoreEngine.Tests.vcxproj` in Debug|x64 and run the focused test filter under the 30-second watchdog. Record green transcript in `.agents/sdd/phase7a/task2-green-transcript.txt`.
+**Files:** modify `SpeechWorker.cpp`; modify `SpeechWorker.h` only to remove obsolete declarations.
 
----
+- [ ] Rewire `Start` through `EvaluateStart`, preserving the full reset, generation increment, assembler reset, progress clock store, and return value under one lock hold.
+- [ ] Rewire `Stop` through `EvaluateStop`, preserving partial Idle reset, notification, unlock-before-IPC, one cancellation send, and ignored send result.
+- [ ] Rewire `BeginCancellationLocked` through `EvaluateBeginCancellation`, preserving HRESULT mapping, retained upstream enum, assembler reset, debug trace placement, and caller-provided deadline.
+- [ ] In `UpdateAfterAudioDeliveryLocked`, leave token validation, delivered-byte credit, and write-result classification in place; only call the cancellation lifecycle policy after existing code has classified a rejected write. After the audio loop unlocks, send exactly once with a fresh full `CancellationTimeoutMs`; do not call `FinishCancellation` or wait synchronously on the audio worker.
+- [ ] Build Debug x64 and run the 53-test focused filter under the watchdog.
+- [ ] Confirm the watchdog result includes successful quiescence, request independent concurrency and code-quality reviews, resolve findings, and commit Task 3.
 
-### Task 3: Whole-Branch Hardening, Quiescence, and Evidence Packaging
+## Task 4: Rewire Terminal, Failure, Boundary, and Timeout Lifecycle
 
-**Files:**
-- Output: `.agents/sdd/phase7a/characterization.txt`
-- Output: `.agents/sdd/phase7a/full-debug-suite-watchdog.txt`
-- Output: `.agents/sdd/phase7a/full-release-suite-watchdog.txt`
-- Output: `.agents/sdd/phase7a/git-diff-check.txt`
-- Output: `.agents/sdd/phase7a/report.md`
+**Files:** modify `SpeechWorker.cpp`; remove only helpers made genuinely obsolete.
 
-- [ ] **Step 1: Execute 10 consecutive runs of the focused test filter**
-  Run all focused tests 10 consecutive times under 30-second watchdogs in Debug|x64. Verify 100% pass rate with zero flakes or hangs.
+- [ ] In `HandleTerminalEventLocked`, retain event category classification plus terminal-byte presence/alignment computation. Pass all facts to `EvaluateUpstreamTerminal`, which selects duplicate before invalid or misaligned. Emit the matching existing diagnostic and apply its lifecycle decision; do not reject malformed facts before the policy preserves duplicate-first precedence.
+- [ ] Preserve the duplicate/invalid terminal two-stage fault transition and notification sequence. The direct `DuplicateMalformedTerminalKeepsDuplicateFirstPrecedence` policy regression and existing integration fault tests must remain green.
+- [ ] In `HandleLogEventLocked`, retain severity classification and logging. Invoke `EvaluateUtteranceFailure` only after existing code classifies severity `error`.
+- [ ] In `CheckTerminalBoundaryLocked`, compute `TerminalBoundaryFacts` using the current byte/carry helpers, then call `EvaluateTerminalBoundary`. Keep all arithmetic in `SpeechWorker` for Phase C.
+- [ ] In `WaitUntilFinished`, load one `now` and one progress tick per iteration, call `EvaluateTimeouts`, preserve cancellation-before-inactivity precedence, unlock before logging/fault publication, and preserve `HRESULT_FROM_WIN32(ERROR_TIMEOUT)`.
+- [ ] Delegate `IsWaitTerminalLocked` to `IsWaitTerminal`; leave the condition-variable wait and SAPI `GetActions` outside policy.
+- [ ] Build Debug x64, assert the 53-test focused selection, and run the focused filter through the watchdog/quiescence wrapper.
+- [ ] Request independent concurrency/state and specification/code-quality reviews, resolve findings, and commit Task 4.
 
-- [ ] **Step 2: Full Debug|x64 Test Suite Execution**
-  Run complete suite under 30-second watchdog. Verify total test count equals baseline plus new tests (193 baseline + new unit tests). Ensure clean exit code 0.
+## Task 5: Whole-Branch Verification and Evidence
 
-- [ ] **Step 3: Full Release|x64 Build and Test Suite Execution**
-  Build `CoreEngine.Tests.vcxproj` in Release|x64. Run complete suite under 30-second watchdog. Ensure clean exit code 0.
+- [ ] Run the 53-test focused filter 10 consecutive times in Debug x64. Each iteration uses `Invoke-WatchdogTest`, whose `finally` block enforces provider quiescence. Any retry after failure is evidence of a failure, not a pass.
+- [ ] Build Debug x64 and run the complete suite:
 
-- [ ] **Step 4: Verify MockProvider Quiescence**
-  Confirm zero orphaned `MockProvider.exe` processes exist between and after runs.
+```powershell
+Invoke-WatchdogTest -Executable $debugExe -Arguments @('--gtest_color=no')
+```
 
-- [ ] **Step 5: Verify formatting and git diff hygiene**
-  Run `git diff --check` across the branch against `main`. Ensure zero whitespace errors or formatting issues.
+- [ ] Build Release x64 and run the complete suite:
 
-- [ ] **Step 6: Author SDD completion report**
-  Compile `.agents/sdd/phase7a/report.md` summarizing changes, test metrics, timings, and evidence files.
+```powershell
+Invoke-WatchdogTest -Executable $releaseExe -Arguments @('--gtest_color=no')
+```
 
----
+- [ ] Confirm every watchdog result includes successful quiescence; invoke `Assert-WorktreeMockProviderQuiesced` directly before the first run and after any non-watchdog diagnostic process.
+- [ ] Run `git diff --check` against the implementation branch base and require zero diagnostics.
+- [ ] Record exact test counts, elapsed times, build configuration/toolchain, all review findings and resolutions, and the active ARM64 exception in `.agents/sdd/phase7a/report.md`.
+- [ ] Request two fresh final reviewers: concurrency/state/lock ordering and contract/test execution. Do not reuse either original approval because those reviews are superseded.
+- [ ] Return the implementation branch to Codex for mandatory whole-branch review. Do not merge, push, clean the worktree, or begin Phase B.
 
-## Review and Gate Requirements
+## Pre-Code Gate
 
-Before implementation can begin:
-1. Two independent Gemini Pro subagents must review the Phase A package:
-   - **Reviewer 1:** Concurrency, state transitions, and lock-ordering invariants.
-   - **Reviewer 2:** Contract completeness and test coverage.
-2. Raw review verdicts must be captured and any identified defects resolved.
-3. The audit, specification, plan, and raw reviews must be submitted to Codex for the mandatory pre-code contract gate.
+Implementation begins only after fresh readers confirm:
+
+1. Phase A contains lifecycle decisions only.
+2. The observed state matrix matches retained fields and reachable cancellation states.
+3. Callback-blocked destruction is documented as unbounded baseline debt.
+4. The test project links `SpeechStatePolicy.cpp` directly.
+5. The focused filter selects exactly the intended 53 tests.
+6. Build, watchdog, timeout-failure, and quiescence commands are executable and fail closed.
+7. The ARM64 exception record is accepted for this phase.
