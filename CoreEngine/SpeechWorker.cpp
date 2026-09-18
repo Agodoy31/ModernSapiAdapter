@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "SpeechWorker.h"
 #include "SpeechWorkerTypes.h"
+#include "SpeechStatePolicy.h"
 #include "SpeechProtocolUtils.h"
 #include "SapiEngine.h"
 #include "JsonValue.h"
@@ -102,16 +103,16 @@ SpeechWorker::~SpeechWorker()
 bool SpeechWorker::Start(uint64_t speakId)
 {
     std::lock_guard<std::mutex> lock(m_requestMutex);
-    if (m_context.upstreamState != UpstreamState::Idle ||
-        m_context.downstreamState != DownstreamState::Idle ||
-        m_context.faultPending)
+    const auto decision = SpeechStatePolicy::EvaluateStart(m_context, speakId, m_generationCounter + 1);
+    if (decision.action != SpeechStatePolicy::StartAction::Accept)
     {
         return false;
     }
 
     m_context.Reset();
-    m_context.token.speakId = speakId;
-    m_context.token.generation = ++m_generationCounter;
+    m_generationCounter = decision.generation;
+    m_context.token.speakId = decision.speakId;
+    m_context.token.generation = decision.generation;
     m_frameAssembler.Reset();
     m_lastProviderProgressTick.store(GetTickCount64(), std::memory_order_release);
     m_context.upstreamState = UpstreamState::Active;
@@ -251,22 +252,14 @@ void SpeechWorker::Stop()
     uint64_t speakId = 0;
     {
         std::lock_guard<std::mutex> lock(m_requestMutex);
-        if (m_context.downstreamState == DownstreamState::Idle)
+        const auto decision = SpeechStatePolicy::EvaluateStop(m_context);
+        if (decision.action == SpeechStatePolicy::StopAction::NoAction)
         {
             return;
         }
 
-        if (m_context.downstreamState == DownstreamState::Faulted ||
-            m_context.upstreamState == UpstreamState::Faulted)
-        {
-            return;
-        }
-
-        speakId = m_context.token.speakId;
-        m_frameAssembler.Reset();
-        m_context.upstreamState = UpstreamState::Idle;
-        m_context.downstreamState = DownstreamState::Idle;
-        m_requestChanged.notify_all();
+        speakId = decision.speakId;
+        ResetToIdleLocked();
     }
 
     SendCancellation(speakId, CancellationTimeoutMs);
@@ -301,31 +294,27 @@ HRESULT SpeechWorker::BeginCancellationLocked(ULONGLONG cancellationDeadline,
                                               ULONGLONG cancellationEntryTick,
                                               uint64_t& speakId)
 {
-    if (m_context.downstreamState == DownstreamState::Idle)
+    const auto decision = SpeechStatePolicy::EvaluateBeginCancellation(m_context, cancellationDeadline);
+    switch (decision.action)
     {
+    case SpeechStatePolicy::BeginCancellationAction::AlreadyIdle:
         return S_FALSE;
-    }
-
-    if (m_context.downstreamState == DownstreamState::Faulted ||
-        m_context.upstreamState == UpstreamState::Faulted)
-    {
-        return E_FAIL;
-    }
-
-    if (m_context.IsDrainingCancellation())
-    {
+    case SpeechStatePolicy::BeginCancellationAction::AlreadyCancelling:
         return E_UNEXPECTED;
-    }
-
-    speakId = m_context.token.speakId;
-    m_context.TransitionToCancelling(cancellationDeadline);
-    m_frameAssembler.Reset();
+    case SpeechStatePolicy::BeginCancellationAction::Faulted:
+        return E_FAIL;
+    case SpeechStatePolicy::BeginCancellationAction::TransitionToCancelling:
+        speakId = decision.speakId;
+        m_context.TransitionToCancelling(decision.deadlineTick);
+        m_frameAssembler.Reset();
 #if defined(_DEBUG)
-    CoreLog(L"[CancelTrace] speak_id=%llu cancelling_published tick=%llu entry_to_publish_ms=%llu raw=%llu delivered=%llu.",
-        speakId, GetTickCount64(), GetTickCount64() - cancellationEntryTick,
-        m_context.rawAudioBytesRead, m_context.deliveredAudioBytes);
+        CoreLog(L"[CancelTrace] speak_id=%llu cancelling_published tick=%llu entry_to_publish_ms=%llu raw=%llu delivered=%llu.",
+            speakId, GetTickCount64(), GetTickCount64() - cancellationEntryTick,
+            m_context.rawAudioBytesRead, m_context.deliveredAudioBytes);
 #endif
-    return S_OK;
+        return S_OK;
+    }
+    return E_FAIL;
 }
 
 HRESULT SpeechWorker::FinishCancellation(uint64_t speakId,
@@ -854,9 +843,14 @@ bool SpeechWorker::UpdateAfterAudioDeliveryLocked(
         if (!writeAccepted)
         {
             CoreLog(L"[SpeechWorker] SAPI rejected an audio write; cancelling active synthesis.");
-            outCancellationToSend = m_context.token.speakId;
-            m_context.TransitionToCancelling(GetTickCount64() + CancellationTimeoutMs);
-            m_frameAssembler.Reset();
+            const auto decision = SpeechStatePolicy::EvaluateBeginCancellation(
+                m_context, GetTickCount64() + CancellationTimeoutMs);
+            if (decision.action == SpeechStatePolicy::BeginCancellationAction::TransitionToCancelling)
+            {
+                outCancellationToSend = decision.speakId;
+                m_context.TransitionToCancelling(decision.deadlineTick);
+                m_frameAssembler.Reset();
+            }
         }
         else
         {
