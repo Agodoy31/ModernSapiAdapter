@@ -800,8 +800,18 @@ TEST_F(ControlEventPolicyTests, PolicyEvaluationDoesNotMutateInputs)
     const FinalAdmission adm = EvaluateFinalAdmission(ev, ctx);
     EXPECT_EQ(adm, FinalAdmission::Allow);
 
-    // Verify context bitwise unchanged
-    EXPECT_EQ(std::memcmp(&ctx, &ctxSnapshot, sizeof(RequestContext)), 0);
+    // Verify context fields unchanged (avoiding memcmp over struct padding)
+    EXPECT_EQ(ctx.token.speakId, ctxSnapshot.token.speakId);
+    EXPECT_EQ(ctx.token.generation, ctxSnapshot.token.generation);
+    EXPECT_EQ(ctx.upstreamState, ctxSnapshot.upstreamState);
+    EXPECT_EQ(ctx.downstreamState, ctxSnapshot.downstreamState);
+    EXPECT_EQ(ctx.rawAudioBytesRead, ctxSnapshot.rawAudioBytesRead);
+    EXPECT_EQ(ctx.deliveredAudioBytes, ctxSnapshot.deliveredAudioBytes);
+    EXPECT_EQ(ctx.upstreamTerminalBytes, ctxSnapshot.upstreamTerminalBytes);
+    EXPECT_EQ(ctx.upstreamFinished, ctxSnapshot.upstreamFinished);
+    EXPECT_EQ(ctx.faultPending, ctxSnapshot.faultPending);
+    EXPECT_EQ(ctx.cancellationDeadlineTick, ctxSnapshot.cancellationDeadlineTick);
+    EXPECT_EQ(ctx.completionHr, ctxSnapshot.completionHr);
 
     // Verify event fields unchanged
     EXPECT_EQ(ev.type, evSnapshot.type);
