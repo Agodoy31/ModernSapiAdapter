@@ -3,6 +3,7 @@
 #include "SpeechWorkerTypes.h"
 #include "SpeechStatePolicy.h"
 #include "ControlEventPolicy.h"
+#include "PcmDeliveryPolicy.h"
 #include "SpeechProtocolUtils.h"
 #include "SapiEngine.h"
 #include "JsonValue.h"
@@ -605,24 +606,6 @@ HRESULT SpeechWorker::WaitUntilFinished(ISpTTSEngineSite* pOutputSite)
     return m_context.completionHr;
 }
 
-bool SpeechWorker::HasSpeakingAudioOverrunLocked() const noexcept
-{
-    return m_context.rawAudioBytesRead > m_context.upstreamTerminalBytes ||
-           m_context.deliveredAudioBytes > m_context.upstreamTerminalBytes;
-}
-
-bool SpeechWorker::IsSpeakingTerminalReachedLocked() const noexcept
-{
-    return m_context.rawAudioBytesRead == m_context.upstreamTerminalBytes &&
-           m_context.deliveredAudioBytes == m_context.upstreamTerminalBytes &&
-           !m_frameAssembler.HasCarry();
-}
-
-bool SpeechWorker::IsCancellingTerminalReachedLocked() const noexcept
-{
-    return m_context.rawAudioBytesRead >= m_context.upstreamTerminalBytes;
-}
-
 bool SpeechWorker::IsWaitTerminalLocked() const noexcept
 {
     return SpeechStatePolicy::IsWaitTerminal(m_context, m_exit.load());
@@ -646,10 +629,13 @@ void SpeechWorker::ResetToIdleLocked() noexcept
 
 bool SpeechWorker::CheckTerminalBoundaryLocked()
 {
-    SpeechStatePolicy::TerminalBoundaryFacts facts{};
-    facts.speakingAudioOverrun = HasSpeakingAudioOverrunLocked();
-    facts.speakingTerminalReached = IsSpeakingTerminalReachedLocked();
-    facts.cancellationTerminalReached = IsCancellingTerminalReachedLocked();
+    const auto pcmFacts = PcmDeliveryPolicy::EvaluateTerminalBoundaryFacts(
+        m_context, m_frameAssembler.HasCarry());
+    const SpeechStatePolicy::TerminalBoundaryFacts facts{
+        pcmFacts.speakingAudioOverrun,
+        pcmFacts.speakingTerminalReached,
+        pcmFacts.cancellationTerminalReached
+    };
 
     const auto decision = SpeechStatePolicy::EvaluateTerminalBoundary(m_context, facts);
     switch (decision.action)
@@ -699,24 +685,26 @@ SpeechWorker::AudioIngestResult SpeechWorker::IngestAudioChunkLocked(const uint8
     AudioIngestResult result{};
     result.token = m_context.token;
 
-    if (m_context.downstreamState == DownstreamState::Speaking || m_context.IsDrainingCancellation())
+    const auto decision = PcmDeliveryPolicy::EvaluateChunkIngest(m_context, bytesRead);
+
+    if (decision.refreshProgress)
     {
         m_lastProviderProgressTick.store(GetTickCount64(), std::memory_order_release);
     }
 
-    switch (m_context.downstreamState)
+#if defined(_DEBUG)
+    const uint64_t rawBeforeRead = m_context.rawAudioBytesRead;
+#endif
+
+    if (decision.countRawBytes)
     {
-    case DownstreamState::Speaking:
-    {
-        size_t bytesToFrame = bytesRead;
-        if (m_context.upstreamFinished)
-        {
-            const uint64_t remainingDeclaredBytes = m_context.upstreamTerminalBytes > m_context.rawAudioBytesRead
-                ? m_context.upstreamTerminalBytes - m_context.rawAudioBytesRead
-                : 0;
-            bytesToFrame = static_cast<size_t>((std::min)(static_cast<uint64_t>(bytesRead), remainingDeclaredBytes));
-        }
         m_context.rawAudioBytesRead += bytesRead;
+    }
+
+    switch (decision.action)
+    {
+    case PcmDeliveryPolicy::ChunkAction::AssembleSpeakingAudio:
+    {
 #if defined(_DEBUG)
         if (m_testHooks.failNextFrameAssembly)
         {
@@ -724,7 +712,7 @@ SpeechWorker::AudioIngestResult SpeechWorker::IngestAudioChunkLocked(const uint8
             throw std::bad_alloc();
         }
 #endif
-        result.spansToWrite = m_frameAssembler.Process(pChunkData, bytesToFrame);
+        result.spansToWrite = m_frameAssembler.Process(pChunkData, decision.bytesToFrame);
         if (result.spansToWrite.empty())
         {
             result.protocolBoundaryFailed = CheckTerminalBoundaryLocked();
@@ -736,12 +724,8 @@ SpeechWorker::AudioIngestResult SpeechWorker::IngestAudioChunkLocked(const uint8
         break;
     }
 
-    case DownstreamState::Cancelling:
+    case PcmDeliveryPolicy::ChunkAction::DrainCancellationAudio:
     {
-#if defined(_DEBUG)
-        const uint64_t rawBeforeRead = m_context.rawAudioBytesRead;
-#endif
-        m_context.rawAudioBytesRead += bytesRead;
 #if defined(_DEBUG)
         if (m_context.upstreamFinished)
         {
@@ -754,14 +738,14 @@ SpeechWorker::AudioIngestResult SpeechWorker::IngestAudioChunkLocked(const uint8
         break;
     }
 
-    case DownstreamState::Idle:
+    case PcmDeliveryPolicy::ChunkAction::FaultUnexpectedIdleAudio:
     {
         CoreLog(L"[SpeechWorker] Provider sent audio after the active request reached its terminal boundary.");
         result.protocolBoundaryFailed = true;
         break;
     }
 
-    case DownstreamState::Faulted:
+    case PcmDeliveryPolicy::ChunkAction::DrainFaultedSessionAudio:
     {
         // Continue draining provider PCM so its audio pipe cannot fill, but never call SAPI.
         break;
@@ -947,8 +931,9 @@ bool SpeechWorker::HandleTerminalEventLocked(
     bool hasValidTerminalBytes,
     std::string_view eventStr)
 {
-    const bool isFrameAligned = (m_frameAssembler.BlockAlign() != 0) &&
-        (terminalAudioBytes % m_frameAssembler.BlockAlign() == 0);
+    const bool isFrameAligned = PcmDeliveryPolicy::IsTerminalByteCountFrameAligned(
+        terminalAudioBytes,
+        static_cast<uint16_t>(m_frameAssembler.BlockAlign()));
     const auto kind = (eventType == ProviderEventType::SynthesisComplete)
         ? SpeechStatePolicy::UpstreamTerminalKind::Completed
         : SpeechStatePolicy::UpstreamTerminalKind::Cancelled;
