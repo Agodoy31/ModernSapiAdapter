@@ -166,7 +166,6 @@ private:
     bool CheckTerminalBoundaryLocked();
 
     [[nodiscard]] bool IsWaitTerminalLocked() const noexcept;
-    [[nodiscard]] bool IsAudioDeliveryEligibleLocked(const RequestToken& token) const noexcept;
     /**
      * @brief Mutates active request state to Faulted and notifies waiters while locked.
      * @pre m_requestMutex must be held by caller.

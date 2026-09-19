@@ -768,47 +768,46 @@ bool SpeechWorker::UpdateAfterAudioDeliveryLocked(
 {
     outCancellationToSend = 0;
 
-    if (!m_context.token.Matches(batchToken))
+    const auto decision = PcmDeliveryPolicy::EvaluateBatchOutcome(
+        m_context, batchToken, deliveredBytes, !writeAccepted);
+
+    if (decision.acceptedBytesToCredit > 0)
     {
-        // Stale audio batch delivered from a cancelled/previous request; ignore safely without mutating new request state.
-        return false;
+        m_context.deliveredAudioBytes += decision.acceptedBytesToCredit;
     }
 
     bool protocolBoundaryFailed = false;
 
-    switch (m_context.downstreamState)
+    switch (decision.action)
     {
-    case DownstreamState::Speaking:
+    case PcmDeliveryPolicy::BatchAction::IgnoreStaleOrInactive:
     {
-        m_context.deliveredAudioBytes += deliveredBytes;
-        if (!writeAccepted)
-        {
-            CoreLog(L"[SpeechWorker] SAPI rejected an audio write; cancelling active synthesis.");
-            const auto decision = SpeechStatePolicy::EvaluateBeginCancellation(
-                m_context, GetTickCount64() + CancellationTimeoutMs);
-            if (decision.action == SpeechStatePolicy::BeginCancellationAction::TransitionToCancelling)
-            {
-                outCancellationToSend = decision.speakId;
-                m_context.TransitionToCancelling(decision.deadlineTick);
-                m_frameAssembler.Reset();
-            }
-        }
-        else
-        {
-            protocolBoundaryFailed = CheckTerminalBoundaryLocked();
-        }
-        break;
+        return false;
     }
 
-    case DownstreamState::Cancelling:
+    case PcmDeliveryPolicy::BatchAction::CreditAndCheckBoundary:
     {
         protocolBoundaryFailed = CheckTerminalBoundaryLocked();
         break;
     }
 
-    case DownstreamState::Idle:
-    case DownstreamState::Faulted:
+    case PcmDeliveryPolicy::BatchAction::CreditAndBeginCancellation:
     {
+        CoreLog(L"[SpeechWorker] SAPI rejected an audio write; cancelling active synthesis.");
+        const auto cancelDecision = SpeechStatePolicy::EvaluateBeginCancellation(
+            m_context, GetTickCount64() + CancellationTimeoutMs);
+        if (cancelDecision.action == SpeechStatePolicy::BeginCancellationAction::TransitionToCancelling)
+        {
+            outCancellationToSend = cancelDecision.speakId;
+            m_context.TransitionToCancelling(cancelDecision.deadlineTick);
+            m_frameAssembler.Reset();
+        }
+        break;
+    }
+
+    case PcmDeliveryPolicy::BatchAction::CheckCancellationBoundary:
+    {
+        protocolBoundaryFailed = CheckTerminalBoundaryLocked();
         break;
     }
     }
@@ -819,13 +818,6 @@ bool SpeechWorker::UpdateAfterAudioDeliveryLocked(
     }
 
     return protocolBoundaryFailed;
-}
-
-bool SpeechWorker::IsAudioDeliveryEligibleLocked(const RequestToken& token) const noexcept
-{
-    return m_context.token.Matches(token) &&
-           m_context.downstreamState == DownstreamState::Speaking &&
-           !m_context.faultPending;
 }
 
 void SpeechWorker::AudioThreadProc()
@@ -885,7 +877,8 @@ void SpeechWorker::AudioThreadProc()
             {
                 {
                     std::lock_guard<std::mutex> lock(m_requestMutex);
-                    if (!IsAudioDeliveryEligibleLocked(ingestResult.token))
+                    if (PcmDeliveryPolicy::EvaluateSpanAdmission(m_context, ingestResult.token) !=
+                        PcmDeliveryPolicy::SpanAdmission::Allow)
                     {
                         break;
                     }
